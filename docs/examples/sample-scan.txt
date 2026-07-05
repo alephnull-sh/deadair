@@ -1,0 +1,34 @@
+deadair scan — elastic — 2026-07-04T17:42:00Z
+sources:    11 (10 ok, 1 stale, 0 empty, 0 unknown, 0 maintenance)
+detections: 500 enabled / 1277 total (0 unmapped)
+
+DEAD: 45 enabled detection(s) cannot fire right now
+  [high] Persistence via WMI Standard Registry Provider — disconnected
+  [high] Potential Remote Credential Access via Registry — disconnected
+  [high] Sensitive Registry Hive Access via RegBack — disconnected
+  [high] Untrusted Driver Loaded — disconnected
+  [medium] Component Object Model Hijacking — disconnected
+  [medium] Deprecated - Container Workload Protection — disconnected
+  [medium] Downloaded Shortcut Files — disconnected
+  [medium] Downloaded URL Files — disconnected
+  [medium] Endpoint Security (Elastic Defend) — disconnected
+  [medium] Expired or Revoked Driver Loaded — disconnected
+  [medium] First Time Seen Driver Loaded — disconnected
+  [medium] LSASS Process Access via Windows API — disconnected
+  [medium] Persistence via a Windows Installer — disconnected
+  [medium] Potential LSA Authentication Package Abuse — disconnected
+  [medium] Potential Port Monitor or Print Processor Registration Abuse — disconnected
+  … and 30 more (use --json for the full list)
+
+IMPAIRED: 8 enabled detection(s) run with reduced visibility
+  [critical] Rapid7 Threat Command CVEs Correlation — lag-blind-window (ingest lag 45m exceeds window margin)
+  [critical] Threat Intel Hash Indicator Match — lag-blind-window (ingest lag 45m exceeds window margin)
+  [critical] Threat Intel IP Address Indicator Match — lag-blind-window (ingest lag 45m exceeds window margin)
+  [critical] Threat Intel URL Indicator Match — lag-blind-window (ingest lag 45m exceeds window margin)
+  [critical] Threat Intel Windows Registry Indicator Match — lag-blind-window (ingest lag 45m exceeds window margin)
+  [medium] Batch-fed source watcher — lag-blind-window (ingest lag 45m exceeds window margin)
+  [medium] External Alerts — lag-blind-window (ingest lag 45m exceeds window margin)
+  [medium] Quarterly audit sweep — truncated-lookback (lookback 90d > retention 30d)
+
+unused telemetry: 1 source(s), 7.0 KiB ingested with no enabled detection reading it
+  metrics-myapp.usage-default (7.0 KiB, 2 disabled rule(s) reference it)

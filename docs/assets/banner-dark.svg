@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="170" viewBox="0 0 880 170" role="img" aria-label="deadair — telemetry health and detection dependency monitoring for SIEMs">
+  <style>
+    .wordmark { font: 700 58px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #e6edf3; }
+    .tagline  { font: 400 17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #8b949e; }
+    .alive { stroke: #3fb950; }
+    .dead  { stroke: #f85149; }
+    .trace { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+  </style>
+  <text class="wordmark" x="40" y="76">deadair</text>
+  <text class="tagline" x="43" y="106">telemetry health monitoring for SIEM detections</text>
+  <path class="trace alive" d="M40,140 H160 l8,-14 8,14 H240 l6,10 10,-52 10,66 8,-24 H400 l8,-14 8,14 H480 l6,10 10,-52 10,66 8,-24 H560"/>
+  <path class="trace dead" d="M560,140 H824"/>
+  <circle cx="832" cy="140" r="4" fill="none" stroke="#f85149" stroke-width="2.5"/>
+</svg>
