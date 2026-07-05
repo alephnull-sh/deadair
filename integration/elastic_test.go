@@ -1,0 +1,273 @@
+//go:build integration
+
+// These tests prove the least-privilege role manifest
+// from docs/credentials/elastic.md must let a scan succeed against a live
+// Elastic stack, verdicts must be correct on real data, and every write
+// attempted with the deadair credential must be rejected.
+//
+// Run: make integration   (starts integration/docker-compose.yml first)
+package integration
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Big-Comfy/deadair/internal/cli"
+	"github.com/Big-Comfy/deadair/internal/report"
+)
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+var (
+	esURL  = envOr("DEADAIR_IT_ES_URL", "http://localhost:9200")
+	kbURL  = envOr("DEADAIR_IT_KIBANA_URL", "http://localhost:5601")
+	esPass = envOr("DEADAIR_IT_PASSWORD", "changeme-deadair")
+)
+
+// deadairRole is the least-privilege manifest under proof — keep in sync with
+// docs/credentials/elastic.md. feature_siem is the pre-8.17 privilege id,
+// feature_siemV2 the granular replacement; granting both covers the 8.x line.
+const deadairRole = `{
+  "cluster": ["monitor"],
+  "indices": [
+    {"names": ["*"], "privileges": ["monitor", "view_index_metadata", "read"]}
+  ],
+  "applications": [
+    {"application": "kibana-.kibana", "privileges": ["feature_siem.read", "feature_siemV2.read"], "resources": ["space:default"]}
+  ]
+}`
+
+const (
+	liveStream = "logs-deadairtest-default"
+	staleIndex = "deadairtest-stale"
+	emptyIndex = "deadairtest-empty"
+)
+
+type httpResult struct {
+	status int
+	body   []byte
+}
+
+func call(t *testing.T, method, url, body string, auth func(*http.Request)) httpResult {
+	t.Helper()
+	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	auth(req)
+	req.Header.Set("kbn-xsrf", "deadair-it")
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("%s %s: reading body: %v", method, url, err)
+	}
+	return httpResult{resp.StatusCode, data}
+}
+
+func asAdmin(req *http.Request) { req.SetBasicAuth("elastic", esPass) }
+
+func apiKeyAuth(key string) func(*http.Request) {
+	return func(req *http.Request) { req.Header.Set("Authorization", "ApiKey "+key) }
+}
+
+// admin performs a request as the superuser and fails the test on an
+// unexpected status.
+func admin(t *testing.T, method, url, body string, wantStatus int) []byte {
+	t.Helper()
+	res := call(t, method, url, body, asAdmin)
+	if res.status != wantStatus {
+		t.Fatalf("%s %s: status %d (want %d): %s", method, url, res.status, wantStatus, res.body)
+	}
+	return res.body
+}
+
+func probe(url string) bool {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	asAdmin(req)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode == http.StatusOK
+}
+
+func waitForStack(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Minute)
+	for {
+		esUp := probe(esURL + "/_cluster/health")
+		kbUp := probe(kbURL + "/api/status")
+		if esUp && kbUp {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stack not ready (elasticsearch=%v kibana=%v) — run `make integration-up` first", esUp, kbUp)
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
+// cleanup removes every fixture; statuses are ignored so it is safe to run
+// against a clean cluster and as leftover-removal before seeding.
+func cleanup(t *testing.T) {
+	t.Helper()
+	for _, ruleID := range []string{"deadair-it-live", "deadair-it-starved", "deadair-it-disconnected"} {
+		call(t, http.MethodDelete, kbURL+"/api/detection_engine/rules?rule_id="+ruleID, "", asAdmin)
+	}
+	call(t, http.MethodDelete, esURL+"/_data_stream/"+liveStream, "", asAdmin)
+	call(t, http.MethodDelete, esURL+"/"+staleIndex, "", asAdmin)
+	call(t, http.MethodDelete, esURL+"/"+emptyIndex, "", asAdmin)
+	call(t, http.MethodDelete, esURL+"/_security/role/deadair_monitor", "", asAdmin)
+	call(t, http.MethodDelete, esURL+"/_security/api_key", `{"name":"deadair-it","owner":false}`, asAdmin)
+}
+
+func seed(t *testing.T) {
+	t.Helper()
+	now := time.Now().UTC()
+
+	// live data stream — created automatically by the built-in logs-*-* template
+	admin(t, http.MethodPost, esURL+"/"+liveStream+"/_doc",
+		fmt.Sprintf(`{"@timestamp":%q,"message":"live"}`, now.Format(time.RFC3339)), http.StatusCreated)
+	// stale plain index — newest event three days old
+	admin(t, http.MethodPut, esURL+"/"+staleIndex,
+		`{"mappings":{"properties":{"@timestamp":{"type":"date"}}}}`, http.StatusOK)
+	admin(t, http.MethodPost, esURL+"/"+staleIndex+"/_doc",
+		fmt.Sprintf(`{"@timestamp":%q,"message":"old"}`, now.Add(-72*time.Hour).Format(time.RFC3339)), http.StatusCreated)
+	// empty index — exists, holds nothing
+	admin(t, http.MethodPut, esURL+"/"+emptyIndex,
+		`{"mappings":{"properties":{"@timestamp":{"type":"date"}}}}`, http.StatusOK)
+	admin(t, http.MethodPost, esURL+"/_refresh", "", http.StatusOK)
+
+	rules := []struct{ id, name, severity, index string }{
+		{"deadair-it-live", "Deadair IT live rule", "low", `["logs-deadairtest-*"]`},
+		{"deadair-it-starved", "Deadair IT starved rule", "high", `["deadairtest-stale*"]`},
+		{"deadair-it-disconnected", "Deadair IT disconnected rule", "medium", `["deadairtest-missing-*"]`},
+	}
+	for _, r := range rules {
+		body := fmt.Sprintf(
+			`{"rule_id":%q,"name":%q,"description":"deadair integration fixture","risk_score":42,"severity":%q,"type":"query","query":"*:*","language":"kuery","index":%s,"interval":"5m","from":"now-6m","enabled":true}`,
+			r.id, r.name, r.severity, r.index)
+		admin(t, http.MethodPost, kbURL+"/api/detection_engine/rules", body, http.StatusOK)
+	}
+}
+
+// provision validates the role manifest against the live cluster and mints an
+// API key restricted to exactly that role.
+func provision(t *testing.T) string {
+	t.Helper()
+	admin(t, http.MethodPut, esURL+"/_security/role/deadair_monitor", deadairRole, http.StatusOK)
+	body := fmt.Sprintf(`{"name":"deadair-it","role_descriptors":{"deadair_monitor":%s}}`, deadairRole)
+	resp := admin(t, http.MethodPost, esURL+"/_security/api_key", body, http.StatusOK)
+	var out struct {
+		Encoded string `json:"encoded"`
+	}
+	if err := json.Unmarshal(resp, &out); err != nil || out.Encoded == "" {
+		t.Fatalf("api key response unusable: %v: %s", err, resp)
+	}
+	return out.Encoded
+}
+
+func TestElasticReadOnlyScan(t *testing.T) {
+	waitForStack(t)
+	cleanup(t) // clear leftovers from any previous run
+	t.Cleanup(func() { cleanup(t) })
+	seed(t)
+	key := provision(t)
+	t.Setenv("DEADAIR_API_KEY", key)
+
+	var rep report.Report
+	t.Run("scan succeeds with least-privilege key", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := cli.Run([]string{
+			"scan",
+			"--es-url", esURL,
+			"--kibana-url", kbURL,
+			"--json",
+			"--max-stale", "1h",
+			"--state-file", filepath.Join(t.TempDir(), "state.json"),
+			"--schema",
+		}, &stdout, &stderr)
+		if code != report.ExitFindings {
+			t.Fatalf("exit = %d, want %d\nstderr: %s\nstdout: %s", code, report.ExitFindings, stderr.String(), stdout.String())
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &rep); err != nil {
+			t.Fatalf("parsing report: %v", err)
+		}
+	})
+
+	t.Run("verdicts are correct on live data", func(t *testing.T) {
+		if rep.GeneratedAt.IsZero() {
+			t.Skip("scan did not produce a report")
+		}
+		statuses := map[string]string{}
+		for _, s := range rep.Sources {
+			statuses[s.Name] = s.Status
+		}
+		if statuses[liveStream] != "ok" {
+			t.Errorf("%s = %q, want ok", liveStream, statuses[liveStream])
+		}
+		if statuses[staleIndex] != "stale" {
+			t.Errorf("%s = %q, want stale", staleIndex, statuses[staleIndex])
+		}
+		if statuses[emptyIndex] != "empty" {
+			t.Errorf("%s = %q, want empty", emptyIndex, statuses[emptyIndex])
+		}
+		reasons := map[string]string{}
+		for _, d := range rep.DeadDetections {
+			reasons[d.Name] = d.Reason
+		}
+		if reasons["Deadair IT starved rule"] != "starved" {
+			t.Errorf("starved rule reason = %q, want starved", reasons["Deadair IT starved rule"])
+		}
+		if reasons["Deadair IT disconnected rule"] != "disconnected" {
+			t.Errorf("disconnected rule reason = %q, want disconnected", reasons["Deadair IT disconnected rule"])
+		}
+		if _, dead := reasons["Deadair IT live rule"]; dead {
+			t.Error("live rule reported dead")
+		}
+	})
+
+	t.Run("writes are rejected", func(t *testing.T) {
+		writes := []struct{ name, method, url, body string }{
+			{"index a document", http.MethodPost, esURL + "/" + liveStream + "/_doc", `{"@timestamp":"2026-01-01T00:00:00Z"}`},
+			{"create an index", http.MethodPut, esURL + "/deadairtest-should-not-exist", ""},
+			{"delete an index", http.MethodDelete, esURL + "/" + staleIndex, ""},
+			{"delete a data stream", http.MethodDelete, esURL + "/_data_stream/" + liveStream, ""},
+			{"create a detection rule", http.MethodPost, kbURL + "/api/detection_engine/rules",
+				`{"name":"nope","description":"x","risk_score":1,"severity":"low","type":"query","query":"*:*","index":["x"],"interval":"5m","from":"now-6m"}`},
+			{"create an api key", http.MethodPost, esURL + "/_security/api_key", `{"name":"escalation"}`},
+		}
+		for _, wr := range writes {
+			res := call(t, wr.method, wr.url, wr.body, apiKeyAuth(key))
+			if res.status != http.StatusForbidden {
+				t.Errorf("%s: status %d, want 403 — the deadair credential must not be able to write\n%s", wr.name, res.status, res.body)
+			}
+		}
+	})
+}

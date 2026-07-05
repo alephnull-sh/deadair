@@ -1,0 +1,76 @@
+# Example Prometheus alerting rules for deadair's exporter (`deadair serve`).
+# Tune the `for:` durations to your scan --interval (default 5m assumed here);
+# thresholds are starting points, not policy.
+groups:
+  - name: deadair
+    rules:
+      - alert: DeadairExporterAbsent
+        expr: absent(deadair_up)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "deadair exporter is not being scraped"
+          description: "No deadair_up series for 10m — the monitor that watches your monitoring is down."
+
+      - alert: DeadairScanFailing
+        expr: deadair_up == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "deadair scans are failing"
+          description: "The last scans against the SIEM backend failed for 15m; dashboards show last-known-good data."
+
+      - alert: DeadairInstanceScanFailing
+        expr: deadair_instance_up == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "deadair scan failed for {{ $labels.instance }}"
+          description: "The last scan for this instance failed. Check tenant credentials, network reachability, and SIEM API health."
+
+      - alert: DeadairDeadDetections
+        expr: deadair_detections_dead > 0
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value }} enabled detection(s) cannot fire"
+          description: "Enabled detection rules are disconnected or starved of data. See the deadair report for blast radius."
+
+      - alert: DeadairImpairedDetections
+        expr: deadair_detections_impaired > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} detection(s) running with reduced visibility"
+          description: "Truncated lookback, missing fields, or ingest-lag blind windows. See the deadair report."
+
+      - alert: DeadairSourceStale
+        expr: deadair_source_freshness_seconds > 6 * 3600
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "source {{ $labels.source }} stale for 6h+"
+          description: "No new events in {{ $labels.source }} — every detection reading it is degraded."
+
+      - alert: DeadairVolumeLow
+        expr: deadair_source_volume_low == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "source {{ $labels.source }} volume below baseline"
+          description: "Volume is below the same weekday/hour baseline after warmup and hysteresis."
+
+      - alert: DeadairSchemaDrift
+        expr: deadair_source_schema_drift == 1
+        labels:
+          severity: info
+        annotations:
+          summary: "source {{ $labels.source }} schema changed"
+          description: "field_caps changed since the previous snapshot; removed or retyped fields can silently break detections."

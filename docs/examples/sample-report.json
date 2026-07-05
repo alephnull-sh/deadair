@@ -1,0 +1,590 @@
+{
+  "generated_at": "2026-07-05T15:45:49.978508Z",
+  "backend": "elastic",
+  "instance": "elastic",
+  "summary": {
+    "rules": 1276,
+    "enabled_rules": 500,
+    "sources": 10,
+    "healthy_sources": 9,
+    "degraded_sources": 1,
+    "dead_detections": 45,
+    "impaired_detections": 1,
+    "unmapped_rules": 0,
+    "unused_sources": 1,
+    "unused_bytes": 7143
+  },
+  "sources": [
+    {
+      "name": "batchy-events",
+      "status": "ok",
+      "age_seconds": 76.978531,
+      "docs": 30,
+      "size_bytes": 6792,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 1
+    },
+    {
+      "name": "logs-endpoint.events.network-default",
+      "status": "ok",
+      "age_seconds": 76.978532,
+      "docs": 25,
+      "size_bytes": 5160,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 60
+    },
+    {
+      "name": "logs-endpoint.events.process-default",
+      "status": "ok",
+      "age_seconds": 76.978536,
+      "docs": 25,
+      "size_bytes": 5144,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 249
+    },
+    {
+      "name": "logs-myapp.custom-default",
+      "status": "ok",
+      "age_seconds": 76.97854,
+      "docs": 200,
+      "size_bytes": 10455,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 6
+    },
+    {
+      "name": "logs-system.auth-default",
+      "status": "stale",
+      "age_seconds": 259276.978541,
+      "docs": 25,
+      "size_bytes": 5144,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 6
+    },
+    {
+      "name": "logs-system.security-default",
+      "status": "ok",
+      "age_seconds": 76.978534,
+      "docs": 25,
+      "size_bytes": 5144,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 193
+    },
+    {
+      "name": "logs-windows.powershell-default",
+      "status": "ok",
+      "age_seconds": 76.978544,
+      "docs": 25,
+      "size_bytes": 5144,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 59
+    },
+    {
+      "name": "logs-windows.sysmon_operational-default",
+      "status": "ok",
+      "age_seconds": 76.978541,
+      "docs": 25,
+      "size_bytes": 5144,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 307
+    },
+    {
+      "name": "metrics-myapp.usage-default",
+      "status": "ok",
+      "age_seconds": 76.978532,
+      "docs": 100,
+      "size_bytes": 7143,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 0
+    },
+    {
+      "name": "winlogbeat-2026.07.04",
+      "status": "ok",
+      "age_seconds": 76.978526,
+      "docs": 25,
+      "size_bytes": 7020,
+      "volume": {
+        "status": "warming",
+        "warmup": true
+      },
+      "consumers": 390
+    }
+  ],
+  "dead_detections": [
+    {
+      "id": "b01b03db-3411-4773-8064-b4f774c9755f",
+      "name": "Persistence via WMI Standard Registry Provider",
+      "severity": "high",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.registry-*",
+        "endgame-*"
+      ]
+    },
+    {
+      "id": "1e9e729e-9bcf-4076-af98-ce926ba5f0ca",
+      "name": "Potential Remote Credential Access via Registry",
+      "severity": "high",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "5711e016-2246-42e4-8af7-40a3d5b04591",
+      "name": "Sensitive Registry Hive Access via RegBack",
+      "severity": "high",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "4f3a922b-2472-4316-82d4-2464e03cf859",
+      "name": "Untrusted Driver Loaded",
+      "severity": "high",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "7e36a6a5-fb19-43a9-b856-bdc2788a0cd1",
+      "name": "Component Object Model Hijacking",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.registry-*"
+      ]
+    },
+    {
+      "id": "ffd1d58b-2753-46be-b4d2-f65ee4685279",
+      "name": "Deprecated - Container Workload Protection",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-cloud_defend.alerts-*"
+      ]
+    },
+    {
+      "id": "4d124476-70c7-468f-876b-fdf88fc6bd82",
+      "name": "Downloaded Shortcut Files",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "f113f488-54ae-4dfe-b25e-a33359c706ca",
+      "name": "Downloaded URL Files",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "bd77c2e9-0aac-4a06-910d-7025560f65f8",
+      "name": "Endpoint Security (Elastic Defend)",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.alerts-*"
+      ]
+    },
+    {
+      "id": "e3417a55-62f7-4b9b-af28-183acb878db5",
+      "name": "Expired or Revoked Driver Loaded",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "aafb9e62-c11d-4a32-ae79-abeba5f1a197",
+      "name": "First Time Seen Driver Loaded",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "84a0cbb0-5e69-40a1-abd5-06ded1df454b",
+      "name": "LSASS Process Access via Windows API",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.api-*",
+        "logs-m365_defender.event-*"
+      ]
+    },
+    {
+      "id": "9092a5c4-e625-4e8e-a2ba-a58bc4912e05",
+      "name": "Persistence via a Windows Installer",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.registry-*",
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "e47c605b-50b3-4219-b632-4dbe4df3bd33",
+      "name": "Potential LSA Authentication Package Abuse",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.registry-*",
+        "endgame-*",
+        "logs-m365_defender.event-*"
+      ]
+    },
+    {
+      "id": "44801442-40e9-4c92-86ba-ab658a6136ea",
+      "name": "Potential Port Monitor or Print Processor Registration Abuse",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.registry-*",
+        "endgame-*",
+        "logs-m365_defender.event-*"
+      ]
+    },
+    {
+      "id": "fc418a24-4532-4831-95e7-999672d5ddd3",
+      "name": "Potential Windows Session Hijacking via CcmExec",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "31087af7-be0c-456c-be95-883db1199fa3",
+      "name": "Remote File Copy via TeamViewer",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*",
+        "logs-sentinel_one_cloud_funnel.*"
+      ]
+    },
+    {
+      "id": "e365c188-2ee2-4e9d-9e0c-51b37714d99d",
+      "name": "Suspicious Module Loaded by LSASS",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*",
+        "endgame-*"
+      ]
+    },
+    {
+      "id": "5aeac68f-d2fd-4e40-9adc-1a87e8c6fadd",
+      "name": "Suspicious PowerShell Engine ImageLoad",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "7c99aa6a-6d8d-4878-a050-bdecb6dc7898",
+      "name": "Third-party Backup Files Deleted via Unexpected Process",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*",
+        "endgame-*",
+        "logs-sentinel_one_cloud_funnel.*"
+      ]
+    },
+    {
+      "id": "36887d23-754b-403a-ae57-93cba1848847",
+      "name": "Unsigned DLL Loaded by Svchost",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "3e5307bc-f3d9-4871-a4fd-5162ea743fcf",
+      "name": "Unsigned DLL Side-Loading from a Suspicious Folder",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "f66b0eca-dd87-420d-9f09-633ec4e81baa",
+      "name": "Veeam Backup Library Loaded by Unusual Process",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "865384a2-2c8b-43a2-a5cb-9d9ad9476ef4",
+      "name": "Windows Registry File Creation in SMB Share",
+      "severity": "medium",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "0d7fb20c-5a36-498d-abb4-67e1954497a2",
+      "name": "Archive File with Unusual Extension",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "20ddb031-a2d4-4588-89f6-ab989a1d4968",
+      "name": "Compression DLL Loaded by Unusual Process",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "5ecbe90d-4594-4931-822f-323c91460c90",
+      "name": "Executable File with Unusual Extension",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "6fcddc46-ab85-4175-a481-f6725f12085e",
+      "name": "File Compressed or Archived into Common Format by Unsigned Process",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "d02618d6-bc1f-4d54-8962-1b5f28455723",
+      "name": "File with Suspicious Extension Downloaded",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "ee16373f-d4ff-4c20-9805-436e3a2b48cf",
+      "name": "Image Loaded with Invalid Signature",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "e8adbf18-e1e8-4231-b0cf-250ded331260",
+      "name": "Ingress Transfer via Windows BITS",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "0ceb08ca-352b-4a75-9468-06fbc79546d9",
+      "name": "Memory Dump File with Unusual Extension",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "11e6ec13-4093-494b-bc2b-339d1f5d786f",
+      "name": "Office Test Registry Persistence",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.registry-*",
+        "logs-m365_defender.event-*",
+        "endgame-*",
+        "logs-sentinel_one_cloud_funnel.*"
+      ]
+    },
+    {
+      "id": "3dbf60a2-86d4-4de7-b2b7-66419a017a30",
+      "name": "Potential Credential Access via Memory Dump File Creation",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "8652e59f-7c21-40f5-8ca5-023665ac18b2",
+      "name": "Potential Masquerading as System32 DLL",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "1ef1d72a-5350-49d2-928d-059376ee25c2",
+      "name": "Potential Masquerading as VLC DLL",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "c1e5b607-dabb-4445-8188-cfff5e4787ca",
+      "name": "Service Disabled via Registry Modification",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.registry-*",
+        "endgame-*"
+      ]
+    },
+    {
+      "id": "453b75e5-803e-4ffc-bba8-7d20e34aa5c2",
+      "name": "Shortcut File Written or Modified on Startup Folder",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*"
+      ]
+    },
+    {
+      "id": "6072646b-bc16-408c-af86-7b404ba98390",
+      "name": "Startup or Run Key Registry Modification",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.registry-*"
+      ]
+    },
+    {
+      "id": "7b82ecd9-c975-4b22-92be-a63a97101d61",
+      "name": "Suspicious Print Spooler SPL File Created",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.file-*",
+        "endgame-*",
+        "logs-m365_defender.event-*"
+      ]
+    },
+    {
+      "id": "62c048df-c677-44f7-bfa0-8f82ddb52b2d",
+      "name": "Unsigned BITS Service Client Process",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "78647de9-e5ce-4a7d-8617-ca52500c433f",
+      "name": "Unsigned DLL Loaded by a Trusted Process",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        "logs-endpoint.events.library-*"
+      ]
+    },
+    {
+      "id": "d2f6a0cf-fb7d-44a6-9b98-dd53d5ea74a1",
+      "name": "Unusual Discovery Activity by User",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        ".alerts-security.*"
+      ]
+    },
+    {
+      "id": "12b0676c-5b16-47a3-a85a-9aad9fd5f4ca",
+      "name": "Unusual Discovery Signal Alert with Unusual Process Command Line",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        ".alerts-security.*"
+      ]
+    },
+    {
+      "id": "2a5add0d-7a83-47a9-a8c8-c517a72d52d4",
+      "name": "Unusual Discovery Signal Alert with Unusual Process Executable",
+      "severity": "low",
+      "reason": "disconnected",
+      "patterns": [
+        ".alerts-security.*"
+      ]
+    }
+  ],
+  "impaired_detections": [
+    {
+      "id": "a1a51f07-cfab-42dc-94e4-e7fb5c16f6eb",
+      "name": "Batch-fed source watcher",
+      "severity": "medium",
+      "reasons": [
+        "lag-blind-window"
+      ],
+      "lookback_seconds": 360,
+      "interval_seconds": 300,
+      "max_lag_seconds": 2700,
+      "lag_sources": [
+        "batchy-events"
+      ],
+      "sources": [
+        "batchy-events"
+      ]
+    }
+  ],
+  "unused_telemetry": [
+    {
+      "name": "metrics-myapp.usage-default",
+      "docs": 100,
+      "size_bytes": 7143,
+      "disabled_consumers": 2
+    }
+  ]
+}

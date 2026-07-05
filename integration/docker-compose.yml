@@ -1,0 +1,59 @@
+name: deadair-integration
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.17.4}
+    environment:
+      discovery.type: single-node
+      ELASTIC_PASSWORD: ${DEADAIR_IT_PASSWORD:-changeme-deadair}
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      xpack.security.transport.ssl.enabled: "false"
+      xpack.security.authc.api_key.enabled: "true"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsu elastic:$${ELASTIC_PASSWORD} http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(yellow|green)\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # one-shot: set the kibana_system password so Kibana can connect
+  kibana-init:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.17.4}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTIC_PASSWORD: ${DEADAIR_IT_PASSWORD:-changeme-deadair}
+    entrypoint: >-
+      bash -c 'until curl -fsu "elastic:$${ELASTIC_PASSWORD}"
+      -X POST http://elasticsearch:9200/_security/user/kibana_system/_password
+      -H "Content-Type: application/json"
+      -d "{\"password\":\"$${ELASTIC_PASSWORD}\"}"; do sleep 2; done'
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-8.17.4}
+    depends_on:
+      kibana-init:
+        condition: service_completed_successfully
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_PASSWORD: ${DEADAIR_IT_PASSWORD:-changeme-deadair}
+      # the detection engine requires saved-object encryption keys (>=32 chars)
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: deadair-integration-only-encryption-key
+      XPACK_SECURITY_ENCRYPTIONKEY: deadair-integration-only-encryption-key
+      XPACK_REPORTING_ENCRYPTIONKEY: deadair-integration-only-encryption-key
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "5601:5601"
+    healthcheck:
+      # 302 to /login means Kibana is serving; the Go tests wait for full
+      # availability via /api/status themselves
+      test: ["CMD-SHELL", "curl -s -I http://localhost:5601 | grep -q 302"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
