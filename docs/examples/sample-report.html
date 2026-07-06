@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>deadair report</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17202a; }
+    h1, h2 { margin-bottom: .4rem; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0 2rem; }
+    th, td { border-bottom: 1px solid #d8dee4; padding: .45rem .5rem; text-align: left; }
+    th { background: #f6f8fa; font-weight: 600; }
+    .muted { color: #57606a; }
+    .status-ok { color: #116329; }
+    .status-stale, .status-empty, .status-low { color: #b42318; font-weight: 600; }
+    .status-maintenance, .status-warming, .status-pending, .status-unknown { color: #8250df; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; margin: 1rem 0 2rem; }
+    .metric { border: 1px solid #d8dee4; border-radius: 6px; padding: .75rem; }
+    .metric strong { display: block; font-size: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>deadair report</h1>
+  <p class="muted">elastic · 2026-07-05 15:45:50 UTC</p>
+
+  <div class="grid">
+    <div class="metric"><span>Sources</span><strong>10</strong></div>
+    <div class="metric"><span>Degraded sources</span><strong>1</strong></div>
+    <div class="metric"><span>Low-volume sources</span><strong>0</strong></div>
+    <div class="metric"><span>Schema drift</span><strong>0</strong></div>
+    <div class="metric"><span>Dead detections</span><strong>45</strong></div>
+    <div class="metric"><span>Impaired detections</span><strong>1</strong></div>
+    <div class="metric"><span>Unused telemetry</span><strong>7.0 KiB</strong></div>
+  </div>
+
+  <h2>Sources</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Status</th><th>Docs</th><th>Size</th><th>Consumers</th><th>Volume</th><th>Z-score</th><th>Schema</th></tr></thead>
+    <tbody>
+    
+      <tr>
+        <td>batchy-events</td>
+        <td class="status-ok">ok</td>
+        <td>30</td>
+        <td>6.6 KiB</td>
+        <td>1</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+      <tr>
+        <td>logs-endpoint.events.network-default</td>
+        <td class="status-ok">ok</td>
+        <td>25</td>
+        <td>5.0 KiB</td>
+        <td>60</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+      <tr>
+        <td>logs-endpoint.events.process-default</td>
+        <td class="status-ok">ok</td>
+        <td>25</td>
+        <td>5.0 KiB</td>
+        <td>248</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+      <tr>
+        <td>logs-myapp.custom-default</td>
+        <td class="status-ok">ok</td>
+        <td>200</td>
+        <td>10.2 KiB</td>
+        <td>6</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+      <tr>
+        <td>logs-system.auth-default</td>
+        <td class="status-stale">stale</td>
+        <td>25</td>
+        <td>5.0 KiB</td>
+        <td>6</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+      <tr>
+        <td>logs-system.security-default</td>
+        <td class="status-ok">ok</td>
+        <td>25</td>
+        <td>5.0 KiB</td>
+        <td>192</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+      <tr>
+        <td>logs-windows.powershell-default</td>
+        <td class="status-ok">ok</td>
+        <td>25</td>
+        <td>5.0 KiB</td>
+        <td>59</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+      <tr>
+        <td>logs-windows.sysmon_operational-default</td>
+        <td class="status-ok">ok</td>
+        <td>25</td>
+        <td>5.0 KiB</td>
+        <td>306</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+      <tr>
+        <td>metrics-myapp.usage-default</td>
+        <td class="status-ok">ok</td>
+        <td>100</td>
+        <td>7.0 KiB</td>
+        <td>0</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+      <tr>
+        <td>winlogbeat-2026.07.04</td>
+        <td class="status-ok">ok</td>
+        <td>25</td>
+        <td>6.9 KiB</td>
+        <td>389</td>
+        <td><span class="status-warming">warming</span></td>
+        <td>-</td>
+        <td>-</td>
+      </tr>
+    
+    </tbody>
+  </table>
+
+  <h2>Dead detections</h2>
+  <table>
+    <thead><tr><th>Severity</th><th>Name</th><th>Reason</th><th>Sources</th></tr></thead>
+    <tbody>
+    
+      <tr><td>high</td><td>Persistence via WMI Standard Registry Provider</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>high</td><td>Potential Remote Credential Access via Registry</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>high</td><td>Sensitive Registry Hive Access via RegBack</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>high</td><td>Untrusted Driver Loaded</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Component Object Model Hijacking</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Deprecated - Container Workload Protection</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Downloaded Shortcut Files</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Downloaded URL Files</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Endpoint Security (Elastic Defend)</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Expired or Revoked Driver Loaded</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>First Time Seen Driver Loaded</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>LSASS Process Access via Windows API</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Persistence via a Windows Installer</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Potential LSA Authentication Package Abuse</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Potential Port Monitor or Print Processor Registration Abuse</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Potential Windows Session Hijacking via CcmExec</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Remote File Copy via TeamViewer</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Suspicious Module Loaded by LSASS</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Suspicious PowerShell Engine ImageLoad</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Third-party Backup Files Deleted via Unexpected Process</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Unsigned DLL Loaded by Svchost</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Unsigned DLL Side-Loading from a Suspicious Folder</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Veeam Backup Library Loaded by Unusual Process</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>medium</td><td>Windows Registry File Creation in SMB Share</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Archive File with Unusual Extension</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Compression DLL Loaded by Unusual Process</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Executable File with Unusual Extension</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>File Compressed or Archived into Common Format by Unsigned Process</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>File with Suspicious Extension Downloaded</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Image Loaded with Invalid Signature</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Ingress Transfer via Windows BITS</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Memory Dump File with Unusual Extension</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Office Test Registry Persistence</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Potential Credential Access via Memory Dump File Creation</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Potential Masquerading as System32 DLL</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Potential Masquerading as VLC DLL</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Service Disabled via Registry Modification</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Shortcut File Written or Modified on Startup Folder</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Startup or Run Key Registry Modification</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Suspicious Print Spooler SPL File Created</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Unsigned BITS Service Client Process</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Unsigned DLL Loaded by a Trusted Process</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Unusual Discovery Activity by User</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Unusual Discovery Signal Alert with Unusual Process Command Line</td><td>disconnected</td><td></td></tr>
+    
+      <tr><td>low</td><td>Unusual Discovery Signal Alert with Unusual Process Executable</td><td>disconnected</td><td></td></tr>
+    
+    </tbody>
+  </table>
+
+  <h2>Impaired detections</h2>
+  <table>
+    <thead><tr><th>Severity</th><th>Name</th><th>Reasons</th><th>Missing fields</th></tr></thead>
+    <tbody>
+    
+      <tr><td>medium</td><td>Batch-fed source watcher</td><td>lag-blind-window</td><td></td></tr>
+    
+    </tbody>
+  </table>
+
+  <h2>Unused telemetry</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Docs</th><th>Size</th></tr></thead>
+    <tbody>
+    
+      <tr><td>metrics-myapp.usage-default</td><td>100</td><td>7.0 KiB</td></tr>
+    
+    </tbody>
+  </table>
+</body>
+</html>

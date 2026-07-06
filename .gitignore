@@ -1,0 +1,16 @@
+/bin/
+/dist/
+*.test
+coverage.out
+.DS_Store
+
+# scan reports are blind-spot maps — never commit them
+deadair-report*.json
+*.report.json
+deadair-state*.json
+*.state.json
+integration/mssp-lab-out/
+
+# agent onboarding stays local
+CLAUDE.md
+integration/demo-key

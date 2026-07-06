@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page.title | default: site.title }}</title>
+    <meta name="description" content="{{ page.description | default: site.description }}">
+    <meta property="og:title" content="{{ page.title | default: site.title }}">
+    <meta property="og:description" content="{{ page.description | default: site.description }}">
+    <meta property="og:type" content="{% if page.date %}article{% else %}website{% endif %}">
+    <meta property="og:url" content="{{ page.url | absolute_url }}">
+    <meta name="twitter:card" content="summary_large_image">
+    {% if page.hero_image %}<meta property="og:image" content="{{ page.hero_image | absolute_url }}">{% endif %}
+    <link rel="canonical" href="{{ page.url | absolute_url }}">
+    <link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="{{ '/' | relative_url }}">deadair</a>
+        <nav class="site-nav" aria-label="Primary">
+          <a href="https://github.com/Big-Comfy/deadair">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      {% if page.cover %}
+      <section class="cover">
+        <div class="cover-inner">
+          <p class="cover-kicker">Detection engineering · write-up</p>
+          <h1>{{ page.title }}</h1>
+          <p class="cover-deck">{{ page.description }}</p>
+          <p class="cover-byline">A solo, open-source project · {{ page.date | date: "%B %Y" }}</p>
+          <p class="cover-support">Read-only coverage checks for Elastic Security and OpenSearch Security Analytics.</p>
+          <a class="cover-cta" href="https://github.com/Big-Comfy/deadair">deadair on GitHub →</a>
+        </div>
+      </section>
+      {% endif %}
+
+      <article class="post shell" id="read">
+        <div class="post-body">{{ content }}</div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <span>Apache-2.0 · read-only · no phone-home</span>
+        <span><a href="https://github.com/Big-Comfy/deadair">github.com/Big-Comfy/deadair</a></span>
+      </div>
+    </footer>
+  </body>
+</html>

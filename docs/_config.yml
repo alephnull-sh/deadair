@@ -1,0 +1,14 @@
+title: deadair
+description: SIEM detection coverage health for Elastic Security and OpenSearch Security Analytics.
+url: "https://big-comfy.github.io"
+baseurl: "/deadair"
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+
+permalink: pretty
+
+exclude:
+  - assets/*.tape
