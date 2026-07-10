@@ -3,6 +3,23 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#fdfcfa">
+    <script>
+      (function () {
+        var theme = "light";
+        try {
+          var saved = localStorage.getItem("deadair-theme");
+          if (saved === "light" || saved === "dark") {
+            theme = saved;
+          } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            theme = "dark";
+          }
+        } catch (_) {}
+        document.documentElement.dataset.theme = theme;
+        document.querySelector('meta[name="theme-color"]').content = theme === "dark" ? "#111214" : "#fdfcfa";
+      })();
+    </script>
     <title>{{ page.title | default: site.title }}</title>
     <meta name="description" content="{{ page.description | default: site.description }}">
     <meta property="og:title" content="{{ page.title | default: site.title }}">
@@ -20,6 +37,10 @@
         <a class="brand" href="{{ '/' | relative_url }}">deadair</a>
         <nav class="site-nav" aria-label="Primary">
           <a href="https://github.com/Big-Comfy/deadair">GitHub</a>
+          <button class="theme-toggle" type="button" aria-label="Switch to dark theme" title="Switch to dark theme">
+            <span class="theme-icon-dark" aria-hidden="true">&#9789;</span>
+            <span class="theme-icon-light" aria-hidden="true">&#9788;</span>
+          </button>
         </nav>
       </div>
     </header>
@@ -49,5 +70,29 @@
         <span><a href="https://github.com/Big-Comfy/deadair">github.com/Big-Comfy/deadair</a></span>
       </div>
     </footer>
+    <script>
+      (function () {
+        var root = document.documentElement;
+        var toggle = document.querySelector(".theme-toggle");
+        var themeColor = document.querySelector('meta[name="theme-color"]');
+
+        function applyTheme(theme, save) {
+          var next = theme === "dark" ? "light" : "dark";
+          var label = "Switch to " + next + " theme";
+          root.dataset.theme = theme;
+          themeColor.content = theme === "dark" ? "#111214" : "#fdfcfa";
+          toggle.setAttribute("aria-label", label);
+          toggle.setAttribute("title", label);
+          if (save) {
+            try { localStorage.setItem("deadair-theme", theme); } catch (_) {}
+          }
+        }
+
+        applyTheme(root.dataset.theme || "light", false);
+        toggle.addEventListener("click", function () {
+          applyTheme(root.dataset.theme === "dark" ? "light" : "dark", true);
+        });
+      })();
+    </script>
   </body>
 </html>

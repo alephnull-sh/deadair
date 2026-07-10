@@ -1,67 +1,67 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" role="img" aria-label="The detection coverage stack: detsema checks rule logic statically before deploy; deadair checks live telemetry coverage from the CI gate onward">
-  <rect x="0" y="0" width="1200" height="600" fill="#fdfcfa"/>
+  <rect x="0" y="0" width="1200" height="600" fill="#111214"/>
 
   <!-- detsema band (static, covers rule-as-code and CI gate) -->
-  <rect x="60" y="64" width="510" height="176" rx="8" fill="#faf8f5" stroke="#e7e4df"/>
-  <rect x="60" y="70" width="4" height="164" fill="#ae2b25"/>
-  <text x="84" y="98" font-size="17" font-weight="700" fill="#1a1a1a">detsema · static analysis</text>
-  <text x="84" y="120" font-size="12.5" fill="#6b7280">offline, on files, no SIEM connection</text>
-  <text x="84" y="148" font-size="14.5" fill="#ae2b25">Can this logic ever match?</text>
-  <g font-size="12.5" fill="#1a1a1a">
-    <rect x="84" y="160" width="110" height="26" rx="13" fill="#f4f2ee"/><text x="139" y="177" text-anchor="middle">unknown field</text>
-    <rect x="202" y="160" width="112" height="26" rx="13" fill="#f4f2ee"/><text x="258" y="177" text-anchor="middle">type mismatch</text>
-    <rect x="322" y="160" width="112" height="26" rx="13" fill="#f4f2ee"/><text x="378" y="177" text-anchor="middle">case mismatch</text>
-    <rect x="84" y="194" width="176" height="26" rx="13" fill="#f4f2ee"/><text x="172" y="211" text-anchor="middle">unsupported construct</text>
+  <rect x="60" y="64" width="510" height="176" rx="8" fill="#181a1d" stroke="#32343a"/>
+  <rect x="60" y="70" width="4" height="164" fill="#f27b70"/>
+  <text x="84" y="98" font-size="17" font-weight="700" fill="#f1f0ec">detsema · static analysis</text>
+  <text x="84" y="120" font-size="12.5" fill="#aaa8a2">offline, on files, no SIEM connection</text>
+  <text x="84" y="148" font-size="14.5" fill="#f27b70">Can this logic ever match?</text>
+  <g font-size="12.5" fill="#f1f0ec">
+    <rect x="84" y="160" width="110" height="26" rx="13" fill="#24262b"/><text x="139" y="177" text-anchor="middle">unknown field</text>
+    <rect x="202" y="160" width="112" height="26" rx="13" fill="#24262b"/><text x="258" y="177" text-anchor="middle">type mismatch</text>
+    <rect x="322" y="160" width="112" height="26" rx="13" fill="#24262b"/><text x="378" y="177" text-anchor="middle">case mismatch</text>
+    <rect x="84" y="194" width="176" height="26" rx="13" fill="#24262b"/><text x="172" y="211" text-anchor="middle">unsupported construct</text>
   </g>
 
   <!-- connectors detsema -> stages -->
-  <line x1="172" y1="240" x2="172" y2="271" stroke="#8a8a85" stroke-width="1.2" stroke-dasharray="3 3"/>
-  <line x1="457" y1="240" x2="457" y2="271" stroke="#8a8a85" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <line x1="172" y1="240" x2="172" y2="271" stroke="#85837e" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <line x1="457" y1="240" x2="457" y2="271" stroke="#85837e" stroke-width="1.2" stroke-dasharray="3 3"/>
 
   <!-- timeline stages -->
   <g>
-    <rect x="60" y="271" width="225" height="58" rx="8" fill="#ffffff" stroke="#e7e4df" stroke-width="1.5"/>
-    <text x="172" y="296" text-anchor="middle" font-size="15.5" font-weight="700" fill="#1a1a1a">rule as code</text>
-    <text x="172" y="316" text-anchor="middle" font-size="11.5" fill="#6b7280">Sigma in a repo</text>
+    <rect x="60" y="271" width="225" height="58" rx="8" fill="#181a1d" stroke="#32343a" stroke-width="1.5"/>
+    <text x="172" y="296" text-anchor="middle" font-size="15.5" font-weight="700" fill="#f1f0ec">rule as code</text>
+    <text x="172" y="316" text-anchor="middle" font-size="11.5" fill="#aaa8a2">Sigma in a repo</text>
 
-    <rect x="345" y="271" width="225" height="58" rx="8" fill="#ffffff" stroke="#e7e4df" stroke-width="1.5"/>
-    <text x="457" y="296" text-anchor="middle" font-size="15.5" font-weight="700" fill="#1a1a1a">CI gate</text>
-    <text x="457" y="316" text-anchor="middle" font-size="11.5" fill="#6b7280">pull request checks</text>
+    <rect x="345" y="271" width="225" height="58" rx="8" fill="#181a1d" stroke="#32343a" stroke-width="1.5"/>
+    <text x="457" y="296" text-anchor="middle" font-size="15.5" font-weight="700" fill="#f1f0ec">CI gate</text>
+    <text x="457" y="316" text-anchor="middle" font-size="11.5" fill="#aaa8a2">pull request checks</text>
 
-    <rect x="630" y="271" width="225" height="58" rx="8" fill="#ffffff" stroke="#e7e4df" stroke-width="1.5"/>
-    <text x="742" y="296" text-anchor="middle" font-size="15.5" font-weight="700" fill="#1a1a1a">enabled</text>
-    <text x="742" y="316" text-anchor="middle" font-size="11.5" fill="#6b7280">live in the SIEM</text>
+    <rect x="630" y="271" width="225" height="58" rx="8" fill="#181a1d" stroke="#32343a" stroke-width="1.5"/>
+    <text x="742" y="296" text-anchor="middle" font-size="15.5" font-weight="700" fill="#f1f0ec">enabled</text>
+    <text x="742" y="316" text-anchor="middle" font-size="11.5" fill="#aaa8a2">live in the SIEM</text>
 
-    <rect x="915" y="271" width="225" height="58" rx="8" fill="#ffffff" stroke="#e7e4df" stroke-width="1.5"/>
-    <text x="1027" y="296" text-anchor="middle" font-size="15.5" font-weight="700" fill="#1a1a1a">months later</text>
-    <text x="1027" y="316" text-anchor="middle" font-size="11.5" fill="#6b7280">still running</text>
+    <rect x="915" y="271" width="225" height="58" rx="8" fill="#181a1d" stroke="#32343a" stroke-width="1.5"/>
+    <text x="1027" y="296" text-anchor="middle" font-size="15.5" font-weight="700" fill="#f1f0ec">months later</text>
+    <text x="1027" y="316" text-anchor="middle" font-size="11.5" fill="#aaa8a2">still running</text>
   </g>
 
   <!-- timeline arrows -->
-  <g stroke="#8a8a85" stroke-width="1.5" fill="#8a8a85">
+  <g stroke="#85837e" stroke-width="1.5" fill="#85837e">
     <line x1="285" y1="300" x2="337" y2="300"/><polygon points="337,295.5 345,300 337,304.5"/>
     <line x1="570" y1="300" x2="622" y2="300"/><polygon points="622,295.5 630,300 622,304.5"/>
     <line x1="855" y1="300" x2="907" y2="300"/><polygon points="907,295.5 915,300 907,304.5"/>
   </g>
 
   <!-- connectors deadair -> stages -->
-  <line x1="457" y1="329" x2="457" y2="390" stroke="#8a8a85" stroke-width="1.2" stroke-dasharray="3 3"/>
-  <line x1="742" y1="329" x2="742" y2="390" stroke="#8a8a85" stroke-width="1.2" stroke-dasharray="3 3"/>
-  <line x1="1027" y1="329" x2="1027" y2="390" stroke="#8a8a85" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <line x1="457" y1="329" x2="457" y2="390" stroke="#85837e" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <line x1="742" y1="329" x2="742" y2="390" stroke="#85837e" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <line x1="1027" y1="329" x2="1027" y2="390" stroke="#85837e" stroke-width="1.2" stroke-dasharray="3 3"/>
 
   <!-- deadair band (live, covers CI gate through months later) -->
-  <rect x="345" y="390" width="805" height="176" rx="8" fill="#faf8f5" stroke="#e7e4df"/>
-  <rect x="345" y="396" width="4" height="164" fill="#ae2b25"/>
-  <text x="369" y="424" font-size="17" font-weight="700" fill="#1a1a1a">deadair · live coverage</text>
-  <text x="369" y="446" font-size="12.5" fill="#6b7280">read-only, against Elastic Security and OpenSearch Security Analytics</text>
-  <text x="369" y="474" font-size="14.5" fill="#ae2b25">Can this rule see data right now?</text>
-  <g font-size="12.5" fill="#1a1a1a">
-    <rect x="369" y="486" width="112" height="26" rx="13" fill="#f4f2ee"/><text x="425" y="503" text-anchor="middle">disconnected</text>
-    <rect x="491" y="486" width="76" height="26" rx="13" fill="#f4f2ee"/><text x="529" y="503" text-anchor="middle">starved</text>
-    <rect x="577" y="486" width="104" height="26" rx="13" fill="#f4f2ee"/><text x="629" y="503" text-anchor="middle">missing field</text>
-    <rect x="691" y="486" width="92" height="26" rx="13" fill="#f4f2ee"/><text x="737" y="503" text-anchor="middle">lag margin</text>
-    <rect x="793" y="486" width="100" height="26" rx="13" fill="#f4f2ee"/><text x="843" y="503" text-anchor="middle">blast radius</text>
-    <rect x="903" y="486" width="140" height="26" rx="13" fill="#f4f2ee"/><text x="973" y="503" text-anchor="middle">unused telemetry</text>
+  <rect x="345" y="390" width="805" height="176" rx="8" fill="#181a1d" stroke="#32343a"/>
+  <rect x="345" y="396" width="4" height="164" fill="#f27b70"/>
+  <text x="369" y="424" font-size="17" font-weight="700" fill="#f1f0ec">deadair · live coverage</text>
+  <text x="369" y="446" font-size="12.5" fill="#aaa8a2">read-only, against Elastic Security and OpenSearch Security Analytics</text>
+  <text x="369" y="474" font-size="14.5" fill="#f27b70">Can this rule see data right now?</text>
+  <g font-size="12.5" fill="#f1f0ec">
+    <rect x="369" y="486" width="112" height="26" rx="13" fill="#24262b"/><text x="425" y="503" text-anchor="middle">disconnected</text>
+    <rect x="491" y="486" width="76" height="26" rx="13" fill="#24262b"/><text x="529" y="503" text-anchor="middle">starved</text>
+    <rect x="577" y="486" width="104" height="26" rx="13" fill="#24262b"/><text x="629" y="503" text-anchor="middle">missing field</text>
+    <rect x="691" y="486" width="92" height="26" rx="13" fill="#24262b"/><text x="737" y="503" text-anchor="middle">lag margin</text>
+    <rect x="793" y="486" width="100" height="26" rx="13" fill="#24262b"/><text x="843" y="503" text-anchor="middle">blast radius</text>
+    <rect x="903" y="486" width="140" height="26" rx="13" fill="#24262b"/><text x="973" y="503" text-anchor="middle">unused telemetry</text>
   </g>
-  <text x="369" y="542" font-size="11.5" fill="#8a8a85">at the CI gate, scan --rule checks a candidate against the live environment before it is enabled</text>
+  <text x="369" y="542" font-size="11.5" fill="#85837e">at the CI gate, scan --rule checks a candidate against the live environment before it is enabled</text>
 </svg>

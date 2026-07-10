@@ -29,7 +29,8 @@ reads, and reports which rules are blind right now and why, from disconnected pa
 sources to dropped mapping fields, ingest-lag margins, and the blast radius when one source degrades.
 
 <figure>
-  <img src="{{ '/assets/stack-diagram.svg' | relative_url }}" alt="Timeline of a rule from code to production. detsema covers authoring and CI with static checks (unknown field, type mismatch, case mismatch, unsupported construct); deadair covers CI through production with live checks (disconnected, starved, missing field, lag margin, blast radius, unused telemetry)">
+  <img class="theme-art-light" src="{{ '/assets/stack-diagram-light.svg' | relative_url }}" alt="Timeline of a rule from code to production. detsema covers authoring and CI with static checks (unknown field, type mismatch, case mismatch, unsupported construct); deadair covers CI through production with live checks (disconnected, starved, missing field, lag margin, blast radius, unused telemetry)">
+  <img class="theme-art-dark" src="{{ '/assets/stack-diagram.svg' | relative_url }}" alt="Timeline of a rule from code to production. detsema covers authoring and CI with static checks (unknown field, type mismatch, case mismatch, unsupported construct); deadair covers CI through production with live checks (disconnected, starved, missing field, lag margin, blast radius, unused telemetry)">
   <figcaption>detsema works on the rule text and stops at the CI gate. deadair starts at the same gate with scan --rule and stays with the rule for as long as it runs.</figcaption>
 </figure>
 

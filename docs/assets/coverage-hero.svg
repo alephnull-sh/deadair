@@ -1,58 +1,58 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" role="img" aria-label="deadair coverage scan showing which enabled detections are blind and why">
-  <rect x="0" y="0" width="1200" height="630" fill="#fdfcfa"/>
+  <rect x="0" y="0" width="1200" height="630" fill="#111214"/>
 
   <!-- brand + audience tag -->
-  <circle cx="72" cy="52" r="7" fill="#ae2b25"/>
-  <text x="88" y="60" font-size="24" font-weight="700" fill="#1a1a1a">deadair</text>
-  <text x="1136" y="58" text-anchor="end" font-size="14" fill="#8a8a85">read-only · Elastic + OpenSearch</text>
+  <circle cx="72" cy="52" r="7" fill="#f27b70"/>
+  <text x="88" y="60" font-size="24" font-weight="700" fill="#f1f0ec">deadair</text>
+  <text x="1136" y="58" text-anchor="end" font-size="14" fill="#85837e">read-only · Elastic + OpenSearch</text>
 
   <!-- headline -->
-  <text x="64" y="108" font-size="29" font-weight="700" fill="#1a1a1a" font-family="Georgia,'Times New Roman',serif">Which enabled detections have gone blind</text>
+  <text x="64" y="108" font-size="29" font-weight="700" fill="#f1f0ec" font-family="Georgia,'Times New Roman',serif">Which enabled detections have gone blind</text>
 
   <!-- report panel -->
-  <rect x="64" y="132" width="1072" height="344" rx="12" fill="#ffffff" stroke="#e7e4df" stroke-width="1.5"/>
-  <text x="100" y="170" font-size="12.5" fill="#6b7280" letter-spacing="1.5">ENABLED DETECTION</text>
-  <text x="1100" y="170" text-anchor="end" font-size="12.5" fill="#6b7280" letter-spacing="1.5">COVERAGE</text>
-  <line x1="100" y1="186" x2="1100" y2="186" stroke="#e7e4df" stroke-width="1"/>
+  <rect x="64" y="132" width="1072" height="344" rx="12" fill="#181a1d" stroke="#32343a" stroke-width="1.5"/>
+  <text x="100" y="170" font-size="12.5" fill="#aaa8a2" letter-spacing="0">ENABLED DETECTION</text>
+  <text x="1100" y="170" text-anchor="end" font-size="12.5" fill="#aaa8a2" letter-spacing="0">COVERAGE</text>
+  <line x1="100" y1="186" x2="1100" y2="186" stroke="#32343a" stroke-width="1"/>
 
   <!-- row 1: live -->
   <circle cx="108" cy="220" r="5.5" fill="#9ca3af"/>
-  <text x="132" y="226" font-size="18.5" fill="#1a1a1a">Suspicious PowerShell Encoded Command</text>
-  <text x="1100" y="226" text-anchor="end" font-size="15.5" fill="#6b7280">live</text>
+  <text x="132" y="226" font-size="18.5" fill="#f1f0ec">Suspicious PowerShell Encoded Command</text>
+  <text x="1100" y="226" text-anchor="end" font-size="15.5" fill="#aaa8a2">live</text>
 
   <!-- row 2: blind, missing field -->
-  <line x1="102" y1="256" x2="114" y2="268" stroke="#ae2b25" stroke-width="2.5"/>
-  <line x1="114" y1="256" x2="102" y2="268" stroke="#ae2b25" stroke-width="2.5"/>
-  <text x="132" y="268" font-size="18.5" fill="#1a1a1a">Okta Repeated MFA Failures</text>
-  <text x="1100" y="268" text-anchor="end" font-size="15.5" fill="#ae2b25">blind · field user.id missing</text>
+  <line x1="102" y1="256" x2="114" y2="268" stroke="#f27b70" stroke-width="2.5"/>
+  <line x1="114" y1="256" x2="102" y2="268" stroke="#f27b70" stroke-width="2.5"/>
+  <text x="132" y="268" font-size="18.5" fill="#f1f0ec">Okta Repeated MFA Failures</text>
+  <text x="1100" y="268" text-anchor="end" font-size="15.5" fill="#f27b70">blind · field user.id missing</text>
 
   <!-- row 3: dead, stale source -->
-  <line x1="102" y1="298" x2="114" y2="310" stroke="#ae2b25" stroke-width="2.5"/>
-  <line x1="114" y1="298" x2="102" y2="310" stroke="#ae2b25" stroke-width="2.5"/>
-  <text x="132" y="310" font-size="18.5" fill="#1a1a1a">Auditd Cron Persistence</text>
-  <text x="1100" y="310" text-anchor="end" font-size="15.5" fill="#ae2b25">dead · source stale 4d</text>
+  <line x1="102" y1="298" x2="114" y2="310" stroke="#f27b70" stroke-width="2.5"/>
+  <line x1="114" y1="298" x2="102" y2="310" stroke="#f27b70" stroke-width="2.5"/>
+  <text x="132" y="310" font-size="18.5" fill="#f1f0ec">Auditd Cron Persistence</text>
+  <text x="1100" y="310" text-anchor="end" font-size="15.5" fill="#f27b70">dead · source stale 4d</text>
 
   <!-- row 4: live -->
   <circle cx="108" cy="346" r="5.5" fill="#9ca3af"/>
-  <text x="132" y="352" font-size="18.5" fill="#1a1a1a">AWS Root Console Login</text>
-  <text x="1100" y="352" text-anchor="end" font-size="15.5" fill="#6b7280">live</text>
+  <text x="132" y="352" font-size="18.5" fill="#f1f0ec">AWS Root Console Login</text>
+  <text x="1100" y="352" text-anchor="end" font-size="15.5" fill="#aaa8a2">live</text>
 
   <!-- row 5: blind, lag -->
-  <line x1="102" y1="382" x2="114" y2="394" stroke="#ae2b25" stroke-width="2.5"/>
-  <line x1="114" y1="382" x2="102" y2="394" stroke="#ae2b25" stroke-width="2.5"/>
-  <text x="132" y="394" font-size="18.5" fill="#1a1a1a">Windows LSASS Memory Access</text>
-  <text x="1100" y="394" text-anchor="end" font-size="15.5" fill="#ae2b25">blind · lag past window</text>
+  <line x1="102" y1="382" x2="114" y2="394" stroke="#f27b70" stroke-width="2.5"/>
+  <line x1="114" y1="382" x2="102" y2="394" stroke="#f27b70" stroke-width="2.5"/>
+  <text x="132" y="394" font-size="18.5" fill="#f1f0ec">Windows LSASS Memory Access</text>
+  <text x="1100" y="394" text-anchor="end" font-size="15.5" fill="#f27b70">blind · lag past window</text>
 
   <!-- row 6: live -->
   <circle cx="108" cy="430" r="5.5" fill="#9ca3af"/>
-  <text x="132" y="436" font-size="18.5" fill="#1a1a1a">Sysmon Process Injection</text>
-  <text x="1100" y="436" text-anchor="end" font-size="15.5" fill="#6b7280">live</text>
+  <text x="132" y="436" font-size="18.5" fill="#f1f0ec">Sysmon Process Injection</text>
+  <text x="1100" y="436" text-anchor="end" font-size="15.5" fill="#aaa8a2">live</text>
 
   <!-- blast radius band -->
-  <rect x="64" y="500" width="1072" height="70" rx="10" fill="#fbf7f6" stroke="#ecdbd9" stroke-width="1"/>
-  <rect x="64" y="506" width="5" height="58" fill="#ae2b25"/>
-  <text x="94" y="530" font-size="12" fill="#ae2b25" letter-spacing="1.5">BLAST RADIUS</text>
-  <text x="94" y="556" font-size="19"><tspan fill="#1a1a1a">one endpoint connector down    </tspan><tspan fill="#ae2b25" font-weight="700">&#8594;  9 enabled detections go dark</tspan></text>
+  <rect x="64" y="500" width="1072" height="70" rx="10" fill="#1d191a" stroke="#4a2e2d" stroke-width="1"/>
+  <rect x="64" y="506" width="5" height="58" fill="#f27b70"/>
+  <text x="94" y="530" font-size="12" fill="#f27b70" letter-spacing="0">BLAST RADIUS</text>
+  <text x="94" y="556" font-size="19"><tspan fill="#f1f0ec">one endpoint connector down    </tspan><tspan fill="#f27b70" font-weight="700">&#8594;  9 enabled detections go dark</tspan></text>
 
-  <text x="1136" y="600" text-anchor="end" font-size="12.5" fill="#b0aca6">big-comfy.github.io/deadair</text>
+  <text x="1136" y="600" text-anchor="end" font-size="12.5" fill="#85837e">big-comfy.github.io/deadair</text>
 </svg>
