@@ -90,8 +90,8 @@ window slides past, which leaves a gap of `P − L` for a run every `I` minutes 
 </details>
 
 <figure>
-  <img class="theme-art-light" src="{{ '/assets/lag-curve-light.svg' | relative_url }}" alt="Catch rate versus ingest lag: flat at 100% up to the reliable margin, then a straight linear decline to zero at the lookback, then flat at zero">
-  <img class="theme-art-dark" src="{{ '/assets/lag-curve.svg' | relative_url }}" alt="Catch rate versus ingest lag: flat at 100% up to the reliable margin, then a straight linear decline to zero at the lookback, then flat at zero">
+  <img class="theme-art-light" src="{{ '/assets/lag-curve-light.svg' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Catch rate versus ingest lag: flat at 100% up to the reliable margin, then a straight linear decline to zero at the lookback, then flat at zero">
+  <img class="theme-art-dark" src="{{ '/assets/lag-curve.svg' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Catch rate versus ingest lag: flat at 100% up to the reliable margin, then a straight linear decline to zero at the lookback, then flat at zero">
   <figcaption>Fraction of events a rule catches as source ingest lag grows, for a rule with a 6-minute lookback running every 5 minutes. The line is the formula, the open points are the simulation, and the shaded area is coverage lost with no error and no alert.</figcaption>
 </figure>
 

@@ -27,9 +27,9 @@
     <meta property="og:type" content="{% if page.date %}article{% else %}website{% endif %}">
     <meta property="og:url" content="{{ page.url | absolute_url }}">
     <meta name="twitter:card" content="summary_large_image">
-    {% if page.hero_image %}<meta property="og:image" content="{{ page.hero_image | absolute_url }}">{% endif %}
+    {% if page.hero_image %}<meta property="og:image" content="{{ page.hero_image | absolute_url }}?v={{ site.github.build_revision | default: 'local' }}">{% endif %}
     <link rel="canonical" href="{{ page.url | absolute_url }}">
-    <link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}">
+    <link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}">
   </head>
   <body>
     <header class="site-header">
