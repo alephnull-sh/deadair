@@ -39,13 +39,17 @@ This demo scans an Elastic 8.17 lab with the Elastic prebuilt rule package insta
 rules enabled, and only a few seeded data streams:
 
 <p align="center">
-  <img alt="deadair scan output showing dead detections and unused telemetry" src="docs/assets/demo.gif" width="860">
+  <img alt="Static deadair scan output showing dead detections and unused telemetry" src="docs/assets/demo-final.svg" width="860">
 </p>
 
-Those dead detections are enabled rules whose patterns do not resolve to live telemetry in this
-environment. In a new SIEM, that is usually onboarding backlog. In an established SOC, the same
-finding is often a connector, agent, parser, or index pattern problem that quietly removed
-coverage.
+`no matching source` means a rule's index patterns resolve to zero concrete indices or data streams.
+For example, a rule copied from a NetFlow-enabled tenant searches `netflow-*`, but the receiving
+tenant has never onboarded NetFlow. The rule stays enabled, but there is no concrete source behind the
+pattern. Depending on the backend and rule settings, the run can surface as an empty search or a
+missing-index warning.
+
+In a new SIEM, this finding is usually onboarding backlog. In an established SOC, it is more often a
+renamed data stream, pattern typo, removed integration, or rule copied from another environment.
 
 Sample terminal, JSON, and HTML reports are in [docs/examples](docs/examples/).
 
@@ -104,8 +108,8 @@ deadair separates detection problems from telemetry problems.
 
 | Finding | What it means | Who usually owns it |
 |---|---|---|
-| `disconnected` rule | an enabled rule's index patterns match no source | detection engineering or onboarding |
-| `starved` rule | every source the rule reads is stale or empty | telemetry pipeline owner |
+| no matching source (`disconnected` in JSON) | an enabled rule's index patterns match no index or data stream | detection engineering or onboarding |
+| all matching sources stale or empty (`starved` in JSON) | every source the rule reads has stopped sending data or has no documents | telemetry pipeline owner |
 | stale source | source has not received events within `--max-stale` | pipeline, agent, collector, or source owner |
 | empty source | index or data stream exists but has zero docs | onboarding or template issue |
 | missing fields | best-effort rule-declared fields are absent from source mappings | parser, integration, or content owner |
@@ -122,11 +126,8 @@ Useful flags:
 | `--downtime-file downtime.json` | suppress expected maintenance windows without hiding sources |
 | `--redact` | replace tenant, rule, source, pattern, and field names with stable digests |
 
-HTML output is built into `scan`:
-
-<p align="center">
-  <a href="docs/examples/sample-report.html"><img alt="deadair HTML report" src="docs/assets/report.png" width="760"></a>
-</p>
+HTML output is built into `scan`. Open the checked-in
+[sample HTML report](docs/examples/sample-report.html) to inspect the full layout and findings.
 
 ## CI gates
 

@@ -554,7 +554,8 @@ func TestDiffCommand(t *testing.T) {
 	if code != report.ExitFindings {
 		t.Fatalf("diff exit = %d, want 1; stderr: %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Now dead") || !strings.Contains(stdout.String(), "DEGRADED a") {
+	if !strings.Contains(stdout.String(), "Now dead — all matching sources stale or empty") ||
+		!strings.Contains(stdout.String(), "DEGRADED a") || strings.Contains(stdout.String(), " — starved") {
 		t.Fatalf("diff output:\n%s", stdout.String())
 	}
 

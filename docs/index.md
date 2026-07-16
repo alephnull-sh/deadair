@@ -20,10 +20,11 @@ alerts" can still mean "the search completed over data that could not have match
 Treat coverage as its own question and it is a small join, what each rule reads against the state its
 sources are in. The join breaks four ways, and I keep hitting the same four.
 
-- **Disconnected.** Index patterns that match nothing. A typo, a source nobody onboarded, or a rule
-  copied from an environment with data you do not have.
-- **Starved.** The sources exist but are stale or empty. A dead shipper, a broken connector, a
-  pipeline dropping its output.
+- **No matching source.** Index patterns that resolve to zero indices or data streams. For example,
+  a rule copied from a NetFlow-enabled tenant still searches `netflow-*`, but the receiving tenant
+  has never onboarded NetFlow.
+- **All matching sources stale or empty.** The sources exist but have stopped sending data or never
+  received any. A dead shipper, a broken connector, a pipeline dropping its output.
 - **Missing fields.** The rule filters on a field the source stopped providing. An integration changes
   its ECS mapping, the field goes null, the condition never matches again.
 - **Ingest-lag blind windows.** Source and fields are fine, but events land too late to fall inside
@@ -33,15 +34,15 @@ Here is a lab scan. Every rule is enabled; the flagged ones resolve to something
 empty.
 
 <figure class="bordered">
-  <img src="{{ '/assets/demo.gif' | relative_url }}" alt="deadair scan output listing enabled detections whose sources are missing, stale, or empty">
-  <figcaption>Enabled detections with no live telemetry behind them. Missing index patterns may warn in Elastic; stale-but-existing sources are the quieter case.</figcaption>
+  <img src="{{ '/assets/demo-final.svg' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Static deadair scan output listing enabled detections whose sources are missing, stale, or empty">
+  <figcaption>The final scan output is static so every finding can be read. Missing index patterns may warn in Elastic; stale-but-existing sources are the quieter case.</figcaption>
 </figure>
 
 ## Dead detections and blast radius
 
 That scan is most of what deadair does. It resolves each rule's patterns to the sources that exist,
-checks their state, and hands back the rules sitting on nothing. Disconnected and starved, answered one
-rule at a time instead of one source at a time.
+checks their state, and hands back the rules sitting on nothing. No matching source, or every matching
+source stale or empty, answered one rule at a time instead of one source at a time.
 
 The per-rule part is what makes it useful. Plenty of tools tell you a source went quiet; few tell you
 which enabled detection just died because of it. The graph also runs backwards, which is the view a SOC
@@ -158,14 +159,6 @@ The honest limits: deadair is young, supports two backends, uses best-effort rul
 SIEM only exposes best-effort metadata, and only tells you whether a rule can see data, not whether the
 rule logic is good. CI provisions the least-privilege role and proves every write is rejected against a
 live cluster, so read-only is enforced, not claimed.
-
-The rule-logic question turned out to be a separate, static problem, so it became a separate tool.
-[detsema](https://big-comfy.github.io/detsema/) parses Sigma rules into a typed representation and
-checks offline whether each rule can ever match the fields a pipeline emits. To validate its matcher I
-ran the same rules over the same Windows event logs in Chainsaw and compared matches event by event;
-every disagreement resolved against Chainsaw, whose maintainer confirmed the bug and fixed it for
-v2.16.1. How the two tools divide the work, with a worked example, is in
-[the detection coverage stack]({{ '/stack/' | relative_url }}).
 
 If you know a failure mode I have missed, the issues are open. If nothing else sticks, a rule executing
 and a rule detecting are two different events. Native SIEM tooling watches a lot more than it used to;

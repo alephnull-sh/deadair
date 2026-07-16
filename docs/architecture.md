@@ -40,8 +40,8 @@ removed.
 | Verdict | Meaning |
 |---|---|
 | `live` | at least one matched source is healthy or unknown |
-| `disconnected` | the rule's patterns match no source |
-| `starved` | every matched source is stale or empty |
+| `disconnected` | the rule's patterns match no source; terminal and HTML reports show `no matching source` |
+| `starved` | every matched source is stale or empty; terminal and HTML reports spell this out |
 | `missing-fields` | required fields are absent from every matched source with fetched schema |
 | `lag-blind-window` | a matched source's ingest lag exceeds the rule's lookback-minus-interval margin |
 | `unmapped` | deadair cannot derive data inputs from the metadata, such as some ML rules |

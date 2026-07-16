@@ -50,8 +50,8 @@ Start from rule findings, then pivot to source findings.
 
 | Finding | Meaning | First triage step |
 |---|---|---|
-| dead rule: `disconnected` | enabled rule patterns match no index or data stream | check for pattern typos, missing integrations, disabled data streams, or rules copied from another environment |
-| dead rule: `starved` | every matched source is stale or empty | inspect the listed sources; the detection is blind because the data path stopped |
+| dead rule: no matching source (`disconnected` in JSON) | enabled rule patterns match no index or data stream | check for pattern typos, missing integrations, disabled data streams, or rules copied from another environment |
+| dead rule: all matching sources stale or empty (`starved` in JSON) | every matched source is stale or empty | inspect the listed sources; the detection is blind because the data path stopped |
 | impaired rule: `missing-fields` | declared `required_fields` are absent from every matched source's `field_caps` | check parser or integration changes; update mappings or fix the rule fields |
 | impaired rule: `lag-blind-window` | ingest lag on a matched source is wider than the rule's lookback margin | widen `from`, shorten delivery lag, or treat the source as batch-delivered |
 | source `stale` | no recent events within `--max-stale` | check agent, connector, forwarder, ingest pipeline, and upstream source health |
@@ -60,6 +60,11 @@ Start from rule findings, then pivot to source findings.
 | unused telemetry | source has data but no enabled rule reads it | write coverage, enable relevant rules, or stop ingesting the source |
 | `remote_rules` | rule uses cross-cluster patterns such as `cluster:index-*` | scan the remote cluster as its own fleet instance |
 | `unmapped` | deadair cannot derive inputs from metadata, such as some ML rules | informational; deadair does not guess |
+
+Practical example: a rule copied from a tenant that ingests NetFlow searches `netflow-*`. The new
+tenant has no matching index or data stream because NetFlow was never onboarded there. The rule can
+remain enabled, but no concrete source exists behind its pattern; deadair reports `no matching
+source`.
 
 `--include` and `--exclude` only change what the report lists. They do not change the verdicts.
 

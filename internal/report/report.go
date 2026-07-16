@@ -107,13 +107,31 @@ type FieldTypeChange struct {
 	After  []string `json:"after"`
 }
 
+// Dead-reason values are stable machine-readable codes used in JSON reports.
+const (
+	ReasonDisconnected = "disconnected"
+	ReasonStarved      = "starved"
+)
+
+// DeadReasonLabel returns the plain-language label used in human reports.
+func DeadReasonLabel(reason string) string {
+	switch reason {
+	case ReasonDisconnected:
+		return "no matching source"
+	case ReasonStarved:
+		return "all matching sources stale or empty"
+	default:
+		return reason
+	}
+}
+
 // DeadDetection is an enabled rule that cannot currently fire.
 type DeadDetection struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Severity string `json:"severity"`
-	// Reason is "disconnected" (patterns match no live source) or "starved"
-	// (every matched source is stale or empty).
+	// Reason is a stable machine-readable code. Use DeadReasonLabel in output
+	// intended for people.
 	Reason   string   `json:"reason"`
 	Patterns []string `json:"patterns"`
 	Sources  []string `json:"sources,omitempty"` // the degraded sources, when starved
@@ -305,7 +323,7 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 			}
 			r.DeadDetections = append(r.DeadDetections, DeadDetection{
 				ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
-				Reason: "disconnected", Patterns: rule.Patterns,
+				Reason: ReasonDisconnected, Patterns: rule.Patterns,
 			})
 			continue
 		}
@@ -323,7 +341,7 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 		if allDegraded {
 			r.DeadDetections = append(r.DeadDetections, DeadDetection{
 				ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
-				Reason: "starved", Patterns: rule.Patterns, Sources: degraded,
+				Reason: ReasonStarved, Patterns: rule.Patterns, Sources: degraded,
 			})
 			continue
 		}

@@ -433,6 +433,13 @@ func TestWriteHTML(t *testing.T) {
 	if strings.Contains(string(data), "<script>alert(1)</script>") {
 		t.Fatal("html report did not escape source name")
 	}
+	if !strings.Contains(string(data), "no matching source") ||
+		!strings.Contains(string(data), "all matching sources stale or empty") {
+		t.Fatalf("html report does not use plain-language reasons:\n%s", data)
+	}
+	if strings.Contains(string(data), ">disconnected<") || strings.Contains(string(data), ">starved<") {
+		t.Fatalf("html report exposes machine reason codes:\n%s", data)
+	}
 }
 
 func TestRemoteRulesNeverDead(t *testing.T) {

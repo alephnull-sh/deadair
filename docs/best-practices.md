@@ -60,8 +60,8 @@ the tool.
 
 | Signal | Good first owner |
 |---|---|
-| `disconnected` rules | detection engineering |
-| `starved` rules | telemetry pipeline owner, with detection engineering copied |
+| no matching source rules (`disconnected` in JSON) | detection engineering |
+| all matching sources stale or empty (`starved` in JSON) | telemetry pipeline owner, with detection engineering copied |
 | stale, empty, or low-volume sources | collector, forwarder, pipeline, or source-system owner |
 | missing fields or schema drift | parser/integration owner and detection engineering |
 | lag blind window | detection engineering and pipeline owner |

@@ -592,7 +592,7 @@ func printSummary(w io.Writer, r *report.Report) {
 				fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", s.DeadDetections-15)
 				break
 			}
-			fmt.Fprintf(w, "  [%s] %s — %s", d.Severity, d.Name, d.Reason)
+			fmt.Fprintf(w, "  [%s] %s — %s", d.Severity, d.Name, report.DeadReasonLabel(d.Reason))
 			if len(d.Sources) > 0 {
 				fmt.Fprintf(w, " (%s)", strings.Join(d.Sources, ", "))
 			}
@@ -733,7 +733,7 @@ func printDiff(w io.Writer, d *report.DiffResult) {
 		return
 	}
 	for _, x := range d.NewlyDead {
-		fmt.Fprintf(w, "DEAD     [%s] %s — %s\n", x.Severity, x.Name, x.Reason)
+		fmt.Fprintf(w, "DEAD     [%s] %s — %s\n", x.Severity, x.Name, report.DeadReasonLabel(x.Reason))
 	}
 	for _, x := range d.NewlyImpaired {
 		fmt.Fprintf(w, "IMPAIRED [%s] %s — %s\n", x.Severity, x.Name, strings.Join(x.Reasons, ", "))

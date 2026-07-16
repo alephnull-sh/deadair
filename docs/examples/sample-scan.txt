@@ -3,21 +3,21 @@ sources:    10 (9 ok, 1 stale, 0 empty, 0 unknown, 0 maintenance)
 detections: 499 enabled / 1276 total (0 unmapped)
 
 DEAD: 46 enabled detection(s) cannot fire right now
-  [high] Persistence via WMI Standard Registry Provider — disconnected
-  [high] Potential Remote Credential Access via Registry — disconnected
-  [high] Sensitive Registry Hive Access via RegBack — disconnected
-  [high] Untrusted Driver Loaded — disconnected
-  [medium] Component Object Model Hijacking — disconnected
-  [medium] Deprecated - Container Workload Protection — disconnected
-  [medium] Downloaded Shortcut Files — disconnected
-  [medium] Downloaded URL Files — disconnected
-  [medium] Endpoint Security (Elastic Defend) — disconnected
-  [medium] Expired or Revoked Driver Loaded — disconnected
-  [medium] First Time Seen Driver Loaded — disconnected
-  [medium] LSASS Process Access via Windows API — disconnected
-  [medium] Persistence via a Windows Installer — disconnected
-  [medium] Potential LSA Authentication Package Abuse — disconnected
-  [medium] Potential Port Monitor or Print Processor Registration Abuse — disconnected
+  [high] Persistence via WMI Standard Registry Provider — no matching source
+  [high] Potential Remote Credential Access via Registry — no matching source
+  [high] Sensitive Registry Hive Access via RegBack — no matching source
+  [high] Untrusted Driver Loaded — no matching source
+  [medium] Component Object Model Hijacking — no matching source
+  [medium] Deprecated - Container Workload Protection — no matching source
+  [medium] Downloaded Shortcut Files — no matching source
+  [medium] Downloaded URL Files — no matching source
+  [medium] Endpoint Security (Elastic Defend) — no matching source
+  [medium] Expired or Revoked Driver Loaded — no matching source
+  [medium] First Time Seen Driver Loaded — no matching source
+  [medium] LSASS Process Access via Windows API — no matching source
+  [medium] Persistence via a Windows Installer — no matching source
+  [medium] Potential LSA Authentication Package Abuse — no matching source
+  [medium] Potential Port Monitor or Print Processor Registration Abuse — no matching source
   … and 31 more (use --json for the full list)
 
 IMPAIRED: 1 enabled detection(s) run with reduced visibility

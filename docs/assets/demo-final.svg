@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="636" viewBox="0 0 1180 636" role="img" aria-labelledby="title desc">
+  <title id="title">deadair final scan output</title>
+  <desc id="desc">A static terminal capture showing 44 enabled detections with no matching source, one detection impaired by ingest lag, and one unused telemetry source.</desc>
+  <style>
+    .base { fill: #cdd6f4; font: 15px SFMono-Regular, Consolas, "Liberation Mono", monospace; letter-spacing: 0; }
+    .prompt { fill: #89b4fa; font-weight: 700; }
+    .heading { fill: #f38ba8; font-weight: 700; }
+    .warning { fill: #f9e2af; font-weight: 700; }
+    .muted { fill: #a6adc8; }
+  </style>
+  <rect width="1180" height="636" rx="8" fill="#1e1e2e"/>
+  <text x="18" y="29" class="base prompt" xml:space="preserve">› deadair scan --state-file deadair-state.json</text>
+  <text x="18" y="54" class="base" xml:space="preserve">deadair scan — elastic — 2026-07-05T15:40:16Z</text>
+  <text x="18" y="74" class="base" xml:space="preserve">sources:    10 (9 ok, 1 stale, 0 empty, 0 unknown, 0 maintenance)</text>
+  <text x="18" y="94" class="base" xml:space="preserve">detections: 500 enabled / 1276 total (0 unmapped)</text>
+
+  <text x="18" y="129" class="base heading" xml:space="preserve">DEAD: 44 enabled detection(s) cannot fire right now</text>
+  <text x="38" y="154" class="base" xml:space="preserve">[high] Persistence via WMI Standard Registry Provider — no matching source</text>
+  <text x="38" y="174" class="base" xml:space="preserve">[high] Potential Remote Credential Access via Registry — no matching source</text>
+  <text x="38" y="194" class="base" xml:space="preserve">[high] Sensitive Registry Hive Access via RegBack — no matching source</text>
+  <text x="38" y="214" class="base" xml:space="preserve">[high] Untrusted Driver Loaded — no matching source</text>
+  <text x="38" y="234" class="base" xml:space="preserve">[medium] Component Object Model Hijacking — no matching source</text>
+  <text x="38" y="254" class="base" xml:space="preserve">[medium] Deprecated - Container Workload Protection — no matching source</text>
+  <text x="38" y="274" class="base" xml:space="preserve">[medium] Downloaded Shortcut Files — no matching source</text>
+  <text x="38" y="294" class="base" xml:space="preserve">[medium] Downloaded URL Files — no matching source</text>
+  <text x="38" y="314" class="base" xml:space="preserve">[medium] Endpoint Security (Elastic Defend) — no matching source</text>
+  <text x="38" y="334" class="base" xml:space="preserve">[medium] Expired or Revoked Driver Loaded — no matching source</text>
+  <text x="38" y="354" class="base" xml:space="preserve">[medium] First Time Seen Driver Loaded — no matching source</text>
+  <text x="38" y="374" class="base" xml:space="preserve">[medium] LSASS Process Access via Windows API — no matching source</text>
+  <text x="38" y="394" class="base" xml:space="preserve">[medium] Persistence via a Windows Installer — no matching source</text>
+  <text x="38" y="414" class="base" xml:space="preserve">[medium] Potential LSA Authentication Package Abuse — no matching source</text>
+  <text x="38" y="434" class="base" xml:space="preserve">[medium] Potential Port Monitor or Print Processor Registration Abuse — no matching source</text>
+  <text x="38" y="454" class="base muted" xml:space="preserve">… and 29 more (use --json for the full list)</text>
+
+  <text x="18" y="489" class="base warning" xml:space="preserve">IMPAIRED: 1 enabled detection(s) run with reduced visibility</text>
+  <text x="38" y="514" class="base" xml:space="preserve">[medium] Batch-fed source watcher — lag-blind-window (ingest lag 45m in batchy-events exceeds window margin)</text>
+
+  <text x="18" y="554" class="base" xml:space="preserve">unused telemetry: 1 source(s), 7.0 KiB ingested with no enabled detection reading it</text>
+  <text x="38" y="574" class="base" xml:space="preserve">metrics-myapp.usage-default (7.0 KiB, 2 disabled rule(s) reference it)</text>
+  <text x="18" y="614" class="base prompt" xml:space="preserve">›</text>
+</svg>

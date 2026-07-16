@@ -17,6 +17,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 		}
 		return fmt.Sprintf("%.2f", *v)
 	},
+	"reason": DeadReasonLabel,
 }).Parse(`<!doctype html>
 <html lang="en">
 <head>
@@ -75,7 +76,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     <thead><tr><th>Severity</th><th>Name</th><th>Reason</th><th>Sources</th></tr></thead>
     <tbody>
     {{range .DeadDetections}}
-      <tr><td>{{.Severity}}</td><td>{{.Name}}</td><td>{{.Reason}}</td><td>{{range $i, $s := .Sources}}{{if $i}}, {{end}}{{$s}}{{end}}</td></tr>
+      <tr><td>{{.Severity}}</td><td>{{.Name}}</td><td>{{reason .Reason}}</td><td>{{range $i, $s := .Sources}}{{if $i}}, {{end}}{{$s}}{{end}}</td></tr>
     {{else}}
       <tr><td colspan="4">None</td></tr>
     {{end}}
