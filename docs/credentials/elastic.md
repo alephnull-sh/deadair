@@ -47,6 +47,12 @@ Privilege notes:
 Scope `indices.names` tighter than `"*"` if telemetry is under known patterns such as `logs-*`,
 `winlogbeat-*`, or `audit-*`. deadair only reports on sources the role can see.
 
+That visibility affects verdicts. If an enabled rule expects `winlogbeat-*` but the role can read
+only `logs-*`, deadair sees no matching source even if Winlogbeat indices exist. `deadair check`
+confirms that required API calls are allowed; it cannot prove that a scoped role includes every
+source your rules use. After tightening the role, verify at least one known-good rule and source in
+the first JSON report before triaging no-match findings.
+
 For a non-default Kibana space, change the resource and run scans with `--kibana-space`:
 
 ```jsonc

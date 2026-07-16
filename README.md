@@ -18,10 +18,16 @@ It runs outside the SIEM with a read-only credential. It reads the rule inventor
 freshness and schema metadata, builds a rule-to-source map, then reports coverage gaps that normal
 rule execution health alone does not show.
 
+In deadair reports, a **rule pattern** is an index or data-stream expression configured on a
+detection, such as `winlogbeat-*`. A **source** is a concrete index or data stream visible to the
+deadair credential, such as `winlogbeat-2026.07` or
+`logs-windows.sysmon_operational-default`. It is not the agent, connector, or upstream product.
+deadair reports a match when a rule pattern resolves to at least one of those concrete sources.
+
 Use it to answer three SOC questions:
 
-- Which enabled detections are blind because their index patterns match no data, stale data, or
-  empty sources?
+- Which enabled detections have no matching index or data stream, or only stale or empty matched
+  sources?
 - Which detections still run, but with reduced visibility because fields drifted or events arrive
   after the rule lookback window?
 - Which log sources are being ingested but no enabled detection reads them?
@@ -39,17 +45,30 @@ This demo scans an Elastic 8.17 lab with the Elastic prebuilt rule package insta
 rules enabled, and only a few seeded data streams:
 
 <p align="center">
-  <img alt="Static deadair scan output showing dead detections and unused telemetry" src="docs/assets/demo-final.svg" width="860">
+  <img alt="Static deadair scan output showing enabled rules with no matching source and unused telemetry" src="docs/assets/demo-final.svg" width="860">
 </p>
 
-`no matching source` means a rule's index patterns resolve to zero concrete indices or data streams.
-For example, a rule copied from a NetFlow-enabled tenant searches `netflow-*`, but the receiving
-tenant has never onboarded NetFlow. The rule stays enabled, but there is no concrete source behind the
-pattern. Depending on the backend and rule settings, the run can surface as an empty search or a
-missing-index warning.
+The terminal view is a summary. The full JSON report records the patterns and matched sources used
+to reach each verdict. One finding from this lab is:
 
-In a new SIEM, this finding is usually onboarding backlog. In an established SOC, it is more often a
-renamed data stream, pattern typo, removed integration, or rule copied from another environment.
+| Evidence | Value |
+|---|---|
+| Enabled rule | `Persistence via WMI Standard Registry Provider` |
+| Configured patterns | `logs-endpoint.events.registry-*`, `endgame-*` |
+| Concrete sources matched | none |
+| Finding | `no matching source` (`disconnected` in JSON) |
+| Operational impact | the rule currently has no index or data stream to query |
+
+That result is expected in this small lab because no Endpoint registry or Endgame source was seeded.
+The same evidence can identify a regression in production. For example, a Windows rule still queries
+`winlogbeat-*` after the SOC migrates events to
+`logs-windows.sysmon_operational-*`. Once the old Winlogbeat indices age out, the rule remains enabled
+but its configured pattern resolves to nothing. Depending on the backend and rule settings, execution may
+produce an empty search or a missing-index warning; either way, that input is unavailable to the rule.
+
+Treat first-run findings as an inventory review. In a new deployment, no-match findings are often
+onboarding backlog or intentionally unsupported integrations. In an established environment, check
+for renamed data streams, pattern changes, removed integrations, copied rules, and credential scope.
 
 Sample terminal, JSON, and HTML reports are in [docs/examples](docs/examples/).
 
@@ -104,17 +123,28 @@ Exit codes are stable: `0` means healthy, `1` means findings, and `2` means the 
 
 ## Findings
 
-deadair separates detection problems from telemetry problems.
+deadair separates rule dependency findings from source-health findings.
 
-| Finding | What it means | Who usually owns it |
+| Finding | Evidence and operational meaning | First check |
 |---|---|---|
-| no matching source (`disconnected` in JSON) | an enabled rule's index patterns match no index or data stream | detection engineering or onboarding |
-| all matching sources stale or empty (`starved` in JSON) | every source the rule reads has stopped sending data or has no documents | telemetry pipeline owner |
-| stale source | source has not received events within `--max-stale` | pipeline, agent, collector, or source owner |
-| empty source | index or data stream exists but has zero docs | onboarding or template issue |
-| missing fields | best-effort rule-declared fields are absent from source mappings | parser, integration, or content owner |
-| lag blind window | events arrive after the rule's lookback margin | detection engineering and pipeline owner |
-| unused telemetry | source has data, but no enabled rule reads it | detection engineering or cost owner |
+| no matching source (`disconnected` in JSON) | none of the rule's patterns resolved to a visible index or data stream, so the rule has no concrete source to query | inspect its patterns, expected integration, and credential scope |
+| all matching sources stale or empty (`starved` in JSON) | every resolved source is stale or has zero documents, so none currently provides usable telemetry | inspect source age, document counts, and the ingest path |
+| stale source | the source has documents but no event inside `--max-stale`; detections may be operating on old data | compare expected cadence, then check agent, connector, and pipeline health |
+| empty source | the index or data stream exists with zero documents | confirm the integration, routing, and ingest pipeline |
+| missing fields | best-effort rule-declared fields are absent from every matched source mapping checked with `field_caps` | compare rule metadata with the current parser and mapping |
+| lag blind window | measured ingest lag exceeds the rule's lookback-minus-interval margin, so events can miss the search window | compare source lag with rule interval, lookback, and timestamp override |
+| unused telemetry | the source has data but no enabled rule pattern resolves to it | confirm intentional collection, disabled rules, and coverage plans |
+
+All findings are limited to the rules and sources visible to the configured credential. A narrowly
+scoped role that cannot see an expected index can look the same as an absent index. Validate role
+scope during the first scan.
+
+To inspect the evidence behind the terminal summary:
+
+```sh
+deadair scan --json --out report.json
+jq '.dead_detections[] | {name, reason, patterns, sources}' report.json
+```
 
 Useful flags:
 
@@ -267,8 +297,8 @@ names, rule names, and sometimes tenant names.
 
 ## Docs
 
-- [Usage guide](docs/usage.md) - first scan, triage, CI gates, stateful checks, and fleets.
-- [Best practices](docs/best-practices.md) - rollout order and alerting guidance.
+- [Usage guide](docs/usage.md) - report terminology, worked findings, triage, CI gates, stateful checks, and fleets.
+- [Best practices](docs/best-practices.md) - rollout order, actionable alert context, and routing guidance.
 - [Validation and dogfooding](docs/validation.md) - what is proven, what still needs field proof, and how to share safe results.
 - [Write-up](https://big-comfy.github.io/deadair/) - why enabled rules can still lose telemetry.
 - [MSSP deployment guide](docs/mssp.md) - fleet secrets, redaction, routing, retention, sizing.

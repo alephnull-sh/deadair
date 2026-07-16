@@ -3,7 +3,7 @@ layout: default
 cover: true
 title: Detections that run but can't see
 description: A read-only look at enabled detections that run on schedule, report success, and quietly stop seeing their data, plus what native SIEM health views already cover.
-date: 2026-07-06
+date: 2026-07-16
 hero_image: /assets/coverage-hero.png
 ---
 
@@ -18,7 +18,9 @@ fields still line up, and did events arrive before the lookback window moved on?
 alerts" can still mean "the search completed over data that could not have matched."
 
 Treat coverage as its own question and it is a small join, what each rule reads against the state its
-sources are in. The join breaks four ways, and I keep hitting the same four.
+sources are in. Here a source means a concrete index or data stream visible to the monitoring
+credential, not an agent, connector, or upstream product. The join breaks four ways, and I keep
+hitting the same four.
 
 - **No matching source.** Index patterns that resolve to zero indices or data streams. For example,
   a rule copied from a NetFlow-enabled tenant still searches `netflow-*`, but the receiving tenant
@@ -30,26 +32,49 @@ sources are in. The join breaks four ways, and I keep hitting the same four.
 - **Ingest-lag blind windows.** Source and fields are fine, but events land too late to fall inside
   the rule's window.
 
+A production-shaped no-match failure is a Beats-to-Agent migration. An enabled Windows rule still
+queries `winlogbeat-*`, while current events now land in
+`logs-windows.sysmon_operational-default`. After the old Winlogbeat indices age out, the evidence is:
+
+```text
+configured rule pattern    winlogbeat-*
+visible concrete sources   logs-windows.sysmon_operational-default
+sources matching pattern   none
+finding                    no matching source
+impact                     the rule has no source to query
+```
+
+The same verdict can be harmless during onboarding: a rule pack may expect NetFlow before the SOC
+has chosen to collect it. That is why the finding should carry the rule, configured patterns, matched
+sources, and source state. The operator still decides whether it is accepted scope, unfinished
+onboarding, or a regression.
+
 Here is a lab scan. Every rule is enabled; the flagged ones resolve to something missing, stale, or
 empty.
 
 <figure class="bordered">
-  <img src="{{ '/assets/demo-final.svg' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Static deadair scan output listing enabled detections whose sources are missing, stale, or empty">
-  <figcaption>The final scan output is static so every finding can be read. Missing index patterns may warn in Elastic; stale-but-existing sources are the quieter case.</figcaption>
+  <img src="{{ '/assets/demo-final.svg' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Static deadair scan summary showing enabled rules with no matching source, one lag-impaired rule, and unused telemetry">
+  <figcaption>The terminal view is a summary; the JSON report retains each rule's configured patterns and matched sources. Missing index patterns may warn in Elastic; stale-but-existing sources are the quieter case.</figcaption>
 </figure>
 
 ## Dead detections and blast radius
 
-That scan is most of what deadair does. It resolves each rule's patterns to the sources that exist,
-checks their state, and hands back the rules sitting on nothing. No matching source, or every matching
-source stale or empty, answered one rule at a time instead of one source at a time.
+That scan is most of what deadair does. It resolves each rule's patterns against the credential-visible
+source inventory, checks matched-source state, and reports the evidence per rule. A no-match finding
+keeps the configured patterns; a stale-or-empty finding keeps the degraded source names and health
+evidence.
 
 The per-rule part is what makes it useful. Plenty of tools tell you a source went quiet; few tell you
 which enabled detection just died because of it. The graph also runs backwards, which is the view a SOC
-wants when a source breaks. One dead connector shows up as "these nine detections just went dark,"
+wants when a source breaks. One failed connector shows up as "these nine detections just went dark,"
 ranked by severity, instead of a freshness alert someone has to trace back to the affected rules by
 hand. Turn on a prebuilt rule package and it gets loud fast, since a big chunk of those rules expect
 integrations you do not run.
+
+Credential scope is part of the evidence boundary. If the monitoring role cannot see an expected
+index, the report cannot distinguish hidden from absent. A first deployment therefore needs one
+known-good rule/source pair checked against the report before the team treats no-match findings as
+coverage incidents.
 
 ## When a field quietly disappears
 

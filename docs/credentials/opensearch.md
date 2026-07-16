@@ -42,6 +42,12 @@ Assign both roles to the deadair user or backend role:
 Scope `index_patterns` tighter than `"*"` if telemetry is under known patterns such as `logs-*`,
 `winlogbeat-*`, or `audit-*`. deadair only reports on sources the role can see.
 
+That visibility affects verdicts. If a detector expects `winlogbeat-*` but the role can read only
+`logs-*`, deadair sees no matching source even if Winlogbeat indices exist. `deadair check` confirms
+that required API calls are allowed; it cannot prove that a scoped role includes every source your
+detectors use. After tightening the role, verify at least one known-good detector and source in the
+first JSON report before triaging no-match findings.
+
 ## Basic auth
 
 ```sh

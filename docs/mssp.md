@@ -1,6 +1,8 @@
 # MSSP deployment guide
 
-This guide is for running deadair across multiple client SIEMs from an operator-owned host.
+This guide is for running deadair across multiple client SIEMs from an operator-owned host. In this
+guide, a source is a concrete index or data stream visible to the tenant credential. See
+[Read the findings](usage.md#read-the-findings) for the evidence and triage model.
 
 Current support status:
 
@@ -137,6 +139,33 @@ deadair scan \
 
 With `--fleet`, one `--state-file` prefix becomes one state file per instance.
 
+## Review findings per tenant
+
+Fleet rollups are useful for prioritization, but the evidence is tenant-local. The same enabled rule
+can be healthy for one customer, intentionally out of scope for another, and broken for a third.
+
+For example, three tenants inherit a rule that queries `netflow-*`:
+
+| Tenant state | Evidence | Disposition |
+|---|---|---|
+| NetFlow onboarded | pattern resolves to a live index | healthy |
+| NetFlow not in the customer's service scope | pattern resolves to no source | accepted coverage scope or onboarding backlog; document it |
+| NetFlow was migrated to a renamed data stream | old pattern resolves to no source after prior coverage | regression; update the rule or restore the expected name |
+
+For each actionable finding, keep enough context for the receiving team to start work:
+
+| Field | Why it matters |
+|---|---|
+| instance | identifies the customer or deployment with the gap |
+| rule and severity | identifies affected detection coverage and priority |
+| configured patterns | shows what input the rule expects |
+| matched sources and health | shows whether resolution or telemetry delivery failed |
+| first seen or diff state | separates backlog from a new regression |
+| disposition and owner | records accepted scope, remediation, or false positive |
+
+The terminal fleet view is a summary. Keep the internal JSON report for exact patterns and sources;
+use the redacted report for cross-team or client trend reporting.
+
 ## Continuous monitoring
 
 ```sh
@@ -177,7 +206,8 @@ Route by the type of work, not by the tool.
 |---|---|
 | `deadair_up == 0` | platform owner for the deadair host |
 | `deadair_instance_up == 0` | tenant onboarding, credential, or network owner |
-| dead detections | detection engineering |
+| no matching source | detection engineering or tenant onboarding, after checking credential scope |
+| all matching sources stale or empty | telemetry pipeline owner, with detection engineering copied |
 | impaired detections | detection engineering plus parser or pipeline owner |
 | stale, empty, or low-volume sources | telemetry pipeline owner |
 | schema drift | parser, integration, or content owner |
@@ -251,6 +281,7 @@ an error entry for each failed instance. The process exits `2` to mark the scan 
 | Failure | What happens | Operator action |
 |---|---|---|
 | expired or revoked credential | instance fails with 401/403 | rotate the tenant secret, then run `deadair check --fleet` |
+| credential excludes expected indices | sources outside role scope appear absent and can produce no-match findings | expand the tenant role to the intended telemetry patterns, then verify a known-good rule/source pair |
 | missing optional privilege | scan works, but schema or lag evidence may be unavailable | add the optional read privilege only if you need that check |
 | tenant SIEM unreachable | instance is reported failed; other tenants still scan | check DNS, proxy, allowlists, VPN, and client-side availability |
 | API throttling or timeouts | instance fails or sources become unknown | increase interval, lower concurrency, or split the fleet |

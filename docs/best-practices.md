@@ -2,7 +2,8 @@
 
 deadair is most useful when teams treat the first report as a coverage audit and later reports as
 regression monitoring. If you wire every first-run finding straight to paging, people will ignore
-the tool.
+the tool. The [usage guide](usage.md#read-the-findings) defines report terms and the evidence behind
+each finding.
 
 ## Roll out in this order
 
@@ -13,15 +14,17 @@ the tool.
    deadair scan --out first-report.json --html-out first-report.html
    ```
 
-   Review it with detection engineering and telemetry pipeline owners. Expect backlog in mature
-   environments: disabled integrations, old rule packs, stale lab data, and sources that were
-   never fully onboarded.
+   Review it with detection engineering and telemetry pipeline owners. For each finding, inspect
+   the rule patterns, matched sources, and source-health evidence before assigning a cause. Expect
+   backlog in mature environments: disabled integrations, old rule packs, stale lab data, and
+   sources that were never fully onboarded.
 
 2. Clean up the obvious noise.
 
-   Fix pattern typos. Disable rules that are intentionally out of scope. Ticket missing data
-   sources. Move slow or scheduled sources into downtime windows where that is the real operating
-   model.
+   Classify findings as accepted scope, onboarding work, regression, or incomplete deadair
+   visibility. Fix pattern typos. Disable rules that are intentionally out of scope. Ticket missing
+   data sources. Move slow or scheduled sources into downtime windows where that is the real
+   operating model.
 
 3. Gate on changes, not the whole backlog.
 
@@ -44,6 +47,23 @@ the tool.
 
 ## Keep findings actionable
 
+Do not alert on a count without the evidence needed to investigate it. A useful ticket or message
+contains the SIEM instance, rule, configured patterns, matched sources, source state, whether the
+finding is new, and the expected first owner. The terminal view is useful for orientation; retain
+the JSON report for diagnostic detail.
+
+Example:
+
+```text
+tenant:             acme-prod
+rule:               Suspicious PowerShell execution
+finding:            no matching source
+configured pattern: winlogbeat-*
+matched sources:    none
+first seen:         2026-07-16T08:00:00Z
+owner:              detection engineering
+```
+
 - Keep `--max-stale` close to the expected cadence of your sources. A global value that is too
   high hides real source outages.
 - Use `--downtime-file` for maintenance or scheduled quiet periods. It suppresses expected
@@ -55,6 +75,8 @@ the tool.
   drift finding after legitimate package upgrades; triage it like a parser change, not a page.
 - Treat `unknown` as a setup problem, not a healthy source. If many sources are unknown, fix
   `@timestamp` mappings and read privileges.
+- Before triaging no-match findings, verify one known-good rule/source pair. A role that cannot see
+  an expected index makes that index indistinguishable from an absent one.
 
 ## Route to the right owners
 
@@ -68,8 +90,8 @@ the tool.
 | unused telemetry | detection engineering and cost/platform owner |
 | failed tenant scan | tenant onboarding or credential owner |
 
-The finding class matters. A dead rule and a dead source are related, but they often belong to
-different queues.
+The finding class matters. A rule dependency finding and a source-health finding may describe the
+same incident, but they often belong to different queues.
 
 ## Credentials
 
@@ -108,6 +130,8 @@ For a full MSSP deployment shape, see [mssp.md](mssp.md).
 ## Know the limits
 
 - deadair proves a rule can see data. It does not prove the rule logic is correct.
+- Findings describe observed evidence, not root cause. Pattern changes, onboarding scope, source
+  outages, and credential visibility can produce similar first-order symptoms.
 - It does not evaluate events inline and it does not tune detections.
 - Cross-cluster rules are listed as `remote_rules`. Scan the remote cluster as its own fleet
   instance if you want coverage proof.

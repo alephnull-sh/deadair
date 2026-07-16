@@ -27,24 +27,32 @@ deadair normalizes every backend into a small set of objects.
 | Object | Meaning |
 |---|---|
 | rule | SIEM detection metadata: id, name, enabled state, query type, index patterns, lookback, interval, required fields |
-| source | index or data stream with doc count, last-event time, ingest-lag evidence, and optional schema |
+| source | credential-visible index or data stream with doc count, last-event time, ingest-lag evidence, and optional schema |
 | edge | rule-to-source match created from the rule's index patterns |
 | report | rule findings, source findings, unused telemetry, unmapped rules, remote rules, and summary counts |
 | fleet report | per-instance reports plus cross-tenant rollups and instance errors |
 
-The report format is additive once released. Existing JSON field names should not be renamed or
-removed.
+The source inventory is an evidence boundary. An index hidden by the configured role is
+indistinguishable from an absent index to deadair. Least-privilege roles should therefore include
+every source pattern the operator intends to assess.
+
+The report format is additive once released. Existing JSON field names and reason codes should not
+be renamed or removed.
 
 ## Rule verdicts
 
-| Verdict | Meaning |
-|---|---|
-| `live` | at least one matched source is healthy or unknown |
-| `disconnected` | the rule's patterns match no source; terminal and HTML reports show `no matching source` |
-| `starved` | every matched source is stale or empty; terminal and HTML reports spell this out |
-| `missing-fields` | required fields are absent from every matched source with fetched schema |
-| `lag-blind-window` | a matched source's ingest lag exceeds the rule's lookback-minus-interval margin |
-| `unmapped` | deadair cannot derive data inputs from the metadata, such as some ML rules |
+| JSON code | Human wording | Evidence retained in the report |
+|---|---|---|
+| `live` | no rule finding | at least one matched source is healthy or has unknown freshness |
+| `disconnected` | no matching source | configured patterns are retained; none resolved to a credential-visible source |
+| `starved` | all matching sources stale or empty | degraded source names are retained with source age, document count, and status |
+| `missing-fields` | missing fields | declared missing fields and matched sources are retained when schema was fetched |
+| `lag-blind-window` | lag blind window | affected sources, measured lag, rule lookback, and interval are retained |
+| `unmapped` | unmapped | rule metadata did not expose an input deadair can resolve, such as some ML rules |
+
+The terminal report is intentionally concise. JSON is the diagnostic artifact: dead detections
+include `patterns` and, when matched sources exist, `sources`; impaired detections include their
+field or timing evidence.
 
 Impaired findings require positive evidence. If schema cannot be fetched, deadair does not invent
 a missing-field finding. If lag cannot be measured, it does not invent a lag finding. Unknown

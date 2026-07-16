@@ -14,9 +14,29 @@ They were captured from a live Elastic 8.17.4 Docker lab with:
 
 Files:
 
-- [sample-scan.txt](sample-scan.txt) - terminal summary
-- [sample-report.json](sample-report.json) - full JSON report
-- [sample-report.html](sample-report.html) - HTML rendering
+- [sample-scan.txt](sample-scan.txt) - concise operator summary
+- [sample-report.json](sample-report.json) - diagnostic report with rule patterns, matched sources, and source evidence
+- [sample-report.html](sample-report.html) - shareable overview for human review
+
+Start with the terminal summary, then use JSON to answer why a rule received its verdict. For
+example, the first no-match finding in this sample is:
+
+| Evidence | Value |
+|---|---|
+| Rule | `Persistence via WMI Standard Registry Provider` |
+| JSON reason | `disconnected` |
+| Configured patterns | `logs-endpoint.events.registry-*`, `endgame-*` |
+| Matched sources | none |
+| Lab explanation | no Endpoint registry or Endgame source was seeded |
+
+The finding does not mean Elasticsearch or the agent is disconnected. It means none of that rule's
+configured patterns resolved to a concrete index or data stream visible to the scan credential.
+
+Inspect the same fields in your own report with:
+
+```sh
+jq '.dead_detections[] | {name, reason, patterns, sources}' report.json
+```
 
 The sample uses public Elastic prebuilt rule names and generic stream names, so it is not
 redacted. Use `--redact` before sharing real reports outside your restricted SOC workspace.

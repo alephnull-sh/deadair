@@ -46,27 +46,119 @@ Useful connection flags:
 
 ## Read the findings
 
-Start from rule findings, then pivot to source findings.
+A finding states what deadair observed. It does not guess the root cause. Start with the rule,
+inspect the evidence behind its verdict, then decide whether the condition is expected coverage
+scope, a regression, or incomplete visibility for the deadair credential.
 
-| Finding | Meaning | First triage step |
+Terms used in reports:
+
+| Term | Meaning |
+|---|---|
+| rule pattern | index or data-stream expression configured on the detection, such as `winlogbeat-*` |
+| source | concrete index or data stream visible to deadair, such as `winlogbeat-2026.07` |
+| matched source | concrete source matched by at least one rule pattern |
+| dead detection | enabled rule with no matched source, or with only stale/empty matched sources |
+| impaired detection | enabled rule with live input but positive evidence of reduced field or timing coverage |
+
+The source inventory is credential-scoped. If the read role cannot see an expected index, deadair
+cannot distinguish that index from one that does not exist. Check role scope before treating a
+first-run no-match finding as a production outage.
+
+### No matching source
+
+Human reports say `no matching source`; JSON uses the stable reason code `disconnected`. It means
+none of the enabled rule's configured patterns resolved to a concrete index or data stream in the
+inventory visible to deadair.
+
+It does not mean the SIEM, agent, or network connection is disconnected. A connection or
+authentication failure makes the scan or fleet instance fail and returns exit `2`; it is not a rule
+verdict.
+
+A finding from the checked-in lab report:
+
+| Evidence | Value |
+|---|---|
+| Rule | `Persistence via WMI Standard Registry Provider` |
+| Configured patterns | `logs-endpoint.events.registry-*`, `endgame-*` |
+| Matched sources | none |
+| Impact | the rule currently has no source to query |
+| Lab explanation | the lab did not seed Endpoint registry or Endgame telemetry |
+
+That is an expected coverage gap in the lab. A production regression looks similar but has a change
+behind it: a Windows rule still queries `winlogbeat-*`, telemetry moves to
+`logs-windows.sysmon_operational-*`, and the old Winlogbeat indices age out. The rule remains enabled,
+but its configured input no longer names the source carrying the events.
+
+Common explanations:
+
+| Situation | What to verify |
+|---|---|
+| integration not onboarded | whether the rule is intentionally enabled before its data source is available |
+| source renamed or migrated | current data-stream names after an agent, package, or pipeline change |
+| rule copied from another tenant | whether that tenant has the same integrations and naming conventions |
+| pattern typo or stale override | the rule's configured index patterns or data view |
+| credential cannot see the source | index permissions and Kibana space for the deadair credential |
+
+First response:
+
+1. Read `dead_detections[].patterns` in the JSON report.
+2. Confirm whether any expected concrete index or data stream currently matches those patterns.
+3. Confirm the deadair credential can see that source.
+4. Classify the finding as expected scope, onboarding work, or regression.
+5. Update the rule pattern, restore the integration, or disable the intentionally out-of-scope rule.
+
+```sh
+deadair scan --json --out report.json
+jq '.dead_detections[] | select(.reason == "disconnected") | {name, patterns}' report.json
+```
+
+### All matching sources stale or empty
+
+Human reports spell this out; JSON uses `starved`. The rule patterns resolve correctly, but every
+matched source is degraded. A source is `stale` when it has documents but no recent event inside
+`--max-stale`; it is `empty` when it exists with zero documents.
+
+For example, a rule queries `logs-system.auth-*` and resolves to
+`logs-system.auth-default`, but the newest event is three days old. The pattern is not the problem.
+The ingest path stopped, the source is intentionally quiet, or the stale threshold does not match
+its cadence.
+
+Inspect `dead_detections[].sources`, then find those names under `sources[]` for document count,
+age, status, and consumer count. Check the agent or connector, forwarder, ingest pipeline, upstream
+system, expected cadence, and downtime configuration.
+
+### Impaired detections
+
+Impaired rules still have live input. deadair has evidence that part of their effective coverage is
+reduced.
+
+| Finding | Evidence | Example | First response |
+|---|---|---|---|
+| `missing-fields` | best-effort rule-declared fields are absent from every matched source mapping fetched with `field_caps` | a parser upgrade stops mapping `process.command_line` while a rule declares it as required | compare rule metadata, package version, pipeline, and mapping |
+| `lag-blind-window` | measured ingest lag exceeds the rule's lookback-minus-interval margin | cloud audit events arrive 12 minutes late while a five-minute rule looks back six minutes | reduce delivery lag, widen lookback, or use the appropriate ingest timestamp |
+
+`required_fields` is informational metadata, and `field_caps` proves mapping/searchability rather
+than field population in recent events. Treat `missing-fields` as strong triage evidence, not proof
+that every event is missing the value. Lag findings are also a timing model; validate them against
+the source's real delivery behavior and the rule type.
+
+### Source findings
+
+| Finding | What deadair observed | First response |
 |---|---|---|
-| dead rule: no matching source (`disconnected` in JSON) | enabled rule patterns match no index or data stream | check for pattern typos, missing integrations, disabled data streams, or rules copied from another environment |
-| dead rule: all matching sources stale or empty (`starved` in JSON) | every matched source is stale or empty | inspect the listed sources; the detection is blind because the data path stopped |
-| impaired rule: `missing-fields` | declared `required_fields` are absent from every matched source's `field_caps` | check parser or integration changes; update mappings or fix the rule fields |
-| impaired rule: `lag-blind-window` | ingest lag on a matched source is wider than the rule's lookback margin | widen `from`, shorten delivery lag, or treat the source as batch-delivered |
-| source `stale` | no recent events within `--max-stale` | check agent, connector, forwarder, ingest pipeline, and upstream source health |
-| source `empty` | source exists but has zero docs | finish onboarding or remove the unused template/source |
-| source `unknown` | deadair cannot measure freshness | fix `@timestamp` mappings or read privileges; unknown does not page by itself |
-| unused telemetry | source has data but no enabled rule reads it | write coverage, enable relevant rules, or stop ingesting the source |
-| `remote_rules` | rule uses cross-cluster patterns such as `cluster:index-*` | scan the remote cluster as its own fleet instance |
-| `unmapped` | deadair cannot derive inputs from metadata, such as some ML rules | informational; deadair does not guess |
+| `stale` | source has documents but no recent event inside `--max-stale` | compare expected cadence, then check collector, connector, forwarder, and pipeline health |
+| `empty` | source exists with zero documents | finish onboarding, fix routing, or remove an unused template/source |
+| `unknown` | freshness could not be measured | check `@timestamp` mapping and read privileges; unknown does not make rules dead |
+| `maintenance` | a downtime window currently suppresses stale/empty classification | confirm the declared window still matches the operating schedule |
+| low volume | source is below its own weekday/hour baseline after warmup and hysteresis | compare known business cycles and upstream volume before paging |
+| schema drift | fields were added, removed, or changed type since the prior snapshot | correlate with package, parser, and pipeline releases |
+| unused telemetry | source has data but no enabled rule pattern resolves to it | confirm intentional collection, disabled rules, and planned coverage before changing ingest |
 
-Practical example: a rule copied from a tenant that ingests NetFlow searches `netflow-*`. The new
-tenant has no matching index or data stream because NetFlow was never onboarded there. The rule can
-remain enabled, but no concrete source exists behind its pattern; deadair reports `no matching
-source`.
+`remote_rules` contains cross-cluster patterns such as `cluster:index-*`; scan the remote cluster as
+its own fleet instance. `unmapped` contains rules whose inputs cannot be derived from available
+metadata, such as some ML rules. Both are informational because deadair does not guess.
 
-`--include` and `--exclude` only change what the report lists. They do not change the verdicts.
+`--include` and `--exclude` only change what the report lists. They do not change verdicts.
 
 ## Gate detection changes
 
@@ -191,9 +283,9 @@ Metrics are exposed on `127.0.0.1:9317` by default. Prometheus scrapes the cache
 scrape does not trigger a SIEM API call. Grafana and Alertmanager examples are in
 [contrib/](../contrib/).
 
-For fleets, route failed scans by `deadair_instance_up`. Dead detections should usually go to the
-detection engineering queue. Stale, empty, or low-volume sources usually belong to telemetry
-pipeline owners.
+For fleets, route failed scans by `deadair_instance_up`. No-match findings usually go to detection
+engineering or onboarding after credential scope is checked. Findings where all matched sources are
+stale or empty usually belong to telemetry pipeline owners.
 
 ## Share reports safely
 

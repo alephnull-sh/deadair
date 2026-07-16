@@ -1,7 +1,8 @@
 # Validation and dogfooding
 
 This page explains what deadair can claim today, what still needs field proof, and how to run a
-useful dogfood test without sharing sensitive SOC data.
+useful dogfood test without sharing sensitive SOC data. For report terminology and finding-level
+triage, start with [Read the findings](usage.md#read-the-findings).
 
 ## What is proven today
 
@@ -92,17 +93,23 @@ exposing it to shared infrastructure.
 
 ## What to check
 
-During review, capture whether deadair was correct about:
+Do not validate summary counts alone. Pick individual findings and compare the report evidence with
+what an operator can verify in the SIEM.
 
-- rules whose patterns matched no source
-- rules backed only by stale or empty sources
-- missing required fields after parser or package changes
-- sources where ingest lag exceeds the rule lookback margin
-- sources with data but no enabled detection reading them
-- sources suppressed by downtime windows
-- source volume findings after baseline warmup
-- scan duration and API load
-- failed tenant behavior in fleet mode
+| Finding | Evidence to compare | Useful confirmation |
+|---|---|---|
+| no matching source | rule name, configured patterns, credential-visible source inventory | confirm whether a concrete index/data stream should match; check role scope before calling it absent |
+| all matching sources stale or empty | matched source names, status, document count, last-event age | compare with the source's expected cadence and upstream pipeline state |
+| missing fields | declared fields, `field_caps` result, matched sources | compare mappings after a known parser, package, or pipeline change |
+| lag blind window | affected source, measured lag, rule interval and lookback | compare with observed delivery delay and the rule's timestamp behavior |
+| unused telemetry | source name, document count, enabled and disabled consumers | confirm whether collection is intentional and whether relevant rules are disabled or missing |
+| downtime suppression | source and matched downtime window | confirm the window matches the real operating schedule and timezone |
+| low volume | current rate, baseline, sample count, warmup and hysteresis state | compare with known business cycles after enough history exists |
+| fleet failure | instance error plus successful instance reports | confirm one bad credential or unreachable tenant does not hide the rest of the fleet |
+
+Before reviewing failures, verify one known-good enabled rule whose pattern and live source you know.
+If deadair cannot connect that pair, fix permissions, space selection, or source visibility before
+judging the rest of the report.
 
 False positives are useful. False negatives are more useful. If deadair misses a real coverage
 gap, open an issue with the smallest redacted example you can share.
@@ -122,7 +129,7 @@ Useful public details:
 - whether `--schema` and `--state-file` were enabled
 - whether the findings matched operator expectations
 - redacted report excerpts
-- one or two examples of findings that were correct or wrong
+- one or two examples with finding class, evidence checked, expected state, and whether deadair was correct
 
 Do not share unredacted rule names, source names, tenant names, index patterns, customer names, or
 blind spots.
