@@ -10,8 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Validate (Linux)
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -36,7 +35,6 @@ jobs:
           done
 
   windows:
-    name: Unit and build (Windows)
     runs-on: windows-latest
     steps:
       - name: Check out source

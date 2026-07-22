@@ -19,12 +19,28 @@ schema-incompatible.
 
 Runs locally. Read-only. No agent. No telemetry upload.
 
+### See what a scan finds
+
 ```sh
 deadair demo
 ```
 
-The embedded demo needs no SIEM, credentials, or Docker. It produces the same terminal, JSON, and
-HTML findings as a live scan from deterministic synthetic evidence.
+The embedded demo needs no SIEM, credentials, or Docker. It runs deterministic sample evidence
+through the same reporting path as a live scan and prints results like these:
+
+```text
+DEAD: 2 enabled detection(s) cannot fire right now
+  [critical] Network flow anomaly — no matching source
+  [high] Legacy audit trail gap — all matching sources stale or empty
+
+IMPAIRED: 2 enabled detection(s) run with reduced visibility
+  [high] Untrusted authentication — missing-fields
+  [medium] Batch-fed source watcher — lag-blind-window
+
+unused telemetry: 1 source, 2.0 GiB ingested with no enabled detection reading it
+```
+
+Use `deadair demo --json` or `deadair demo --html-out demo.html` to inspect the full evidence.
 
 ### What deadair proves
 
