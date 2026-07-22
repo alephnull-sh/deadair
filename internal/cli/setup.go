@@ -25,7 +25,7 @@ curl -u elastic -X POST "$ES_URL/_security/api_key" -H 'Content-Type: applicatio
     "cluster": ["monitor"],
     "indices": [{ "names": ["*"], "privileges": ["monitor", "view_index_metadata", "read"] }],
     "applications": [{ "application": "kibana-.kibana",
-      "privileges": ["feature_siem.read", "feature_siemV2.read"], "resources": ["space:default"] }]
+	      "privileges": ["feature_siem.read", "feature_siemV2.read", "feature_indexPatterns.read"], "resources": ["space:default"] }]
   }}}'
 
 # 2. Point deadair at the deployment (use "encoded" from the response):

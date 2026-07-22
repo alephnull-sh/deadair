@@ -80,7 +80,33 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 		gauge("deadair_detections_dead", "Enabled detections that cannot currently fire.", func(r *report.Report) int64 { return int64(r.Summary.DeadDetections) })
 		gauge("deadair_detections_impaired", "Enabled detections running with reduced visibility.", func(r *report.Report) int64 { return int64(r.Summary.ImpairedDetections) })
 		gauge("deadair_detections_unmapped", "Enabled detections whose inputs cannot be mapped from metadata.", func(r *report.Report) int64 { return int64(r.Summary.UnmappedRules) })
-		gauge("deadair_unused_telemetry_bytes", "Store size of sources no enabled detection reads.", func(r *report.Report) int64 { return r.Summary.UnusedBytes })
+		gauge("deadair_unused_telemetry_bytes", "Store size of assessed sources no enabled detection reads.", func(r *report.Report) int64 { return r.Summary.UnusedBytes })
+		gauge("deadair_unused_telemetry_assessed", "Whether unused telemetry was assessed for this instance.", func(r *report.Report) int64 {
+			if r.Summary.UnusedTelemetryAssessment == report.UnusedAssessmentComplete ||
+				r.Summary.UnusedTelemetryAssessment == report.UnusedAssessmentLegacy {
+				return 1
+			}
+			return 0
+		})
+
+		fmt.Fprintf(&b, "# HELP deadair_input_resolutions Backend-native rule input resolution evidence by outcome.\n# TYPE deadair_input_resolutions gauge\n")
+		for _, r := range f.Instances {
+			counts := r.Summary.InputResolution
+			values := []struct {
+				status string
+				value  int
+			}{
+				{"resolved", counts.Resolved},
+				{"empty", counts.Empty},
+				{"unsupported", counts.Unsupported},
+				{"unavailable", counts.Unavailable},
+				{"remote", counts.Remote},
+				{"ambiguous", counts.Ambiguous},
+			}
+			for _, item := range values {
+				fmt.Fprintf(&b, "deadair_input_resolutions{instance=%s,status=%q} %d\n", label(r.Instance), item.status, item.value)
+			}
+		}
 
 		fmt.Fprintf(&b, "# HELP deadair_source_freshness_seconds Seconds since the last event arrived in the source.\n# TYPE deadair_source_freshness_seconds gauge\n")
 		for _, r := range f.Instances {
@@ -92,7 +118,7 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 				}
 			}
 		}
-		fmt.Fprintf(&b, "# HELP deadair_source_consumers Enabled detections that read the source (blast radius).\n# TYPE deadair_source_consumers gauge\n")
+		fmt.Fprintf(&b, "# HELP deadair_source_consumers Enabled detections positively resolved to the source; a lower bound when unused telemetry is unassessed.\n# TYPE deadair_source_consumers gauge\n")
 		for _, r := range f.Instances {
 			for _, src := range r.Sources {
 				fmt.Fprintf(&b, "deadair_source_consumers{instance=%s,source=%s} %d\n", label(r.Instance), label(src.Name), src.Consumers)

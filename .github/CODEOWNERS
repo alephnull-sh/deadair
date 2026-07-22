@@ -1,1 +1,20 @@
 * @Big-Comfy
+
+# CI and dependency execution
+/.github/workflows/** @Big-Comfy
+/.github/dependabot.yml @Big-Comfy
+/go.mod @Big-Comfy
+/go.sum @Big-Comfy
+
+# Backend API and least-privilege contracts
+/internal/backend/** @Big-Comfy
+/internal/cli/setup.go @Big-Comfy
+/docs/credentials/** @Big-Comfy
+/integration/** @Big-Comfy
+
+# Reports, redaction, credentials, and security policy
+/internal/report/** @Big-Comfy
+/internal/state/** @Big-Comfy
+/internal/exporter/** @Big-Comfy
+/SECURITY.md @Big-Comfy
+/docs/support-policy.md @Big-Comfy

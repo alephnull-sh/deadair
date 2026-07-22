@@ -1,6 +1,25 @@
 {
+  "schema_version": "deadair.report.v1",
   "generated_at": "2026-07-05T15:45:49.978508Z",
+  "producer": {"name":"deadair","version":"0.3.4"},
   "backend": "elastic",
+  "backend_metadata": {
+    "name": "elastic",
+    "product": "Elastic Security",
+    "observed_version": "8.17.4",
+    "supported_version_lines": ["8.x"],
+    "capabilities": [
+      {"name":"rule_inventory","status":"supported"},
+      {"name":"source_resolution","status":"partial","detail":"legacy sample captured before backend-native resolution evidence"},
+      {"name":"freshness","status":"supported"},
+      {"name":"docs_storage","status":"supported"},
+      {"name":"schema","status":"supported"},
+      {"name":"required_fields","status":"supported"},
+      {"name":"ingest_lag","status":"supported"},
+      {"name":"candidate_parsing","status":"supported"},
+      {"name":"remote","status":"listed-only"}
+    ]
+  },
   "instance": "elastic",
   "summary": {
     "rules": 1276,
@@ -12,7 +31,16 @@
     "impaired_detections": 1,
     "unmapped_rules": 0,
     "unused_sources": 1,
-    "unused_bytes": 7143
+    "unused_bytes": 7143,
+    "unused_telemetry_assessment": "legacy",
+    "input_resolution": {
+      "resolved": 0,
+      "empty": 0,
+      "unsupported": 0,
+      "unavailable": 0,
+      "remote": 0,
+      "ambiguous": 0
+    }
   },
   "sources": [
     {

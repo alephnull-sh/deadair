@@ -39,6 +39,8 @@ var openSearchDetectorIDs = []string{
 	"deadair-os-empty",
 	"deadair-os-disconnected",
 	"deadair-os-unmapped",
+	"deadair-os-alias",
+	"deadair-os-exclusion",
 }
 
 func asOpenSearchAdmin(req *http.Request) { req.SetBasicAuth("admin", openSearchAdminPass) }
@@ -176,6 +178,8 @@ func seedOpenSearch(t *testing.T) {
 		`{"mappings":{"properties":{"@timestamp":{"type":"date"}}}}`, http.StatusOK)
 	osAdmin(t, http.MethodPost, openSearchURL+"/"+openSearchStaleIndex+"/_doc",
 		fmt.Sprintf(`{"@timestamp":%q,"message":"old"}`, now.Add(-72*time.Hour).Format(time.RFC3339)), http.StatusCreated)
+	osAdmin(t, http.MethodPost, openSearchURL+"/_aliases",
+		fmt.Sprintf(`{"actions":[{"add":{"index":%q,"alias":"deadair-os-stale-alias"}}]}`, openSearchStaleIndex), http.StatusOK)
 	osAdmin(t, http.MethodPut, openSearchURL+"/"+openSearchEmptyIndex,
 		`{"mappings":{"properties":{"@timestamp":{"type":"date"}}}}`, http.StatusOK)
 	osAdmin(t, http.MethodPost, openSearchURL+"/_refresh", "", http.StatusOK)
@@ -185,6 +189,8 @@ func seedOpenSearch(t *testing.T) {
 	seedOpenSearchDetector(t, "deadair-os-empty", "Deadair OS empty detector", "medium", []string{openSearchEmptyIndex})
 	seedOpenSearchDetector(t, "deadair-os-disconnected", "Deadair OS disconnected detector", "medium", []string{"deadair-os-missing-*"})
 	seedOpenSearchDetector(t, "deadair-os-unmapped", "Deadair OS unmapped detector", "low", nil)
+	seedOpenSearchDetector(t, "deadair-os-alias", "Deadair OS alias detector", "high", []string{"deadair-os-stale-alias"})
+	seedOpenSearchDetector(t, "deadair-os-exclusion", "Deadair OS exclusion detector", "low", []string{"logs-deadair-os-*", "-logs-deadair-os-never-*"})
 }
 
 func TestOpenSearchReadOnlyScan(t *testing.T) {
@@ -228,7 +234,8 @@ func TestOpenSearchReadOnlyScan(t *testing.T) {
 		if rep.Backend != "opensearch" {
 			t.Fatalf("backend = %q, want opensearch", rep.Backend)
 		}
-		if rep.Summary.Sources != 4 || rep.Summary.DeadDetections != 3 || rep.Summary.UnmappedRules != 1 || rep.Summary.UnusedSources != 1 {
+		if rep.Summary.Sources != 4 || rep.Summary.DeadDetections != 4 || rep.Summary.UnmappedRules != 1 || rep.Summary.UnusedSources != 0 ||
+			rep.Summary.UnusedTelemetryAssessment != report.UnusedAssessmentUnavailable {
 			t.Fatalf("summary = %+v", rep.Summary)
 		}
 
@@ -266,6 +273,23 @@ func TestOpenSearchReadOnlyScan(t *testing.T) {
 		}
 		if reasons["Deadair OS disconnected detector"] != "disconnected" {
 			t.Errorf("disconnected detector reason = %q, want disconnected", reasons["Deadair OS disconnected detector"])
+		}
+		if reasons["Deadair OS alias detector"] != "starved" {
+			t.Errorf("alias detector reason = %q, want starved through alias target", reasons["Deadair OS alias detector"])
+		}
+		if _, dead := reasons["Deadair OS exclusion detector"]; dead {
+			t.Error("ordered include/exclude detector reported dead")
+		}
+		aliasObserved := false
+		for _, resolution := range rep.InputResolutions {
+			for _, alias := range resolution.Aliases {
+				if alias == "deadair-os-stale-alias" {
+					aliasObserved = true
+				}
+			}
+		}
+		if !aliasObserved {
+			t.Error("native resolution evidence did not retain the live alias")
 		}
 	})
 

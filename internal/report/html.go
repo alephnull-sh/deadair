@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"os"
+	"strings"
 )
 
 var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
@@ -18,6 +19,14 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 		return fmt.Sprintf("%.2f", *v)
 	},
 	"reason": DeadReasonLabel,
+	"capabilities": func(items []Capability) string {
+		var parts []string
+		for _, item := range items {
+			parts = append(parts, item.Name+"="+string(item.Status))
+		}
+		return strings.Join(parts, ", ")
+	},
+	"versions": func(items []string) string { return strings.Join(items, ", ") },
 }).Parse(`<!doctype html>
 <html lang="en">
 <head>
@@ -40,7 +49,8 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 </head>
 <body>
   <h1>deadair report</h1>
-  <p class="muted">{{.Backend}} · {{.GeneratedAt.Format "2006-01-02 15:04:05 UTC"}}{{if .Redacted}} · redacted{{end}}</p>
+  <p class="muted">{{.BackendMetadata.Product}}{{with .BackendMetadata.ObservedVersion}} {{.}}{{end}} ({{.Backend}}) · {{.GeneratedAt.Format "2006-01-02 15:04:05 UTC"}}{{if .Redacted}} · redacted{{end}}</p>
+  <p class="muted">{{.SchemaVersion}} · producer {{.Producer.Name}} {{.Producer.Version}}{{with .BackendMetadata.SupportedVersionLines}} · supported versions {{versions .}}{{end}}<br>Capabilities: {{capabilities .BackendMetadata.Capabilities}}</p>
 
   <div class="grid">
     <div class="metric"><span>Sources</span><strong>{{.Summary.Sources}}</strong></div>
@@ -49,12 +59,32 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     <div class="metric"><span>Schema drift</span><strong>{{.Summary.SchemaDriftSources}}</strong></div>
     <div class="metric"><span>Dead detections</span><strong>{{.Summary.DeadDetections}}</strong></div>
     <div class="metric"><span>Impaired detections</span><strong>{{.Summary.ImpairedDetections}}</strong></div>
-    <div class="metric"><span>Unused telemetry</span><strong>{{bytes .Summary.UnusedBytes}}</strong></div>
+	    <div class="metric"><span>Unused telemetry</span><strong>{{if eq .Summary.UnusedTelemetryAssessment "unavailable"}}not assessed{{else if eq .Summary.UnusedTelemetryAssessment "not-applicable"}}not applicable{{else}}{{bytes .Summary.UnusedBytes}}{{end}}</strong></div>
   </div>
+
+  {{if .InputResolutions}}
+  <h2>Input resolution</h2>
+  <table>
+    <thead><tr><th>Rule ID</th><th>Input</th><th>Kind</th><th>Status</th><th>Resolved sources</th><th>Method</th><th>Detail</th></tr></thead>
+    <tbody>
+    {{range .InputResolutions}}
+      <tr>
+        <td>{{.RuleID}}</td>
+        <td>{{if .Expression}}{{.Expression}}{{else}}{{.Selector}}{{end}}</td>
+        <td>{{.SelectorKind}}</td>
+        <td class="status-{{.Status}}">{{.Status}}</td>
+        <td>{{range $i, $s := .ResolvedSources}}{{if $i}}, {{end}}{{$s}}{{end}}</td>
+        <td>{{.ResolutionMethod}}</td>
+        <td>{{.Detail}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
 
   <h2>Sources</h2>
   <table>
-    <thead><tr><th>Name</th><th>Status</th><th>Docs</th><th>Size</th><th>Consumers</th><th>Volume</th><th>Z-score</th><th>Schema</th></tr></thead>
+    <thead><tr><th>Name</th><th>Status</th><th>Docs</th><th>Size</th><th>Known consumers</th><th>Volume</th><th>Z-score</th><th>Schema</th></tr></thead>
     <tbody>
     {{range .Sources}}
       <tr>
@@ -85,18 +115,23 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 
   <h2>Impaired detections</h2>
   <table>
-    <thead><tr><th>Severity</th><th>Name</th><th>Reasons</th><th>Missing fields</th></tr></thead>
+    <thead><tr><th>Severity</th><th>Name</th><th>Reasons</th><th>Missing fields</th><th>Lag evidence</th></tr></thead>
     <tbody>
     {{range .ImpairedDetections}}
-      <tr><td>{{.Severity}}</td><td>{{.Name}}</td><td>{{range $i, $r := .Reasons}}{{if $i}}, {{end}}{{$r}}{{end}}</td><td>{{range $i, $f := .MissingFields}}{{if $i}}, {{end}}{{$f}}{{end}}</td></tr>
+      <tr><td>{{.Severity}}</td><td>{{.Name}}</td><td>{{range $i, $r := .Reasons}}{{if $i}}, {{end}}{{$r}}{{end}}</td><td>{{range $i, $f := .MissingFields}}{{if $i}}, {{end}}{{$f}}{{end}}</td><td>{{if .LagSources}}{{.MaxLagSeconds}}s lag; {{range $i, $s := .LagSources}}{{if $i}}, {{end}}{{$s}}{{end}}{{else}}-{{end}}</td></tr>
     {{else}}
-      <tr><td colspan="4">None</td></tr>
+      <tr><td colspan="5">None</td></tr>
     {{end}}
     </tbody>
   </table>
 
-  <h2>Unused telemetry</h2>
-  <table>
+	  <h2>Unused telemetry</h2>
+	  {{if eq .Summary.UnusedTelemetryAssessment "unavailable"}}
+	  <p>Not assessed because one or more enabled local rule inputs could not be resolved safely.</p>
+	  {{else if eq .Summary.UnusedTelemetryAssessment "not-applicable"}}
+	  <p>Not applicable to this candidate-rule report.</p>
+	  {{else}}
+	  <table>
     <thead><tr><th>Name</th><th>Docs</th><th>Size</th></tr></thead>
     <tbody>
     {{range .UnusedTelemetry}}
@@ -105,7 +140,8 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
       <tr><td colspan="3">None</td></tr>
     {{end}}
     </tbody>
-  </table>
+	  </table>
+	  {{end}}
 </body>
 </html>
 `))

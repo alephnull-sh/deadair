@@ -18,9 +18,10 @@ make integration-test
 make integration-down
 ```
 
-The Elastic stack is Elasticsearch and Kibana 8.17.x with security enabled. The suite provisions
-role `deadair_monitor`, creates API key `deadair-it`, seeds live/stale/empty sources and test
-rules, scans with the deadair key, asserts rejected writes, then cleans up.
+The compose default is Elasticsearch and Kibana 9.4.4 with security enabled. Trusted CI runs this
+same suite against 8.19.19 and 9.4.4. The suite provisions role `deadair_monitor`, creates API key
+`deadair-it`, seeds live/stale/empty sources and test rules, scans with the deadair key, asserts
+rejected writes, then cleans up.
 
 ## OpenSearch
 
@@ -30,9 +31,10 @@ make opensearch-integration-test
 make opensearch-integration-down
 ```
 
-The OpenSearch stack runs OpenSearch 2.19.x with the security plugin. The suite provisions user
-`deadair`, maps it to `security_analytics_read_access` and `deadair_index_monitor`, seeds
-detector documents as admin, scans as the least-privilege user, and asserts rejected writes.
+The compose default is OpenSearch 3.7.0 with the security plugin. Trusted CI runs the suite against
+2.19.6 and 3.7.0. The suite provisions user `deadair`, maps it to
+`security_analytics_read_access` and `deadair_index_monitor`, seeds detector documents as admin,
+scans as the least-privilege user, and asserts rejected writes.
 
 ## Full integration pass
 
@@ -40,7 +42,10 @@ detector documents as admin, scans as the least-privilege user, and asserts reje
 make integration
 ```
 
-This runs Elastic, OpenSearch, and the mixed-backend fleet proof in sequence.
+This runs Elastic, OpenSearch, and the mixed-backend fleet proof in sequence using the compose
+defaults. Trusted CI runs the fleet proof with Elastic 9.4.4 and OpenSearch 3.7.0. See the
+[backend support policy](../docs/support-policy.md) for the maintained major lines and the exact
+tested-version source of truth.
 
 Environment overrides:
 
@@ -52,7 +57,8 @@ Environment overrides:
 - `DEADAIR_IT_OPENSEARCH_URL`
 - `DEADAIR_IT_OPENSEARCH_ADMIN_PASSWORD`
 
-Defaults match the compose files.
+Defaults match the compose files. Version overrides select both Elasticsearch and Kibana for the
+Elastic stack. Use versions from the trusted CI matrix when reproducing a support issue.
 
 ## MSSP lab
 
@@ -110,6 +116,13 @@ client fleets.
 - Both supported backend suites run with `--schema --state-file` so field-capability permissions
   are part of the least-privilege proof.
 - Do not point these tests at a cluster you care about. They seed and remove test fixtures.
+
+## Trusted CI boundary
+
+Live integration jobs run only on pushes to `main`, merge queues, the weekly schedule, or manual
+dispatch. They do not run on the `pull_request` event, so code from an untrusted fork is never given
+a live integration environment or repository secrets. Pull requests still compile and run the
+secret-free unit, race, vet, formatting, static-build, module, cross-compile, and Windows checks.
 
 ## CI naming convention
 

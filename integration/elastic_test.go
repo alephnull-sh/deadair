@@ -46,7 +46,7 @@ const deadairRole = `{
     {"names": ["*"], "privileges": ["monitor", "view_index_metadata", "read"]}
   ],
   "applications": [
-    {"application": "kibana-.kibana", "privileges": ["feature_siem.read", "feature_siemV2.read"], "resources": ["space:default"]}
+    {"application": "kibana-.kibana", "privileges": ["feature_siem.read", "feature_siemV2.read", "feature_indexPatterns.read"], "resources": ["space:default"]}
   ]
 }`
 
@@ -55,6 +55,7 @@ const (
 	staleIndex = "deadairtest-stale"
 	emptyIndex = "deadairtest-empty"
 	driftIndex = "deadairtest-drift"
+	dataViewID = "deadair-it-data-view"
 )
 
 type httpResult struct {
@@ -138,9 +139,13 @@ func waitForStack(t *testing.T) {
 // against a clean cluster and as leftover-removal before seeding.
 func cleanup(t *testing.T) {
 	t.Helper()
-	for _, ruleID := range []string{"deadair-it-live", "deadair-it-starved", "deadair-it-disconnected"} {
+	for _, ruleID := range []string{
+		"deadair-it-live", "deadair-it-starved", "deadair-it-disconnected",
+		"deadair-it-alias", "deadair-it-exclusion", "deadair-it-data-view",
+	} {
 		call(t, http.MethodDelete, kbURL+"/api/detection_engine/rules?rule_id="+ruleID, "", asAdmin)
 	}
+	call(t, http.MethodDelete, kbURL+"/api/data_views/data_view/"+dataViewID, "", asAdmin)
 	call(t, http.MethodDelete, esURL+"/_data_stream/"+liveStream, "", asAdmin)
 	call(t, http.MethodDelete, esURL+"/"+staleIndex, "", asAdmin)
 	call(t, http.MethodDelete, esURL+"/"+emptyIndex, "", asAdmin)
@@ -160,15 +165,22 @@ func seed(t *testing.T) {
 		`{"mappings":{"properties":{"@timestamp":{"type":"date"}}}}`, http.StatusOK)
 	admin(t, http.MethodPost, esURL+"/"+staleIndex+"/_doc",
 		fmt.Sprintf(`{"@timestamp":%q,"message":"old"}`, now.Add(-72*time.Hour).Format(time.RFC3339)), http.StatusCreated)
+	admin(t, http.MethodPost, esURL+"/_aliases",
+		fmt.Sprintf(`{"actions":[{"add":{"index":%q,"alias":"deadairtest-stale-alias"}}]}`, staleIndex), http.StatusOK)
 	// empty index — exists, holds nothing
 	admin(t, http.MethodPut, esURL+"/"+emptyIndex,
 		`{"mappings":{"properties":{"@timestamp":{"type":"date"}}}}`, http.StatusOK)
 	admin(t, http.MethodPost, esURL+"/_refresh", "", http.StatusOK)
+	admin(t, http.MethodPost, kbURL+"/api/data_views/data_view",
+		fmt.Sprintf(`{"data_view":{"id":%q,"name":"Deadair integration data view","title":"logs-deadairtest-*"},"override":true}`, dataViewID),
+		http.StatusOK)
 
 	rules := []struct{ id, name, severity, index string }{
 		{"deadair-it-live", "Deadair IT live rule", "low", `["logs-deadairtest-*"]`},
 		{"deadair-it-starved", "Deadair IT starved rule", "high", `["deadairtest-stale*"]`},
 		{"deadair-it-disconnected", "Deadair IT disconnected rule", "medium", `["deadairtest-missing-*"]`},
+		{"deadair-it-alias", "Deadair IT alias rule", "high", `["deadairtest-stale-alias"]`},
+		{"deadair-it-exclusion", "Deadair IT exclusion rule", "low", `["logs-deadairtest-*","-logs-deadairtest-never-*"]`},
 	}
 	for _, r := range rules {
 		body := fmt.Sprintf(
@@ -176,6 +188,9 @@ func seed(t *testing.T) {
 			r.id, r.name, r.severity, r.index)
 		admin(t, http.MethodPost, kbURL+"/api/detection_engine/rules", body, http.StatusOK)
 	}
+	admin(t, http.MethodPost, kbURL+"/api/detection_engine/rules",
+		fmt.Sprintf(`{"rule_id":"deadair-it-data-view","name":"Deadair IT data view rule","description":"deadair integration fixture","risk_score":42,"severity":"low","type":"query","query":"*:*","language":"kuery","data_view_id":%q,"interval":"5m","from":"now-6m","enabled":true}`, dataViewID),
+		http.StatusOK)
 }
 
 // provision validates the role manifest against the live cluster and mints an
@@ -327,8 +342,35 @@ func TestElasticReadOnlyScan(t *testing.T) {
 		if reasons["Deadair IT disconnected rule"] != "disconnected" {
 			t.Errorf("disconnected rule reason = %q, want disconnected", reasons["Deadair IT disconnected rule"])
 		}
+		if reasons["Deadair IT alias rule"] != "starved" {
+			t.Errorf("alias rule reason = %q, want starved through alias target", reasons["Deadair IT alias rule"])
+		}
 		if _, dead := reasons["Deadair IT live rule"]; dead {
 			t.Error("live rule reported dead")
+		}
+		if _, dead := reasons["Deadair IT exclusion rule"]; dead {
+			t.Error("ordered include/exclude rule reported dead")
+		}
+		if _, dead := reasons["Deadair IT data view rule"]; dead {
+			t.Error("data-view-backed rule reported dead")
+		}
+		aliasObserved := false
+		dataViewObserved := false
+		for _, resolution := range rep.InputResolutions {
+			if resolution.Selector == dataViewID && resolution.SelectorKind == "data_view" && resolution.Status == "resolved" {
+				dataViewObserved = true
+			}
+			for _, alias := range resolution.Aliases {
+				if alias == "deadairtest-stale-alias" {
+					aliasObserved = true
+				}
+			}
+		}
+		if !aliasObserved {
+			t.Error("native resolution evidence did not retain the live alias")
+		}
+		if !dataViewObserved {
+			t.Error("native resolution evidence did not retain the data view")
 		}
 	})
 
@@ -340,6 +382,8 @@ func TestElasticReadOnlyScan(t *testing.T) {
 			{"delete a data stream", http.MethodDelete, esURL + "/_data_stream/" + liveStream, ""},
 			{"create a detection rule", http.MethodPost, kbURL + "/api/detection_engine/rules",
 				`{"name":"nope","description":"x","risk_score":1,"severity":"low","type":"query","query":"*:*","index":["x"],"interval":"5m","from":"now-6m"}`},
+			{"create a data view", http.MethodPost, kbURL + "/api/data_views/data_view",
+				`{"data_view":{"title":"deadairtest-write-*"}}`},
 			{"create an api key", http.MethodPost, esURL + "/_security/api_key", `{"name":"escalation"}`},
 		}
 		for _, wr := range writes {

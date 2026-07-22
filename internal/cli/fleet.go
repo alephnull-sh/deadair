@@ -158,7 +158,7 @@ func scanFleet(instances []fleetInstance, o connOpts, run func(fleetInstance, co
 		reports = append(reports, res.report)
 		commits = append(commits, res)
 	}
-	return report.BuildFleet(reports, errs), commits
+	return report.BuildFleetWithVersion(reports, errs, Version), commits
 }
 
 func printFleetSummary(w io.Writer, f *report.FleetReport) {
@@ -168,9 +168,16 @@ func printFleetSummary(w io.Writer, f *report.FleetReport) {
 	}
 	fmt.Fprintln(w)
 	for _, r := range f.Instances {
-		fmt.Fprintf(w, "  %s (%s): %d dead, %d impaired, %d degraded source(s), %s unused\n",
+		unused := humanBytes(r.Summary.UnusedBytes) + " unused"
+		switch r.Summary.UnusedTelemetryAssessment {
+		case report.UnusedAssessmentUnavailable:
+			unused = "unused not assessed"
+		case report.UnusedAssessmentNotApplicable:
+			unused = "unused not applicable"
+		}
+		fmt.Fprintf(w, "  %s (%s): %d dead, %d impaired, %d degraded source(s), %s\n",
 			r.Instance, r.Backend, r.Summary.DeadDetections, r.Summary.ImpairedDetections,
-			r.Summary.DegradedSources, humanBytes(r.Summary.UnusedBytes))
+			r.Summary.DegradedSources, unused)
 	}
 	for _, e := range f.Errors {
 		fmt.Fprintf(w, "  %s: scan failed: %s\n", e.Instance, e.Error)

@@ -8,8 +8,8 @@ Current support status:
 
 | Backend | MSSP status |
 |---|---|
-| Elastic Security 8.x | controlled pilot-ready |
-| OpenSearch Security Analytics 2.x | controlled pilot-ready |
+| Elastic Security 8.x and 9.x | controlled pilot-ready |
+| OpenSearch Security Analytics 2.x and 3.x | controlled pilot-ready |
 
 That means the fleet path, redaction, per-instance metrics, least-privilege credentials, and
 partial-failure behavior are implemented and tested. It does not mean the tool has completed a

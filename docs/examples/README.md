@@ -2,6 +2,16 @@
 
 These files show what deadair reports look like before you point it at your own SIEM.
 
+For a reproducible report generated entirely from the installed binary, run:
+
+```sh
+deadair demo
+deadair demo --out demo-report.json --html-out demo-report.html
+```
+
+That embedded demo is deterministic and makes no network calls. The checked-in `sample-*` files
+below remain a separate live-backend artifact.
+
 They were captured from a live Elastic 8.17.4 Docker lab with:
 
 - the Elastic prebuilt detection package installed
@@ -40,3 +50,7 @@ jq '.dead_detections[] | {name, reason, patterns, sources}' report.json
 
 The sample uses public Elastic prebuilt rule names and generic stream names, so it is not
 redacted. Use `--redact` before sharing real reports outside your restricted SOC workspace.
+
+The JSON sample has been wrapped in the v1 additive report contract for schema validation. Its
+capability block marks source resolution `partial` because the underlying live capture predates
+backend-native resolution evidence; current scans populate `input_resolutions` directly.

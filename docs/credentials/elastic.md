@@ -1,16 +1,17 @@
 # Elastic least-privilege credentials
 
-deadair needs read access to two things:
+deadair needs read access to three things:
 
 1. Elastic Security detection-rule metadata through Kibana
-2. Elasticsearch source inventory, freshness, and optional field metadata
+2. Data-view metadata through Kibana when a rule uses a data view
+3. Elasticsearch native index/alias/data-stream resolution, source inventory, freshness, and optional field metadata
 
 It does not need document writes, rule writes, index management, cluster admin, or Kibana write
 privileges.
 
-Status: proven against Elastic 8.17.4 by the integration suite. The test scans successfully with
-only this role, then verifies representative writes are rejected with 403. CI repeats that proof
-on every push.
+Status: the trusted integration matrix tests Elastic 8.19.19 and 9.4.4. Each lane scans with only
+this role, exercises native input resolution, and verifies representative writes are rejected with
+403. See the [support policy](../support-policy.md) for exact-version support.
 
 ## Create the role
 
@@ -27,7 +28,7 @@ on every push.
   "applications": [
     {
       "application": "kibana-.kibana",
-      "privileges": ["feature_siem.read", "feature_siemV2.read"],
+      "privileges": ["feature_siem.read", "feature_siemV2.read", "feature_indexPatterns.read"],
       "resources": ["space:default"]
     }
   ]
@@ -40,9 +41,10 @@ Privilege notes:
 |---|---|
 | `cluster: monitor` | read data-stream and index stats |
 | `indices: monitor` | read index and data-stream metadata |
-| `view_index_metadata` | read mappings and `field_caps` when `--schema` is used |
+| `view_index_metadata` | resolve index, alias, and data-stream selectors; read mappings and `field_caps` when `--schema` is used |
 | `read` | run size-0 freshness and lag aggregations |
 | `feature_siem.read`, `feature_siemV2.read` | read detection rules through Kibana |
+| `feature_indexPatterns.read` | read Data View Management objects referenced by detection rules |
 
 Scope `indices.names` tighter than `"*"` if telemetry is under known patterns such as `logs-*`,
 `winlogbeat-*`, or `audit-*`. deadair only reports on sources the role can see.
@@ -104,7 +106,10 @@ deadair serve \
 
 ## Calls deadair makes
 
+- `GET /` for backend version discovery
 - `GET /api/detection_engine/rules/_find`
+- `GET /api/data_views/data_view/<id>` for data-view-backed rules
+- `GET /_resolve/index/<expression>?ignore_unavailable=true`
 - `GET /_data_stream/_stats`
 - `GET /_cat/indices`
 - `POST /<index>/_search` with `size: 0` aggregations for freshness and ingest lag

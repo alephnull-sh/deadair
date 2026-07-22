@@ -1,0 +1,152 @@
+{
+  "backend": "demo",
+  "observed_at": "2026-07-15T12:00:00Z",
+  "max_stale_seconds": 1800,
+  "rules": [
+    {
+      "id": "rule-healthy-control",
+      "name": "Endpoint activity control",
+      "enabled": true,
+      "severity": "low",
+      "risk_score": 21,
+      "patterns": ["logs-endpoint-*"]
+    },
+    {
+      "id": "rule-disconnected",
+      "name": "Network flow anomaly",
+      "enabled": true,
+      "severity": "critical",
+      "risk_score": 99,
+      "patterns": ["network-flow-*"]
+    },
+    {
+      "id": "rule-starved",
+      "name": "Legacy audit trail gap",
+      "enabled": true,
+      "severity": "high",
+      "risk_score": 73,
+      "patterns": ["logs-legacy-*"]
+    },
+    {
+      "id": "rule-missing-fields",
+      "name": "Untrusted authentication",
+      "enabled": true,
+      "severity": "high",
+      "risk_score": 73,
+      "patterns": ["logs-auth-*"],
+      "required_fields": ["user.name", "device.trust.score"]
+    },
+    {
+      "id": "rule-lag-blind-window",
+      "name": "Batch-fed source watcher",
+      "enabled": true,
+      "severity": "medium",
+      "risk_score": 47,
+      "patterns": ["logs-batch-*"],
+      "lookback_seconds": 600,
+      "interval_seconds": 300
+    },
+    {
+      "id": "rule-disabled-cloud-context",
+      "name": "Disabled cloud archive rule",
+      "enabled": false,
+      "severity": "medium",
+      "risk_score": 47,
+      "patterns": ["logs-cloud-archive-*"]
+    }
+  ],
+  "sources": [
+    {
+      "name": "logs-endpoint-default",
+      "docs": 480000,
+      "size_bytes": 12582912,
+      "last_event": "2026-07-15T11:59:00Z"
+    },
+    {
+      "name": "logs-legacy-audit-default",
+      "docs": 72000,
+      "size_bytes": 4194304,
+      "last_event": "2026-07-15T09:00:00Z"
+    },
+    {
+      "name": "logs-auth-default",
+      "docs": 250000,
+      "size_bytes": 8388608,
+      "last_event": "2026-07-15T11:58:00Z"
+    },
+    {
+      "name": "logs-batch-default",
+      "docs": 19000,
+      "size_bytes": 3145728,
+      "last_event": "2026-07-15T11:55:00Z",
+      "ingest_lag_seconds": 900
+    },
+    {
+      "name": "logs-cloud-archive-default",
+      "docs": 12000000,
+      "size_bytes": 2147483648,
+      "last_event": "2026-07-15T11:57:00Z"
+    }
+  ],
+  "resolutions": [
+    {
+      "rule_id": "rule-healthy-control",
+      "expression": "logs-endpoint-*",
+      "status": "resolved",
+      "resolved_sources": ["logs-endpoint-default"]
+    },
+    {
+      "rule_id": "rule-disconnected",
+      "expression": "network-flow-*",
+      "status": "empty",
+      "resolved_sources": []
+    },
+    {
+      "rule_id": "rule-starved",
+      "expression": "logs-legacy-*",
+      "status": "resolved",
+      "resolved_sources": ["logs-legacy-audit-default"]
+    },
+    {
+      "rule_id": "rule-missing-fields",
+      "expression": "logs-auth-*",
+      "status": "resolved",
+      "resolved_sources": ["logs-auth-default"]
+    },
+    {
+      "rule_id": "rule-lag-blind-window",
+      "expression": "logs-batch-*",
+      "status": "resolved",
+      "resolved_sources": ["logs-batch-default"]
+    },
+    {
+      "rule_id": "rule-disabled-cloud-context",
+      "expression": "logs-cloud-archive-*",
+      "status": "resolved",
+      "resolved_sources": ["logs-cloud-archive-default"]
+    }
+  ],
+  "schemas": [
+    {
+      "source": "logs-endpoint-default",
+      "fields": [
+        {"name": "@timestamp", "types": ["date"]},
+        {"name": "process.name", "types": ["keyword"]}
+      ]
+    },
+    {
+      "source": "logs-auth-default",
+      "fields": [
+        {"name": "@timestamp", "types": ["date"]},
+        {"name": "user.name", "types": ["keyword"]}
+      ]
+    },
+    {
+      "source": "logs-batch-default",
+      "fields": [
+        {"name": "@timestamp", "types": ["date"]},
+        {"name": "event.ingested", "types": ["date"]}
+      ]
+    }
+  ]
+}

@@ -31,8 +31,8 @@ type Client struct {
 	Password string
 	APIKey   string // optional; unauthenticated dev clusters are allowed
 	HTTP     *http.Client
-	// Concurrency bounds the parallel freshness-fallback searches so a scan
-	// stays SIEM-safe by default.
+	// Concurrency bounds parallel native-resolution and per-source requests so
+	// a scan stays SIEM-safe by default.
 	Concurrency int
 }
 
@@ -231,14 +231,21 @@ func (c *Client) Rules(ctx context.Context) ([]backend.Rule, error) {
 				name = id
 			}
 			severity := detectorSeverity(fields.Triggers)
-			rules = append(rules, backend.Rule{
+			patterns := detectorPatterns(fields.Inputs)
+			rule := backend.Rule{
 				ID:        id,
 				Name:      name,
 				Enabled:   enabled,
 				Severity:  severity,
 				RiskScore: riskScore(severity),
-				Patterns:  detectorPatterns(fields.Inputs),
-			})
+				RuleType:  fields.DetectorType,
+				Patterns:  patterns,
+			}
+			if len(patterns) == 0 {
+				rule.InputStatus = backend.ResolutionUnsupported
+				rule.InputDetail = "detector does not expose an index selector"
+			}
+			rules = append(rules, rule)
 		}
 		total := int(sr.Hits.Total)
 		if len(sr.Hits.Hits) == 0 || len(sr.Hits.Hits) < pageSize || (total > 0 && from+len(sr.Hits.Hits) >= total) {
@@ -262,6 +269,262 @@ func detectorPatterns(inputs []detectorInputWrapper) []string {
 		}
 	}
 	return patterns
+}
+
+type resolveIndexResponse struct {
+	Indices []struct {
+		Name       string   `json:"name"`
+		Aliases    []string `json:"aliases"`
+		DataStream string   `json:"data_stream"`
+	} `json:"indices"`
+	Aliases []struct {
+		Name    string   `json:"name"`
+		Indices []string `json:"indices"`
+	} `json:"aliases"`
+	DataStreams []struct {
+		Name           string   `json:"name"`
+		BackingIndices []string `json:"backing_indices"`
+	} `json:"data_streams"`
+}
+
+// Version returns the backend's native version from its read-only root API.
+func (c *Client) Version(ctx context.Context) (string, error) {
+	var out struct {
+		Version struct {
+			Number string `json:"number"`
+		} `json:"version"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/", nil, &out); err != nil {
+		return "", fmt.Errorf("reading OpenSearch version: %w", err)
+	}
+	if out.Version.Number == "" {
+		return "", fmt.Errorf("reading OpenSearch version: response did not include version.number")
+	}
+	return out.Version.Number, nil
+}
+
+// ResolveInputs applies OpenSearch's native index-expression semantics to
+// every detector that has a safe local selector. Cross-cluster selectors are
+// kept as separate evidence and are never sent to the local cluster.
+func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]backend.InputResolution, error) {
+	type plannedResolution struct {
+		resolution backend.InputResolution
+		expression string
+	}
+
+	var plans []plannedResolution
+	expressionIndex := make(map[string]int)
+	var expressions []string
+	var expressionObservedAt []time.Time
+	for _, rule := range rules {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		observedAt := time.Now().UTC()
+		local, remote := splitSelectors(rule.Patterns)
+		expression := strings.Join(local, ",")
+
+		if rule.InputStatus != "" {
+			plans = append(plans, plannedResolution{resolution: backend.InputResolution{
+				RuleID:           rule.ID,
+				Expression:       expression,
+				SelectorKind:     "rule_metadata",
+				ResolutionMethod: "rule_inventory",
+				ObservedAt:       observedAt,
+				Status:           rule.InputStatus,
+				Detail:           rule.InputDetail,
+			}})
+		} else if expression == "" {
+			if len(remote) == 0 {
+				plans = append(plans, plannedResolution{resolution: backend.InputResolution{
+					RuleID:           rule.ID,
+					SelectorKind:     "rule_metadata",
+					ResolutionMethod: "rule_inventory",
+					ObservedAt:       observedAt,
+					Status:           backend.ResolutionUnsupported,
+					Detail:           "detector does not expose an index selector",
+				}})
+			}
+		} else {
+			if _, exists := expressionIndex[expression]; !exists {
+				expressionIndex[expression] = len(expressions)
+				expressions = append(expressions, expression)
+				expressionObservedAt = append(expressionObservedAt, observedAt)
+			}
+			plans = append(plans, plannedResolution{
+				expression: expression,
+				resolution: backend.InputResolution{RuleID: rule.ID},
+			})
+		}
+
+		for _, selector := range remote {
+			plans = append(plans, plannedResolution{resolution: backend.InputResolution{
+				RuleID:           rule.ID,
+				Selector:         selector,
+				SelectorKind:     "remote_index",
+				ResolutionMethod: "remote_selector",
+				ObservedAt:       observedAt,
+				Status:           backend.ResolutionRemote,
+				Detail:           "cross-cluster selector was not resolved against the local cluster",
+			}})
+		}
+	}
+
+	resolvedExpressions, err := c.resolveInputExpressions(ctx, expressions, expressionObservedAt)
+	if err != nil {
+		return nil, err
+	}
+	var resolutions []backend.InputResolution
+	for _, plan := range plans {
+		if plan.expression == "" {
+			resolutions = append(resolutions, plan.resolution)
+			continue
+		}
+		resolution := resolvedExpressions[expressionIndex[plan.expression]]
+		resolution.ResolvedSources = append([]string(nil), resolution.ResolvedSources...)
+		resolution.Aliases = append([]string(nil), resolution.Aliases...)
+		resolution.RuleID = plan.resolution.RuleID
+		resolutions = append(resolutions, resolution)
+	}
+	return resolutions, nil
+}
+
+func (c *Client) resolveInputExpressions(ctx context.Context, expressions []string, observedAt []time.Time) ([]backend.InputResolution, error) {
+	resolutions := make([]backend.InputResolution, len(expressions))
+	sem := make(chan struct{}, c.concurrency())
+	var wg sync.WaitGroup
+	for i, expression := range expressions {
+		i, expression := i, expression
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			resolution := backend.InputResolution{
+				Expression:       expression,
+				SelectorKind:     "index_expression",
+				ResolutionMethod: "resolve_index",
+				ObservedAt:       observedAt[i],
+			}
+			var response resolveIndexResponse
+			path := "/_resolve/index/" + url.PathEscape(expression) + "?ignore_unavailable=true"
+			if err := c.do(ctx, http.MethodGet, path, nil, &response); err != nil {
+				resolution.Status = backend.ResolutionUnavailable
+				if isStatus(err, http.StatusBadRequest) {
+					resolution.Status = backend.ResolutionUnsupported
+				}
+				resolution.Detail = err.Error()
+			} else {
+				resolution.ResolvedSources, resolution.Aliases = resolvedNames(response)
+				if len(resolution.ResolvedSources) == 0 {
+					resolution.Status = backend.ResolutionEmpty
+				} else {
+					resolution.Status = backend.ResolutionResolved
+				}
+			}
+			resolutions[i] = resolution
+		}()
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return resolutions, nil
+}
+
+func splitSelectors(selectors []string) (local, remote []string) {
+	for _, selector := range selectors {
+		selector = strings.TrimSpace(selector)
+		if selector == "" {
+			continue
+		}
+		if isRemoteSelector(selector) {
+			remote = append(remote, selector)
+		} else {
+			local = append(local, selector)
+		}
+	}
+	return local, remote
+}
+
+func isRemoteSelector(selector string) bool {
+	braceDepth := 0
+	for _, r := range selector {
+		switch r {
+		case '{':
+			braceDepth++
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+		case ':':
+			if braceDepth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resolvedNames(response resolveIndexResponse) (sources, aliases []string) {
+	backingStreams := make(map[string]string)
+	for _, stream := range response.DataStreams {
+		if stream.Name != "" {
+			sources = append(sources, stream.Name)
+		}
+		for _, backing := range stream.BackingIndices {
+			backingStreams[backing] = stream.Name
+		}
+	}
+	addSource := func(name string) {
+		if stream := backingStreams[name]; stream != "" {
+			sources = append(sources, stream)
+		} else if stream, ok := backingStream(name); ok {
+			sources = append(sources, stream)
+		} else if name != "" {
+			sources = append(sources, name)
+		}
+	}
+	for _, index := range response.Indices {
+		if index.DataStream != "" {
+			sources = append(sources, index.DataStream)
+		} else {
+			addSource(index.Name)
+		}
+		aliases = append(aliases, index.Aliases...)
+	}
+	for _, alias := range response.Aliases {
+		if alias.Name != "" {
+			aliases = append(aliases, alias.Name)
+		}
+		for _, index := range alias.Indices {
+			addSource(index)
+		}
+	}
+	return sortedUnique(sources), sortedUnique(aliases)
+}
+
+func sortedUnique(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func detectorSeverity(triggers []detectorTrigger) string {

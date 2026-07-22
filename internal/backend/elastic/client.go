@@ -9,6 +9,7 @@ package elastic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,8 +32,8 @@ type Client struct {
 	KibanaURL string
 	APIKey    string // optional; unauthenticated dev clusters are allowed
 	HTTP      *http.Client
-	// Concurrency bounds the parallel freshness-fallback searches so a scan
-	// stays SIEM-safe by default.
+	// Concurrency bounds parallel native-resolution and per-source requests so
+	// a scan stays SIEM-safe by default.
 	Concurrency int
 	// Space scopes Kibana API calls to a non-default Kibana space; rules
 	// living outside the configured space are otherwise invisible.
@@ -68,6 +69,26 @@ func (c *Client) concurrency() int {
 	return defaultConcurrency
 }
 
+type statusError struct {
+	method string
+	path   string
+	code   int
+	status string
+	body   string
+}
+
+func (e *statusError) Error() string {
+	if e.body == "" {
+		return fmt.Sprintf("%s %s: %s", e.method, e.path, e.status)
+	}
+	return fmt.Sprintf("%s %s: %s: %s", e.method, e.path, e.status, e.body)
+}
+
+func isStatus(err error, code int) bool {
+	var se *statusError
+	return errors.As(err, &se) && se.code == code
+}
+
 func (c *Client) do(ctx context.Context, method, base, path string, body io.Reader, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(base, "/")+path, body)
 	if err != nil {
@@ -87,7 +108,13 @@ func (c *Client) do(ctx context.Context, method, base, path string, body io.Read
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(msg)))
+		return &statusError{
+			method: method,
+			path:   path,
+			code:   resp.StatusCode,
+			status: resp.Status,
+			body:   strings.TrimSpace(string(msg)),
+		}
 	}
 	if out == nil {
 		return nil
@@ -111,6 +138,7 @@ type ruleJSON struct {
 	Enabled        bool     `json:"enabled"`
 	Severity       string   `json:"severity"`
 	RiskScore      int      `json:"risk_score"`
+	Type           string   `json:"type"`
 	Index          []string `json:"index"`
 	DataViewID     string   `json:"data_view_id"`
 	From           string   `json:"from"`
@@ -123,19 +151,32 @@ type ruleJSON struct {
 
 func (d ruleJSON) toRule() backend.Rule {
 	r := backend.Rule{
-		ID:        d.ID,
-		Name:      d.Name,
-		Enabled:   d.Enabled,
-		Severity:  strings.ToLower(d.Severity),
-		RiskScore: d.RiskScore,
-		Patterns:  d.Index,
-		Lookback:  backend.ParseLookback(d.From),
-		Interval:  backend.ParseInterval(d.Interval),
+		ID:         d.ID,
+		Name:       d.Name,
+		Enabled:    d.Enabled,
+		Severity:   strings.ToLower(d.Severity),
+		RiskScore:  d.RiskScore,
+		RuleType:   d.Type,
+		DataViewID: d.DataViewID,
+		Patterns:   d.Index,
+		Lookback:   backend.ParseLookback(d.From),
+		Interval:   backend.ParseInterval(d.Interval),
 
 		TimestampOverride: d.TimestampOverride,
 	}
 	if r.ID == "" {
 		r.ID = d.RuleID
+	}
+	if len(d.Index) > 0 && d.DataViewID != "" {
+		r.InputStatus = backend.ResolutionAmbiguous
+		r.InputDetail = "rule defines both explicit index selectors and a data view"
+	} else if len(d.Index) == 0 && d.DataViewID == "" {
+		r.InputStatus = backend.ResolutionUnsupported
+		if d.Type == "" {
+			r.InputDetail = "rule does not expose an index selector"
+		} else {
+			r.InputDetail = fmt.Sprintf("%s rule does not expose a supported index selector", d.Type)
+		}
 	}
 	for _, f := range d.RequiredFields {
 		if f.Name != "" {
@@ -199,6 +240,12 @@ func ParseRuleFile(data []byte) ([]backend.Rule, error) {
 	return rules, nil
 }
 
+// ParseCandidates implements backend.CandidateParser for Elastic rule
+// objects, arrays, and ndjson exports.
+func (c *Client) ParseCandidates(data []byte) ([]backend.Rule, error) {
+	return ParseRuleFile(data)
+}
+
 // Rules inventories all detection rules via the Kibana Detections API.
 // Rules backed by a data view instead of index patterns are resolved through
 // the Data Views API; a missing or unreadable data view leaves the rule
@@ -224,7 +271,18 @@ func (c *Client) Rules(ctx context.Context) ([]backend.Rule, error) {
 	}
 	for dvID, idxs := range dvPending {
 		patterns, err := c.dataViewPatterns(ctx, dvID)
-		if err != nil || len(patterns) == 0 {
+		if err != nil {
+			for _, i := range idxs {
+				rules[i].InputStatus = backend.ResolutionUnavailable
+				rules[i].InputDetail = fmt.Sprintf("resolving data view %q: %v", dvID, err)
+			}
+			continue
+		}
+		if len(patterns) == 0 {
+			for _, i := range idxs {
+				rules[i].InputStatus = backend.ResolutionUnsupported
+				rules[i].InputDetail = fmt.Sprintf("data view %q has no index selector", dvID)
+			}
 			continue
 		}
 		for _, i := range idxs {
@@ -253,6 +311,310 @@ func (c *Client) dataViewPatterns(ctx context.Context, id string) ([]string, err
 		}
 	}
 	return patterns, nil
+}
+
+type resolveIndexResponse struct {
+	Indices []struct {
+		Name       string   `json:"name"`
+		Aliases    []string `json:"aliases"`
+		DataStream string   `json:"data_stream"`
+	} `json:"indices"`
+	Aliases []struct {
+		Name    string   `json:"name"`
+		Indices []string `json:"indices"`
+	} `json:"aliases"`
+	DataStreams []struct {
+		Name           string   `json:"name"`
+		BackingIndices []string `json:"backing_indices"`
+	} `json:"data_streams"`
+}
+
+// Version returns the backend's native version from its read-only root API.
+func (c *Client) Version(ctx context.Context) (string, error) {
+	var out struct {
+		Version struct {
+			Number string `json:"number"`
+		} `json:"version"`
+	}
+	if err := c.do(ctx, http.MethodGet, c.ESURL, "/", nil, &out); err != nil {
+		return "", fmt.Errorf("reading Elasticsearch version: %w", err)
+	}
+	if out.Version.Number == "" {
+		return "", fmt.Errorf("reading Elasticsearch version: response did not include version.number")
+	}
+	return out.Version.Number, nil
+}
+
+// ResolveInputs applies Elasticsearch's native index-expression semantics to
+// every rule that has a safe local selector. Cross-cluster selectors are kept
+// as separate evidence and are never sent to the local cluster.
+func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]backend.InputResolution, error) {
+	type plannedResolution struct {
+		resolution backend.InputResolution
+		expression string
+	}
+
+	var plans []plannedResolution
+	expressionIndex := make(map[string]int)
+	var expressions []string
+	var expressionObservedAt []time.Time
+	for _, rule := range rules {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		observedAt := time.Now().UTC()
+		patterns := rule.Patterns
+		selector := ""
+		selectorKind := "index_expression"
+		resolutionMethod := "resolve_index"
+		if rule.DataViewID != "" {
+			selector = rule.DataViewID
+			selectorKind = "data_view"
+			resolutionMethod = "data_view+resolve_index"
+		}
+		if rule.InputStatus == "" && len(patterns) == 0 && rule.DataViewID != "" {
+			var err error
+			patterns, err = c.dataViewPatterns(ctx, rule.DataViewID)
+			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
+				plans = append(plans, plannedResolution{resolution: backend.InputResolution{
+					RuleID:           rule.ID,
+					Selector:         rule.DataViewID,
+					SelectorKind:     "data_view",
+					ResolutionMethod: "data_view_lookup",
+					ObservedAt:       observedAt,
+					Status:           backend.ResolutionUnavailable,
+					Detail:           fmt.Sprintf("resolving data view %q: %v", rule.DataViewID, err),
+				}})
+				continue
+			}
+			if len(patterns) == 0 {
+				plans = append(plans, plannedResolution{resolution: backend.InputResolution{
+					RuleID:           rule.ID,
+					Selector:         rule.DataViewID,
+					SelectorKind:     "data_view",
+					ResolutionMethod: "data_view_lookup",
+					ObservedAt:       observedAt,
+					Status:           backend.ResolutionUnsupported,
+					Detail:           fmt.Sprintf("data view %q has no index selector", rule.DataViewID),
+				}})
+				continue
+			}
+		}
+		local, remote := splitSelectors(patterns)
+		expression := strings.Join(local, ",")
+
+		if rule.InputStatus != "" {
+			plans = append(plans, plannedResolution{resolution: backend.InputResolution{
+				RuleID:           rule.ID,
+				Expression:       expression,
+				SelectorKind:     "rule_metadata",
+				ResolutionMethod: "rule_inventory",
+				ObservedAt:       observedAt,
+				Status:           rule.InputStatus,
+				Detail:           rule.InputDetail,
+			}})
+		} else if expression == "" {
+			if len(remote) == 0 {
+				plans = append(plans, plannedResolution{resolution: backend.InputResolution{
+					RuleID:           rule.ID,
+					SelectorKind:     "rule_metadata",
+					ResolutionMethod: "rule_inventory",
+					ObservedAt:       observedAt,
+					Status:           backend.ResolutionUnsupported,
+					Detail:           "rule does not expose an index selector",
+				}})
+			}
+		} else {
+			if _, exists := expressionIndex[expression]; !exists {
+				expressionIndex[expression] = len(expressions)
+				expressions = append(expressions, expression)
+				expressionObservedAt = append(expressionObservedAt, observedAt)
+			}
+			plans = append(plans, plannedResolution{
+				expression: expression,
+				resolution: backend.InputResolution{
+					RuleID:           rule.ID,
+					Selector:         selector,
+					SelectorKind:     selectorKind,
+					ResolutionMethod: resolutionMethod,
+				},
+			})
+		}
+
+		for _, selector := range remote {
+			plans = append(plans, plannedResolution{resolution: backend.InputResolution{
+				RuleID:           rule.ID,
+				Selector:         selector,
+				SelectorKind:     "remote_index",
+				ResolutionMethod: "remote_selector",
+				ObservedAt:       observedAt,
+				Status:           backend.ResolutionRemote,
+				Detail:           "cross-cluster selector was not resolved against the local cluster",
+			}})
+		}
+	}
+
+	resolvedExpressions, err := c.resolveInputExpressions(ctx, expressions, expressionObservedAt)
+	if err != nil {
+		return nil, err
+	}
+	var resolutions []backend.InputResolution
+	for _, plan := range plans {
+		if plan.expression == "" {
+			resolutions = append(resolutions, plan.resolution)
+			continue
+		}
+		resolution := resolvedExpressions[expressionIndex[plan.expression]]
+		resolution.ResolvedSources = append([]string(nil), resolution.ResolvedSources...)
+		resolution.Aliases = append([]string(nil), resolution.Aliases...)
+		resolution.RuleID = plan.resolution.RuleID
+		resolution.Selector = plan.resolution.Selector
+		resolution.SelectorKind = plan.resolution.SelectorKind
+		resolution.ResolutionMethod = plan.resolution.ResolutionMethod
+		resolutions = append(resolutions, resolution)
+	}
+	return resolutions, nil
+}
+
+func (c *Client) resolveInputExpressions(ctx context.Context, expressions []string, observedAt []time.Time) ([]backend.InputResolution, error) {
+	resolutions := make([]backend.InputResolution, len(expressions))
+	sem := make(chan struct{}, c.concurrency())
+	var wg sync.WaitGroup
+	for i, expression := range expressions {
+		i, expression := i, expression
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			resolution := backend.InputResolution{
+				Expression:       expression,
+				SelectorKind:     "index_expression",
+				ResolutionMethod: "resolve_index",
+				ObservedAt:       observedAt[i],
+			}
+			var response resolveIndexResponse
+			path := "/_resolve/index/" + url.PathEscape(expression) + "?ignore_unavailable=true"
+			if err := c.do(ctx, http.MethodGet, c.ESURL, path, nil, &response); err != nil {
+				resolution.Status = backend.ResolutionUnavailable
+				if isStatus(err, http.StatusBadRequest) {
+					resolution.Status = backend.ResolutionUnsupported
+				}
+				resolution.Detail = err.Error()
+			} else {
+				resolution.ResolvedSources, resolution.Aliases = resolvedNames(response)
+				if len(resolution.ResolvedSources) == 0 {
+					resolution.Status = backend.ResolutionEmpty
+				} else {
+					resolution.Status = backend.ResolutionResolved
+				}
+			}
+			resolutions[i] = resolution
+		}()
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return resolutions, nil
+}
+
+func splitSelectors(selectors []string) (local, remote []string) {
+	for _, selector := range selectors {
+		selector = strings.TrimSpace(selector)
+		if selector == "" {
+			continue
+		}
+		if isRemoteSelector(selector) {
+			remote = append(remote, selector)
+		} else {
+			local = append(local, selector)
+		}
+	}
+	return local, remote
+}
+
+func isRemoteSelector(selector string) bool {
+	braceDepth := 0
+	for _, r := range selector {
+		switch r {
+		case '{':
+			braceDepth++
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+		case ':':
+			if braceDepth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resolvedNames(response resolveIndexResponse) (sources, aliases []string) {
+	backingStreams := make(map[string]string)
+	for _, stream := range response.DataStreams {
+		if stream.Name != "" {
+			sources = append(sources, stream.Name)
+		}
+		for _, backing := range stream.BackingIndices {
+			backingStreams[backing] = stream.Name
+		}
+	}
+	addSource := func(name string) {
+		if stream := backingStreams[name]; stream != "" {
+			sources = append(sources, stream)
+		} else if match := backingRe.FindStringSubmatch(name); match != nil {
+			sources = append(sources, match[1])
+		} else if name != "" {
+			sources = append(sources, name)
+		}
+	}
+	for _, index := range response.Indices {
+		if index.DataStream != "" {
+			sources = append(sources, index.DataStream)
+		} else {
+			addSource(index.Name)
+		}
+		aliases = append(aliases, index.Aliases...)
+	}
+	for _, alias := range response.Aliases {
+		if alias.Name != "" {
+			aliases = append(aliases, alias.Name)
+		}
+		for _, index := range alias.Indices {
+			addSource(index)
+		}
+	}
+	return sortedUnique(sources), sortedUnique(aliases)
+}
+
+func sortedUnique(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 type dsStatsResponse struct {

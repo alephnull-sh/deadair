@@ -29,8 +29,11 @@ const (
 
 // Report is the full scan result.
 type Report struct {
-	GeneratedAt time.Time `json:"generated_at"`
-	Backend     string    `json:"backend"`
+	SchemaVersion   string          `json:"schema_version"`
+	GeneratedAt     time.Time       `json:"generated_at"`
+	Producer        Producer        `json:"producer"`
+	Backend         string          `json:"backend"`
+	BackendMetadata BackendMetadata `json:"backend_metadata"`
 	// Instance names the fleet member (tenant / deployment) this report
 	// describes. Defaults to the backend name in single-instance mode.
 	Instance           string              `json:"instance,omitempty"`
@@ -40,6 +43,10 @@ type Report struct {
 	DeadDetections     []DeadDetection     `json:"dead_detections"`
 	ImpairedDetections []ImpairedDetection `json:"impaired_detections,omitempty"`
 	UnmappedRules      []RuleRef           `json:"unmapped_rules,omitempty"`
+	// InputResolutions retains the backend-native evidence used to connect
+	// rule inputs to concrete sources. Only an empty result can substantiate a
+	// disconnected finding; uncertainty stays visible here instead.
+	InputResolutions []backend.InputResolution `json:"input_resolutions,omitempty"`
 	// RemoteRules query cross-cluster (cluster:pattern) inputs deadair cannot
 	// verify from this deployment. Listed, never called dead.
 	RemoteRules     []RuleRef      `json:"remote_rules,omitempty"`
@@ -48,22 +55,47 @@ type Report struct {
 
 // Summary is the roll-up used for exit codes and exporter aggregates.
 type Summary struct {
-	Rules              int   `json:"rules"`
-	EnabledRules       int   `json:"enabled_rules"`
-	Sources            int   `json:"sources"`
-	HealthySources     int   `json:"healthy_sources"`
-	DegradedSources    int   `json:"degraded_sources"`
-	DeadDetections     int   `json:"dead_detections"`
-	ImpairedDetections int   `json:"impaired_detections,omitempty"`
-	UnmappedRules      int   `json:"unmapped_rules"`
-	RemoteRules        int   `json:"remote_rules,omitempty"`
-	UnusedSources      int   `json:"unused_sources"`
-	UnusedBytes        int64 `json:"unused_bytes"`
-	VolumeLowSources   int   `json:"volume_low_sources,omitempty"`
-	SchemaDriftSources int   `json:"schema_drift_sources,omitempty"`
+	Rules              int                    `json:"rules"`
+	EnabledRules       int                    `json:"enabled_rules"`
+	Sources            int                    `json:"sources"`
+	HealthySources     int                    `json:"healthy_sources"`
+	DegradedSources    int                    `json:"degraded_sources"`
+	DeadDetections     int                    `json:"dead_detections"`
+	ImpairedDetections int                    `json:"impaired_detections,omitempty"`
+	UnmappedRules      int                    `json:"unmapped_rules"`
+	RemoteRules        int                    `json:"remote_rules,omitempty"`
+	UnusedSources      int                    `json:"unused_sources"`
+	UnusedBytes        int64                  `json:"unused_bytes"`
+	VolumeLowSources   int                    `json:"volume_low_sources,omitempty"`
+	SchemaDriftSources int                    `json:"schema_drift_sources,omitempty"`
+	InputResolution    InputResolutionSummary `json:"input_resolution"`
+	// UnusedTelemetryAssessment says whether zero-consumer source findings are
+	// complete, based on legacy matching, unavailable, or intentionally skipped.
+	UnusedTelemetryAssessment UnusedTelemetryAssessment `json:"unused_telemetry_assessment"`
 }
 
-// SourceHealth is one source with its verdict and blast-radius size.
+// UnusedTelemetryAssessment describes the confidence behind unused telemetry.
+type UnusedTelemetryAssessment string
+
+const (
+	UnusedAssessmentComplete      UnusedTelemetryAssessment = "complete"
+	UnusedAssessmentLegacy        UnusedTelemetryAssessment = "legacy"
+	UnusedAssessmentUnavailable   UnusedTelemetryAssessment = "unavailable"
+	UnusedAssessmentNotApplicable UnusedTelemetryAssessment = "not-applicable"
+)
+
+// InputResolutionSummary counts native selector outcomes across the rule
+// inventory. Counts describe evidence, not findings or exit-code gates.
+type InputResolutionSummary struct {
+	Resolved    int `json:"resolved"`
+	Empty       int `json:"empty"`
+	Unsupported int `json:"unsupported"`
+	Unavailable int `json:"unavailable"`
+	Remote      int `json:"remote"`
+	Ambiguous   int `json:"ambiguous"`
+}
+
+// SourceHealth is one source with its verdict and known blast-radius size.
 type SourceHealth struct {
 	Name       string  `json:"name"`
 	Status     string  `json:"status"`
@@ -75,8 +107,8 @@ type SourceHealth struct {
 	ExpectedDowntime bool          `json:"expected_downtime,omitempty"`
 	Volume           *VolumeHealth `json:"volume,omitempty"`
 	Schema           *SchemaHealth `json:"schema,omitempty"`
-	// Consumers is the number of enabled rules reading this source — the
-	// blast radius if it dies.
+	// Consumers is the number of enabled rules positively resolved to this
+	// source. It is a lower bound when unused_telemetry_assessment is unavailable.
 	Consumers int `json:"consumers"`
 }
 
@@ -139,9 +171,11 @@ type DeadDetection struct {
 
 // RuleRef identifies a rule whose inputs cannot be mapped from metadata.
 type RuleRef struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Severity string `json:"severity"`
+	ID               string                   `json:"id"`
+	Name             string                   `json:"name"`
+	Severity         string                   `json:"severity"`
+	AssessmentStatus backend.ResolutionStatus `json:"assessment_status,omitempty"`
+	Detail           string                   `json:"detail,omitempty"`
 }
 
 // Impairment reasons: the rule fires, but with degraded vision.
@@ -191,9 +225,11 @@ func rank(sev string) int {
 
 // BuildOptions carries optional report inputs beyond fixed freshness health.
 type BuildOptions struct {
-	Check  health.Check
-	Volume map[string]state.VolumeAssessment
-	Schema map[string]state.SchemaAssessment
+	Check                  health.Check
+	Volume                 map[string]state.VolumeAssessment
+	Schema                 map[string]state.SchemaAssessment
+	ProducerVersion        string
+	BackendObservedVersion string
 	// Scope, when non-nil, limits which sources are LISTED (sources section,
 	// summary counts, unused telemetry, metrics). Verdicts are always computed
 	// from the full inventory: scoping the report must never manufacture a
@@ -215,7 +251,31 @@ func Build(backendName string, g *graph.Graph, check health.Check) *Report {
 // BuildWithOptions assembles the report from the dependency graph and L1
 // health signals.
 func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Report {
-	r := &Report{GeneratedAt: time.Now().UTC(), Backend: backendName}
+	r := &Report{
+		SchemaVersion:    ReportSchemaVersion,
+		GeneratedAt:      time.Now().UTC(),
+		Producer:         producer(opts.ProducerVersion),
+		Backend:          backendName,
+		BackendMetadata:  backendMetadata(backendName, opts.BackendObservedVersion),
+		InputResolutions: append([]backend.InputResolution(nil), g.Resolutions...),
+	}
+	for _, resolution := range r.InputResolutions {
+		switch resolution.Status {
+		case backend.ResolutionResolved:
+			r.Summary.InputResolution.Resolved++
+		case backend.ResolutionEmpty:
+			r.Summary.InputResolution.Empty++
+		case backend.ResolutionUnsupported:
+			r.Summary.InputResolution.Unsupported++
+		case backend.ResolutionUnavailable:
+			r.Summary.InputResolution.Unavailable++
+		case backend.ResolutionRemote:
+			r.Summary.InputResolution.Remote++
+		case backend.ResolutionAmbiguous:
+			r.Summary.InputResolution.Ambiguous++
+		}
+	}
+	r.Summary.UnusedTelemetryAssessment = unusedTelemetryAssessment(g, opts.SkipUnused)
 
 	rulesByID := make(map[string]int, len(g.Rules))
 	for i, rule := range g.Rules {
@@ -243,7 +303,8 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 				disabledConsumers++
 			}
 		}
-		if consumers == 0 {
+		if consumers == 0 && s.Docs != 0 && (r.Summary.UnusedTelemetryAssessment == UnusedAssessmentComplete ||
+			r.Summary.UnusedTelemetryAssessment == UnusedAssessmentLegacy) {
 			r.UnusedTelemetry = append(r.UnusedTelemetry, UnusedSource{
 				Name: s.Name, Docs: s.Docs, SizeBytes: s.SizeBytes,
 				DisabledConsumers: disabledConsumers,
@@ -301,11 +362,107 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 			continue
 		}
 		r.Summary.EnabledRules++
-		if len(rule.Patterns) == 0 {
-			r.UnmappedRules = append(r.UnmappedRules, RuleRef{ID: rule.ID, Name: rule.Name, Severity: rule.Severity})
+		matched := g.SourcesFor(rule.ID)
+		resolutions := g.ResolutionsFor(rule.ID)
+		if g.NativeResolution {
+			if len(resolutions) == 0 {
+				r.UnmappedRules = append(r.UnmappedRules, RuleRef{
+					ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
+					AssessmentStatus: backend.ResolutionUnsupported,
+					Detail:           "no input-resolution evidence was returned",
+				})
+				continue
+			}
+			var hasResolved, hasEmpty, uncertain, remote bool
+			var uncertainStatus backend.ResolutionStatus
+			var uncertainDetail string
+			var missingTargets []string
+			for _, resolution := range resolutions {
+				switch resolution.Status {
+				case backend.ResolutionResolved:
+					hasResolved = true
+					for _, target := range resolution.ResolvedSources {
+						if _, present := srcByName[target]; !present {
+							missingTargets = append(missingTargets, target)
+						}
+					}
+				case backend.ResolutionEmpty:
+					hasEmpty = true
+				case backend.ResolutionRemote:
+					remote, uncertain = true, true
+				case backend.ResolutionUnsupported, backend.ResolutionUnavailable, backend.ResolutionAmbiguous:
+					uncertain = true
+					if uncertainStatus == "" {
+						uncertainStatus, uncertainDetail = resolution.Status, resolution.Detail
+					}
+				}
+			}
+			if len(missingTargets) > 0 {
+				uncertain = true
+				if uncertainStatus == "" {
+					uncertainStatus = backend.ResolutionAmbiguous
+					uncertainDetail = "one or more resolved targets were not present in the source inventory"
+				}
+			}
+			if remote {
+				r.RemoteRules = append(r.RemoteRules, RuleRef{
+					ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
+					AssessmentStatus: backend.ResolutionRemote,
+				})
+			}
+			if uncertainStatus != "" {
+				r.UnmappedRules = append(r.UnmappedRules, RuleRef{
+					ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
+					AssessmentStatus: uncertainStatus, Detail: uncertainDetail,
+				})
+			}
+			if len(matched) == 0 {
+				switch {
+				case uncertainStatus != "":
+					continue
+				case remote:
+					continue
+				case hasResolved:
+					// The resolver returned targets that are absent from the
+					// health inventory. Treat that disagreement as ambiguous.
+					r.UnmappedRules = append(r.UnmappedRules, RuleRef{
+						ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
+						AssessmentStatus: backend.ResolutionAmbiguous,
+						Detail:           "resolved targets were not present in the source inventory",
+					})
+					continue
+				case hasEmpty:
+					r.DeadDetections = append(r.DeadDetections, DeadDetection{
+						ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
+						Reason: ReasonDisconnected, Patterns: rule.Patterns,
+					})
+					continue
+				default:
+					r.UnmappedRules = append(r.UnmappedRules, RuleRef{
+						ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
+						AssessmentStatus: backend.ResolutionUnsupported,
+						Detail:           "no input-resolution evidence was returned",
+					})
+					continue
+				}
+			}
+			// Remote or otherwise uncertain secondary inputs mean the local
+			// evidence is incomplete. Keep the rule visible without deriving a
+			// starved or impaired verdict from a partial view.
+			if uncertain {
+				continue
+			}
+		} else if len(rule.Patterns) == 0 {
+			status := rule.InputStatus
+			if status == "" {
+				status = backend.ResolutionUnsupported
+			}
+			r.UnmappedRules = append(r.UnmappedRules, RuleRef{
+				ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
+				AssessmentStatus: status, Detail: rule.InputDetail,
+			})
 			continue
 		}
-		matched := g.SourcesFor(rule.ID)
 		if len(matched) == 0 {
 			// Cross-cluster patterns (cluster:index) can never match a local
 			// source name; a rule with any remote input is unverifiable here,
@@ -318,7 +475,10 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 				}
 			}
 			if remote {
-				r.RemoteRules = append(r.RemoteRules, RuleRef{ID: rule.ID, Name: rule.Name, Severity: rule.Severity})
+				r.RemoteRules = append(r.RemoteRules, RuleRef{
+					ID: rule.ID, Name: rule.Name, Severity: rule.Severity,
+					AssessmentStatus: backend.ResolutionRemote,
+				})
 				continue
 			}
 			r.DeadDetections = append(r.DeadDetections, DeadDetection{
@@ -383,7 +543,62 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 		return a.Name < b.Name
 	})
 	sort.Slice(r.UnmappedRules, func(i, j int) bool { return r.UnmappedRules[i].Name < r.UnmappedRules[j].Name })
+	sort.Slice(r.InputResolutions, func(i, j int) bool {
+		a, b := r.InputResolutions[i], r.InputResolutions[j]
+		if a.RuleID != b.RuleID {
+			return a.RuleID < b.RuleID
+		}
+		if a.Status != b.Status {
+			return a.Status < b.Status
+		}
+		return a.Expression+a.Selector < b.Expression+b.Selector
+	})
 	return r
+}
+
+func unusedTelemetryAssessment(g *graph.Graph, skip bool) UnusedTelemetryAssessment {
+	if skip {
+		return UnusedAssessmentNotApplicable
+	}
+	enabled := 0
+	inventory := make(map[string]struct{}, len(g.Sources))
+	for _, source := range g.Sources {
+		inventory[source.Name] = struct{}{}
+	}
+	for _, rule := range g.Rules {
+		if !rule.Enabled {
+			continue
+		}
+		enabled++
+		if !g.NativeResolution {
+			continue
+		}
+		resolutions := g.ResolutionsFor(rule.ID)
+		if len(resolutions) == 0 {
+			return UnusedAssessmentUnavailable
+		}
+		for _, resolution := range resolutions {
+			switch resolution.Status {
+			case backend.ResolutionResolved:
+				if len(resolution.ResolvedSources) == 0 {
+					return UnusedAssessmentUnavailable
+				}
+				for _, target := range resolution.ResolvedSources {
+					if _, present := inventory[target]; !present {
+						return UnusedAssessmentUnavailable
+					}
+				}
+			case backend.ResolutionEmpty, backend.ResolutionRemote:
+				// Remote selectors cannot consume sources in this local inventory.
+			default:
+				return UnusedAssessmentUnavailable
+			}
+		}
+	}
+	if enabled == 0 || g.NativeResolution {
+		return UnusedAssessmentComplete
+	}
+	return UnusedAssessmentLegacy
 }
 
 // windowsOnEventTime reports whether a rule's time range filters on event time
@@ -470,6 +685,9 @@ func impairment(rule backend.Rule, matched []string, srcByName map[string]backen
 // CandidateExitCode gates on the rule under test only: pre-existing source
 // degradation elsewhere in the environment must not fail a rule's CI check.
 func (r *Report) CandidateExitCode() int {
+	if r.Summary.UnmappedRules > 0 || r.Summary.RemoteRules > 0 {
+		return ExitError
+	}
 	if r.Summary.DeadDetections > 0 || r.Summary.ImpairedDetections > 0 {
 		return ExitFindings
 	}
@@ -539,6 +757,9 @@ func (r *Report) Redact() {
 	for i := range r.UnmappedRules {
 		r.UnmappedRules[i].ID = redact("rule", r.UnmappedRules[i].ID)
 		r.UnmappedRules[i].Name = redact("rule", r.UnmappedRules[i].Name)
+		if r.UnmappedRules[i].Detail != "" {
+			r.UnmappedRules[i].Detail = redact("detail", r.UnmappedRules[i].Detail)
+		}
 	}
 	for i := range r.RemoteRules {
 		r.RemoteRules[i].ID = redact("rule", r.RemoteRules[i].ID)
@@ -546,6 +767,25 @@ func (r *Report) Redact() {
 	}
 	for i := range r.UnusedTelemetry {
 		r.UnusedTelemetry[i].Name = redact("src", r.UnusedTelemetry[i].Name)
+	}
+	for i := range r.InputResolutions {
+		resolution := &r.InputResolutions[i]
+		resolution.RuleID = redact("rule", resolution.RuleID)
+		if resolution.Selector != "" {
+			resolution.Selector = redact("pat", resolution.Selector)
+		}
+		if resolution.Expression != "" {
+			resolution.Expression = redact("pat", resolution.Expression)
+		}
+		for j := range resolution.ResolvedSources {
+			resolution.ResolvedSources[j] = redact("src", resolution.ResolvedSources[j])
+		}
+		for j := range resolution.Aliases {
+			resolution.Aliases[j] = redact("alias", resolution.Aliases[j])
+		}
+		if resolution.Detail != "" {
+			resolution.Detail = redact("detail", resolution.Detail)
+		}
 	}
 }
 

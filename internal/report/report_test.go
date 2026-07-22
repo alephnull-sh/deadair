@@ -70,6 +70,9 @@ func TestBuildClassification(t *testing.T) {
 	if s.UnusedSources != 2 || s.UnusedBytes != 1499 {
 		t.Fatalf("unused = %+v (bytes %d), want 2 sources / 1499 bytes", r.UnusedTelemetry, s.UnusedBytes)
 	}
+	if s.UnusedTelemetryAssessment != UnusedAssessmentLegacy {
+		t.Fatalf("unused assessment = %q, want legacy", s.UnusedTelemetryAssessment)
+	}
 	if r.UnusedTelemetry[0].Name != "logs-unused-default" || r.UnusedTelemetry[0].DisabledConsumers != 0 {
 		t.Errorf("largest unused = %+v, want logs-unused-default with no disabled consumers", r.UnusedTelemetry[0])
 	}
@@ -136,6 +139,11 @@ func TestImpairments(t *testing.T) {
 	}
 	if r.CandidateExitCode() != ExitFindings {
 		t.Errorf("candidate exit = %d, want findings", r.CandidateExitCode())
+	}
+	r.UnmappedRules = []RuleRef{{ID: "unassessed"}}
+	r.Summary.UnmappedRules = 1
+	if r.CandidateExitCode() != ExitError {
+		t.Errorf("unassessed candidate exit = %d, want error", r.CandidateExitCode())
 	}
 
 	// Redacted impaired output must leak neither rule, field, nor source names.
@@ -235,6 +243,33 @@ func TestSkipUnused(t *testing.T) {
 	r := BuildWithOptions("elastic", g, BuildOptions{Check: health.Check{MaxStale: time.Hour}, SkipUnused: true})
 	if len(r.UnusedTelemetry) != 0 || r.Summary.UnusedSources != 0 || r.Summary.UnusedBytes != 0 {
 		t.Fatalf("unused must be suppressed in candidate mode: %+v", r.UnusedTelemetry)
+	}
+	if r.Summary.UnusedTelemetryAssessment != UnusedAssessmentNotApplicable {
+		t.Fatalf("unused assessment = %q, want not-applicable", r.Summary.UnusedTelemetryAssessment)
+	}
+}
+
+func TestUnusedTelemetryExcludesEmptySources(t *testing.T) {
+	now := time.Now()
+	sources := []backend.Source{
+		{Name: "empty", Docs: 0, SizeBytes: 0},
+		{Name: "ingested", Docs: 10, SizeBytes: 100, LastEvent: now},
+		{Name: "docs-unknown", Docs: -1, SizeBytes: 50, LastEvent: now},
+	}
+	g := graph.BuildResolved(nil, sources, nil)
+	r := BuildWithOptions("elastic", g, BuildOptions{Check: health.Check{MaxStale: time.Hour}})
+
+	if r.Summary.UnusedTelemetryAssessment != UnusedAssessmentComplete {
+		t.Fatalf("unused assessment = %q, want complete", r.Summary.UnusedTelemetryAssessment)
+	}
+	if r.Summary.UnusedSources != 2 || r.Summary.UnusedBytes != 150 {
+		t.Fatalf("unused summary = %d sources / %d bytes, want 2 / 150: %+v",
+			r.Summary.UnusedSources, r.Summary.UnusedBytes, r.UnusedTelemetry)
+	}
+	for _, source := range r.UnusedTelemetry {
+		if source.Name == "empty" {
+			t.Fatal("zero-document source was reported as ingested unused telemetry")
+		}
 	}
 }
 
@@ -411,6 +446,8 @@ func TestWritePermissions(t *testing.T) {
 
 func TestWriteHTML(t *testing.T) {
 	r := fixtureReport(t)
+	r.Producer = producer("1.2.3")
+	r.BackendMetadata = backendMetadata("elastic", "8.17.4")
 	r.Sources[0].Name = `<script>alert(1)</script>`
 	path := filepath.Join(t.TempDir(), "report.html")
 	if err := r.WriteHTML(path); err != nil {
@@ -429,6 +466,18 @@ func TestWriteHTML(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "deadair report") {
 		t.Fatalf("html report missing title:\n%s", data)
+	}
+	for _, metadata := range []string{
+		ReportSchemaVersion,
+		"producer deadair 1.2.3",
+		"Elastic Security 8.17.4 (elastic)",
+		"supported versions 8.x",
+		"rule_inventory=supported",
+		"remote=listed-only",
+	} {
+		if !strings.Contains(string(data), metadata) {
+			t.Errorf("html report missing metadata %q", metadata)
+		}
 	}
 	if strings.Contains(string(data), "<script>alert(1)</script>") {
 		t.Fatal("html report did not escape source name")
@@ -454,5 +503,72 @@ func TestRemoteRulesNeverDead(t *testing.T) {
 	}
 	if r.Summary.RemoteRules != 2 || len(r.RemoteRules) != 2 {
 		t.Fatalf("remote rules = %+v", r.RemoteRules)
+	}
+}
+
+func TestNativeResolutionOnlyEmptyCanDisconnect(t *testing.T) {
+	now := time.Now().UTC()
+	rules := []backend.Rule{
+		{ID: "empty", Name: "Empty input", Enabled: true, Severity: "high", Patterns: []string{"missing-*"}},
+		{ID: "unavailable", Name: "Unavailable input", Enabled: true, Severity: "high", Patterns: []string{"secret-*"}},
+		{ID: "remote", Name: "Remote input", Enabled: true, Severity: "medium", Patterns: []string{"eu:logs-*"}},
+		{ID: "mixed", Name: "Mixed local and remote", Enabled: true, Severity: "critical", Patterns: []string{"stale-*", "eu:logs-*"}},
+		{ID: "missing-evidence", Name: "Missing evidence", Enabled: true, Severity: "medium", Patterns: []string{"maybe-*"}},
+		{ID: "partial-inventory", Name: "Partial inventory", Enabled: true, Severity: "high", Patterns: []string{"stale-*"}},
+	}
+	sources := []backend.Source{
+		{Name: "stale-source", Docs: 10, LastEvent: now.Add(-24 * time.Hour)},
+		{Name: "maybe-unused", Docs: 10, SizeBytes: 100, LastEvent: now},
+	}
+	resolutions := []backend.InputResolution{
+		{RuleID: "empty", Expression: "missing-*", SelectorKind: "index_expression", ResolutionMethod: "resolve_index", ObservedAt: now, Status: backend.ResolutionEmpty},
+		{RuleID: "unavailable", Expression: "secret-*", SelectorKind: "index_expression", ResolutionMethod: "resolve_index", ObservedAt: now, Status: backend.ResolutionUnavailable, Detail: "403 for secret-*"},
+		{RuleID: "remote", Selector: "eu:logs-*", SelectorKind: "remote_index", ResolutionMethod: "remote_selector", ObservedAt: now, Status: backend.ResolutionRemote},
+		{RuleID: "mixed", Expression: "stale-*", SelectorKind: "index_expression", ResolvedSources: []string{"stale-source"}, ResolutionMethod: "resolve_index", ObservedAt: now, Status: backend.ResolutionResolved},
+		{RuleID: "mixed", Selector: "eu:logs-*", SelectorKind: "remote_index", ResolutionMethod: "remote_selector", ObservedAt: now, Status: backend.ResolutionRemote},
+		{RuleID: "partial-inventory", Expression: "stale-*", SelectorKind: "index_expression", ResolvedSources: []string{"stale-source", ".hidden-target"}, ResolutionMethod: "resolve_index", ObservedAt: now, Status: backend.ResolutionResolved},
+	}
+	r := BuildWithOptions("elastic", graph.BuildResolved(rules, sources, resolutions), BuildOptions{
+		Check: health.Check{MaxStale: time.Hour, Now: func() time.Time { return now }},
+	})
+	if len(r.DeadDetections) != 1 || r.DeadDetections[0].ID != "empty" || r.DeadDetections[0].Reason != ReasonDisconnected {
+		t.Fatalf("dead detections = %+v, want only positive empty evidence", r.DeadDetections)
+	}
+	if len(r.UnmappedRules) != 3 {
+		t.Fatalf("unmapped rules = %+v, want unavailable, missing-evidence, and partial-inventory", r.UnmappedRules)
+	}
+	unmapped := map[string]RuleRef{}
+	for _, rule := range r.UnmappedRules {
+		unmapped[rule.ID] = rule
+	}
+	if unmapped["unavailable"].AssessmentStatus != backend.ResolutionUnavailable ||
+		unmapped["missing-evidence"].AssessmentStatus != backend.ResolutionUnsupported ||
+		unmapped["partial-inventory"].AssessmentStatus != backend.ResolutionAmbiguous {
+		t.Fatalf("unmapped rules = %+v", r.UnmappedRules)
+	}
+	if len(r.RemoteRules) != 2 {
+		t.Fatalf("remote rules = %+v, want remote and mixed", r.RemoteRules)
+	}
+	if got := r.Summary.InputResolution; got != (InputResolutionSummary{Resolved: 2, Empty: 1, Unavailable: 1, Remote: 2}) {
+		t.Fatalf("resolution summary = %+v", got)
+	}
+	if len(r.InputResolutions) != len(resolutions) {
+		t.Fatalf("resolution evidence = %d, want %d", len(r.InputResolutions), len(resolutions))
+	}
+	if r.Summary.UnusedTelemetryAssessment != UnusedAssessmentUnavailable ||
+		len(r.UnusedTelemetry) != 0 || r.Summary.UnusedBytes != 0 {
+		t.Fatalf("unused telemetry must stay unassessed when a local input is uncertain: %+v / %+v",
+			r.Summary, r.UnusedTelemetry)
+	}
+
+	r.Redact()
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"secret-*", "eu:logs-*", "stale-source", "403 for"} {
+		if strings.Contains(string(encoded), leak) {
+			t.Errorf("redacted resolution evidence leaks %q", leak)
+		}
 	}
 }

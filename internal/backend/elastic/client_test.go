@@ -2,9 +2,12 @@ package elastic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -169,12 +172,359 @@ func TestRulesDataViewResolution(t *testing.T) {
 	if got := byID["a"].Patterns; len(got) != 2 || got[0] != "logs-dv-*" || got[1] != "metrics-dv-*" {
 		t.Errorf("data view patterns = %v, want [logs-dv-* metrics-dv-*]", got)
 	}
+	if byID["a"].DataViewID != "dv-1" {
+		t.Errorf("data view ID = %q, want dv-1", byID["a"].DataViewID)
+	}
 	if got := byID["b"].Patterns; len(got) != 0 {
 		t.Errorf("missing data view must leave rule unmapped, got %v", got)
+	}
+	if byID["b"].InputStatus != backend.ResolutionUnavailable || byID["b"].InputDetail == "" {
+		t.Errorf("missing data view provenance = %q/%q, want unavailable with detail", byID["b"].InputStatus, byID["b"].InputDetail)
 	}
 	if got := byID["c"].Patterns; len(got) != 1 || got[0] != "logs-x-*" {
 		t.Errorf("explicit index patterns must win over data view, got %v", got)
 	}
+	if byID["c"].InputStatus != backend.ResolutionAmbiguous {
+		t.Errorf("explicit index plus data view status = %q, want ambiguous", byID["c"].InputStatus)
+	}
+}
+
+func TestRuleInputProvenance(t *testing.T) {
+	unsupported := (ruleJSON{ID: "esql", Type: "esql"}).toRule()
+	if unsupported.RuleType != "esql" || unsupported.InputStatus != backend.ResolutionUnsupported || unsupported.InputDetail == "" {
+		t.Fatalf("query-derived rule provenance = %+v", unsupported)
+	}
+
+	ambiguous := (ruleJSON{ID: "both", Type: "query", Index: []string{"logs-*"}, DataViewID: "dv"}).toRule()
+	if ambiguous.InputStatus != backend.ResolutionAmbiguous || len(ambiguous.Patterns) != 1 {
+		t.Fatalf("ambiguous rule provenance = %+v", ambiguous)
+	}
+}
+
+func TestResolveInputs(t *testing.T) {
+	var pathMu sync.Mutex
+	paths := make(map[string]int)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		pathMu.Lock()
+		paths[r.URL.EscapedPath()]++
+		pathMu.Unlock()
+		if got := r.URL.Query().Get("ignore_unavailable"); got != "true" {
+			t.Errorf("ignore_unavailable = %q, want true", got)
+		}
+		expression := r.URL.Path[len("/_resolve/index/"):]
+		switch expression {
+		case "logs-*,-logs-old-*":
+			fmt.Fprint(w, `{
+				"indices":[
+					{"name":"logs-z","aliases":["alias-extra"]},
+					{"name":".ds-logs-app-default-2026.07.01-000001","data_stream":"logs-app-default"}
+				],
+				"aliases":[{"name":"logs-current","indices":["logs-z","logs-a"]}],
+				"data_streams":[{"name":"logs-app-default","backing_indices":[".ds-logs-app-default-2026.07.01-000001"]}]
+			}`)
+		case "missing-*", "missing-exact":
+			fmt.Fprint(w, `{"indices":[],"aliases":[],"data_streams":[]}`)
+		case "secured-*":
+			http.Error(w, "forbidden", http.StatusForbidden)
+		case "bad[":
+			http.Error(w, "invalid index expression", http.StatusBadRequest)
+		default:
+			http.Error(w, "unexpected expression "+expression, http.StatusInternalServerError)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := &Client{ESURL: srv.URL, KibanaURL: srv.URL}
+	got, err := c.ResolveInputs(context.Background(), []backend.Rule{
+		{ID: "resolved", Patterns: []string{"logs-*", " remote:logs-* ", "-logs-old-*"}},
+		{ID: "resolved-duplicate", Patterns: []string{"logs-*", "-logs-old-*"}},
+		{ID: "empty", Patterns: []string{"missing-*"}},
+		{ID: "empty-exact", Patterns: []string{"missing-exact"}},
+		{ID: "unavailable", Patterns: []string{"secured-*"}},
+		{ID: "unsupported", Patterns: []string{"bad["}},
+		{ID: "metadata", InputStatus: backend.ResolutionUnsupported, InputDetail: "esql input"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byRule := map[string][]backend.InputResolution{}
+	for _, resolution := range got {
+		byRule[resolution.RuleID] = append(byRule[resolution.RuleID], resolution)
+		if resolution.ObservedAt.IsZero() {
+			t.Errorf("resolution has zero observed_at: %+v", resolution)
+		}
+	}
+	resolved := byRule["resolved"]
+	if len(resolved) != 2 {
+		t.Fatalf("resolved evidence = %+v, want local and remote records", resolved)
+	}
+	if resolved[0].Expression != "logs-*,-logs-old-*" || resolved[0].Status != backend.ResolutionResolved {
+		t.Errorf("local resolution = %+v", resolved[0])
+	}
+	wantSources := []string{"logs-a", "logs-app-default", "logs-z"}
+	if fmt.Sprint(resolved[0].ResolvedSources) != fmt.Sprint(wantSources) {
+		t.Errorf("resolved sources = %v, want %v", resolved[0].ResolvedSources, wantSources)
+	}
+	if gotAliases := resolved[0].Aliases; fmt.Sprint(gotAliases) != fmt.Sprint([]string{"alias-extra", "logs-current"}) {
+		t.Errorf("aliases = %v, want sorted unique alias evidence", gotAliases)
+	}
+	if duplicate := byRule["resolved-duplicate"]; len(duplicate) != 1 || fmt.Sprint(duplicate[0].ResolvedSources) != fmt.Sprint(wantSources) {
+		t.Errorf("duplicate expression did not reuse equivalent evidence: %+v", duplicate)
+	}
+	if resolved[1].Selector != "remote:logs-*" || resolved[1].Status != backend.ResolutionRemote {
+		t.Errorf("remote resolution = %+v", resolved[1])
+	}
+	if byRule["empty"][0].Status != backend.ResolutionEmpty {
+		t.Errorf("empty status = %q", byRule["empty"][0].Status)
+	}
+	if byRule["empty-exact"][0].Status != backend.ResolutionEmpty {
+		t.Errorf("exact missing status = %q", byRule["empty-exact"][0].Status)
+	}
+	if byRule["unavailable"][0].Status != backend.ResolutionUnavailable {
+		t.Errorf("auth failure status = %q", byRule["unavailable"][0].Status)
+	}
+	if byRule["unsupported"][0].Status != backend.ResolutionUnsupported {
+		t.Errorf("malformed expression status = %q", byRule["unsupported"][0].Status)
+	}
+	if metadata := byRule["metadata"][0]; metadata.Status != backend.ResolutionUnsupported || metadata.Detail != "esql input" {
+		t.Errorf("preset metadata resolution = %+v", metadata)
+	}
+	pathMu.Lock()
+	defer pathMu.Unlock()
+	requestCount := 0
+	for _, count := range paths {
+		requestCount += count
+	}
+	if requestCount != 5 || paths["/_resolve/index/logs-%2A%2C-logs-old-%2A"] != 1 {
+		t.Errorf("resolve paths = %v, want escaped ordered local expression and no metadata request", paths)
+	}
+}
+
+func TestResolveInputsUsesBoundedConcurrencyAndPreservesOrder(t *testing.T) {
+	const (
+		concurrency      = 4
+		uniqueExpression = 256
+	)
+
+	started := make(chan struct{}, concurrency)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+
+	var requests atomic.Int32
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		current := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			maximum := maxInFlight.Load()
+			if current <= maximum || maxInFlight.CompareAndSwap(maximum, current) {
+				break
+			}
+		}
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		fmt.Fprint(w, `{"indices":[{"name":"logs-resolved"}]}`)
+	}))
+	defer srv.Close()
+
+	rules := make([]backend.Rule, 0, uniqueExpression+1)
+	for i := 0; i < uniqueExpression; i++ {
+		patterns := []string{fmt.Sprintf("logs-%03d-*", i)}
+		if i == 0 {
+			patterns = append(patterns, "remote-a:logs-*")
+		}
+		rules = append(rules, backend.Rule{ID: fmt.Sprintf("rule-%03d", i), Patterns: patterns})
+	}
+	rules = append(rules, backend.Rule{ID: "duplicate", Patterns: []string{"logs-003-*"}})
+
+	type resolveResult struct {
+		resolutions []backend.InputResolution
+		err         error
+	}
+	done := make(chan resolveResult, 1)
+	go func() {
+		got, err := (&Client{ESURL: srv.URL, KibanaURL: srv.URL, Concurrency: concurrency}).ResolveInputs(context.Background(), rules)
+		done <- resolveResult{resolutions: got, err: err}
+	}()
+
+	for i := 0; i < concurrency; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			unblock()
+			t.Fatalf("only %d native requests started; resolver appears serialized", i)
+		}
+	}
+	unblock()
+
+	var result resolveResult
+	select {
+	case result = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("concurrent native resolution did not complete")
+	}
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if got := requests.Load(); got != uniqueExpression {
+		t.Errorf("native requests = %d, want %d unique expressions", got, uniqueExpression)
+	}
+	if got := maxInFlight.Load(); got != concurrency {
+		t.Errorf("maximum concurrent requests = %d, want bounded budget %d", got, concurrency)
+	}
+	if len(result.resolutions) != len(rules)+1 {
+		t.Fatalf("resolutions = %d, want %d including remote evidence", len(result.resolutions), len(rules)+1)
+	}
+	position := 0
+	for i := 0; i < uniqueExpression; i++ {
+		wantRule := fmt.Sprintf("rule-%03d", i)
+		if got := result.resolutions[position]; got.RuleID != wantRule || got.Status != backend.ResolutionResolved {
+			t.Fatalf("resolution[%d] = %+v, want resolved evidence for %s", position, got, wantRule)
+		}
+		position++
+		if i == 0 {
+			if got := result.resolutions[position]; got.RuleID != wantRule || got.Status != backend.ResolutionRemote {
+				t.Fatalf("resolution[%d] = %+v, want ordered remote evidence for %s", position, got, wantRule)
+			}
+			position++
+		}
+	}
+	if got := result.resolutions[position]; got.RuleID != "duplicate" || got.Expression != "logs-003-*" || got.Status != backend.ResolutionResolved {
+		t.Fatalf("duplicate resolution = %+v", got)
+	}
+}
+
+func TestResolveCandidateDataView(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/data_views/data_view/dv-candidate", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data_view":{"id":"dv-candidate","title":"logs-*,-logs-old-*"}}`)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/_resolve/index/logs-*,-logs-old-*" {
+			t.Errorf("resolve path = %q", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("ignore_unavailable"); got != "true" {
+			t.Errorf("ignore_unavailable = %q, want true", got)
+		}
+		fmt.Fprint(w, `{"indices":[{"name":"logs-current"}],"aliases":[],"data_streams":[]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	rules, err := ParseRuleFile([]byte(`{
+		"rule_id":"candidate",
+		"name":"Candidate data view rule",
+		"type":"query",
+		"data_view_id":"dv-candidate"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].DataViewID != "dv-candidate" || rules[0].InputStatus != "" {
+		t.Fatalf("parsed candidate = %+v", rules)
+	}
+
+	got, err := (&Client{ESURL: srv.URL, KibanaURL: srv.URL}).ResolveInputs(context.Background(), rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("resolutions = %+v, want one", got)
+	}
+	resolution := got[0]
+	if resolution.Status != backend.ResolutionResolved ||
+		resolution.Selector != "dv-candidate" ||
+		resolution.Expression != "logs-*,-logs-old-*" ||
+		resolution.SelectorKind != "data_view" ||
+		resolution.ResolutionMethod != "data_view+resolve_index" ||
+		fmt.Sprint(resolution.ResolvedSources) != "[logs-current]" {
+		t.Fatalf("candidate data-view resolution = %+v", resolution)
+	}
+}
+
+func TestResolveInputsReturnsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, err := (&Client{}).ResolveInputs(ctx, []backend.Rule{{ID: "r", Patterns: []string{"logs-*"}}})
+	if !errors.Is(err, context.Canceled) || got != nil {
+		t.Fatalf("ResolveInputs() = %v, %v; want nil, context.Canceled", got, err)
+	}
+}
+
+func TestResolveInputsCancelsInflightRequests(t *testing.T) {
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedOnce.Do(func() { close(started) })
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&Client{ESURL: srv.URL, KibanaURL: srv.URL, Concurrency: 2}).ResolveInputs(ctx, []backend.Rule{
+			{ID: "a", Patterns: []string{"logs-a-*"}},
+			{ID: "b", Patterns: []string{"logs-b-*"}},
+		})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("native request did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ResolveInputs() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ResolveInputs did not stop after cancellation")
+	}
+}
+
+func TestVersion(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/" {
+				t.Errorf("request = %s %s, want GET /", r.Method, r.URL.Path)
+			}
+			fmt.Fprint(w, `{"version":{"number":"9.1.2"}}`)
+		}))
+		defer srv.Close()
+		got, err := (&Client{ESURL: srv.URL}).Version(context.Background())
+		if err != nil || got != "9.1.2" {
+			t.Fatalf("Version() = %q, %v", got, err)
+		}
+	})
+	t.Run("error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "no access", http.StatusForbidden)
+		}))
+		defer srv.Close()
+		if _, err := (&Client{ESURL: srv.URL}).Version(context.Background()); err == nil {
+			t.Fatal("Version() error = nil, want root API failure")
+		}
+	})
 }
 
 func TestSources(t *testing.T) {

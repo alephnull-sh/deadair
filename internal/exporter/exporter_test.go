@@ -47,6 +47,8 @@ func TestMetrics(t *testing.T) {
 	r.Summary.DeadDetections = 2
 	r.Summary.ImpairedDetections = 3
 	r.Summary.UnusedBytes = 42
+	r.Summary.UnusedTelemetryAssessment = report.UnusedAssessmentComplete
+	r.Summary.InputResolution = report.InputResolutionSummary{Resolved: 4, Empty: 2, Unavailable: 1}
 	s.Update(fleetOf(r))
 
 	body = get(t, ts.URL+"/metrics")
@@ -58,6 +60,9 @@ func TestMetrics(t *testing.T) {
 		`deadair_detections_dead{instance="acme-prod"} 2`,
 		`deadair_detections_impaired{instance="acme-prod"} 3`,
 		`deadair_unused_telemetry_bytes{instance="acme-prod"} 42`,
+		`deadair_unused_telemetry_assessed{instance="acme-prod"} 1`,
+		`deadair_input_resolutions{instance="acme-prod",status="resolved"} 4`,
+		`deadair_input_resolutions{instance="acme-prod",status="unavailable"} 1`,
 		`deadair_source_freshness_seconds{instance="acme-prod",source="quoted\"src"} 12.5`,
 		`deadair_source_consumers{instance="acme-prod",source="stale-src"} 1`,
 	} {

@@ -15,6 +15,13 @@ type Rule struct {
 	Enabled   bool
 	Severity  string // normalized lowercase: low|medium|high|critical
 	RiskScore int
+	// RuleType is the backend-native detection type when the backend exposes
+	// one (for example, query, esql, or machine_learning).
+	RuleType string
+	// DataViewID identifies the Kibana data view used by a rule. It is kept
+	// separately from Patterns so candidate rules can resolve the data view
+	// without first being installed.
+	DataViewID string
 	// Patterns are the index / data-stream patterns the rule reads (for
 	// data-view-backed rules, resolved via the data view when possible).
 	// Empty when the inputs cannot be determined from metadata (e.g. ML
@@ -34,6 +41,41 @@ type Rule struct {
 	// caught as they arrive, so ingest lag cannot open a blind window and the
 	// lag check is suppressed.
 	TimestampOverride string
+	// InputStatus and InputDetail preserve input-discovery failures that occur
+	// while inventorying rules. Patterns remains available for callers that
+	// use the legacy client-side matcher.
+	InputStatus ResolutionStatus
+	InputDetail string
+}
+
+// ResolutionStatus describes the outcome of resolving a rule's backend input
+// selector to concrete sources.
+type ResolutionStatus string
+
+const (
+	ResolutionResolved    ResolutionStatus = "resolved"
+	ResolutionEmpty       ResolutionStatus = "empty"
+	ResolutionUnsupported ResolutionStatus = "unsupported"
+	ResolutionUnavailable ResolutionStatus = "unavailable"
+	ResolutionRemote      ResolutionStatus = "remote"
+	ResolutionAmbiguous   ResolutionStatus = "ambiguous"
+)
+
+// InputResolution is backend-native evidence for one rule input. Local
+// selectors are combined in Expression; selectors that must not be sent to
+// the local backend (such as cross-cluster selectors) are recorded separately
+// in Selector.
+type InputResolution struct {
+	RuleID           string           `json:"rule_id"`
+	Selector         string           `json:"selector,omitempty"`
+	Expression       string           `json:"expression,omitempty"`
+	SelectorKind     string           `json:"selector_kind"`
+	ResolvedSources  []string         `json:"resolved_sources,omitempty"`
+	Aliases          []string         `json:"aliases,omitempty"`
+	ResolutionMethod string           `json:"resolution_method"`
+	ObservedAt       time.Time        `json:"observed_at"`
+	Status           ResolutionStatus `json:"status"`
+	Detail           string           `json:"detail,omitempty"`
 }
 
 // Source is a concrete log source (data stream or index) with health stats.
@@ -66,4 +108,22 @@ type Backend interface {
 	Rules(ctx context.Context) ([]Rule, error)
 	Sources(ctx context.Context) ([]Source, error)
 	Schemas(ctx context.Context, sources []Source) (map[string]Schema, error)
+}
+
+// Resolver is an optional backend capability for resolving rule selectors
+// with the backend's native index-expression semantics.
+type Resolver interface {
+	ResolveInputs(ctx context.Context, rules []Rule) ([]InputResolution, error)
+}
+
+// VersionProvider is an optional, best-effort backend version capability.
+type VersionProvider interface {
+	Version(ctx context.Context) (string, error)
+}
+
+// CandidateParser is an optional backend capability for parsing a proposed
+// detection without installing it. Candidate formats are backend-specific;
+// callers must never silently feed one backend's format to another parser.
+type CandidateParser interface {
+	ParseCandidates(data []byte) ([]Rule, error)
 }

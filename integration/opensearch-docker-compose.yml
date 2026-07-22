@@ -2,7 +2,7 @@ name: deadair-opensearch-integration
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:${OPENSEARCH_VERSION:-2.19.3}
+    image: opensearchproject/opensearch:${OPENSEARCH_VERSION:-3.7.0}
     environment:
       discovery.type: single-node
       OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${DEADAIR_IT_OPENSEARCH_ADMIN_PASSWORD:-DeadairAdmin123!}

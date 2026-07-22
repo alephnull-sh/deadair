@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://big-comfy.github.io/deadair/schemas/fleet-report-v1.schema.json",
+  "title": "deadair fleet report v1",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "producer", "summary", "instances"],
+  "properties": {
+    "schema_version": { "const": "deadair.fleet-report.v1" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "producer": { "$ref": "report-v1.schema.json#/$defs/producer" },
+    "redacted": { "type": "boolean" },
+    "summary": { "$ref": "#/$defs/fleetSummary" },
+    "rollups": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fleetRollup" }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/instanceError" }
+    },
+    "instances": {
+      "type": ["array", "null"],
+      "items": { "$ref": "report-v1.schema.json" }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "fleetSummary": {
+      "type": "object",
+      "required": ["instances", "dead_detections", "degraded_sources", "unused_bytes", "unused_telemetry_assessment"],
+      "properties": {
+        "instances": { "type": "integer" },
+        "instances_failed": { "type": "integer" },
+        "dead_detections": { "type": "integer" },
+        "impaired_detections": { "type": "integer" },
+        "degraded_sources": { "type": "integer" },
+        "unused_bytes": { "type": "integer" },
+        "unused_telemetry_assessment": {
+          "type": "string",
+          "enum": ["complete", "legacy", "unavailable", "not-applicable"]
+        }
+      },
+      "additionalProperties": true
+    },
+    "fleetRollup": {
+      "type": "object",
+      "required": ["name", "severity", "of"],
+      "properties": {
+        "name": { "type": "string" },
+        "severity": { "type": "string" },
+        "dead_in": { "type": "integer" },
+        "impaired_in": { "type": "integer" },
+        "of": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "instanceError": {
+      "type": "object",
+      "required": ["instance", "error"],
+      "properties": {
+        "instance": { "type": "string" },
+        "error": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

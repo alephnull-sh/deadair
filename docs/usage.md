@@ -1,8 +1,23 @@
 # Usage guide
 
-This guide covers the day-to-day workflows: first scan, triage, CI gates, stateful checks,
+This guide covers the day-to-day workflows: embedded demo, first scan, triage, CI gates, stateful checks,
 fleets, exporter mode, and report sharing. For credential setup, run `deadair setup` or use the
 backend guides under [credentials/](credentials/).
+
+## Try the embedded demo
+
+Run the complete reporting path before creating a credential:
+
+```sh
+deadair demo
+deadair demo --json
+deadair demo --out demo.json --html-out demo.html
+```
+
+The demo uses deterministic evidence embedded in the binary. It does not contact a SIEM, start a
+container, read environment credentials, or write anything unless an output path is supplied. It
+shows healthy telemetry alongside disconnected, starved, missing-field, lag, and unused-telemetry
+findings. The command exits `0` because its findings are illustrative.
 
 ## First scan
 
@@ -32,7 +47,7 @@ Exit codes:
 | Code | Meaning |
 |---:|---|
 | `0` | scan completed and no findings were present |
-| `1` | scan completed and found dead, impaired, degraded, or unused coverage |
+| `1` | scan completed and found dead or impaired detections, degraded sources, low volume, or schema drift |
 | `2` | scan failed or the fleet scan was incomplete |
 
 Useful connection flags:
@@ -54,21 +69,22 @@ Terms used in reports:
 
 | Term | Meaning |
 |---|---|
-| rule pattern | index or data-stream expression configured on the detection, such as `winlogbeat-*` |
+| rule input | backend expression configured on the detection, such as an index selector, alias, or data view |
 | source | concrete index or data stream visible to deadair, such as `winlogbeat-2026.07` |
-| matched source | concrete source matched by at least one rule pattern |
+| resolved source | concrete source returned by the backend's native input-resolution API |
 | dead detection | enabled rule with no matched source, or with only stale/empty matched sources |
 | impaired detection | enabled rule with live input but positive evidence of reduced field or timing coverage |
 
-The source inventory is credential-scoped. If the read role cannot see an expected index, deadair
-cannot distinguish that index from one that does not exist. Check role scope before treating a
-first-run no-match finding as a production outage.
+The source inventory is credential-scoped. deadair records whether each input was `resolved`,
+`empty`, `unsupported`, `unavailable`, `remote`, or `ambiguous`. Only an `empty` result backed by a
+successful native resolution can support a no-match finding. Permission failures and unsupported
+query types stay visible as unassessed inputs; they are never silently treated as healthy or dead.
 
 ### No matching source
 
 Human reports say `no matching source`; JSON uses the stable reason code `disconnected`. It means
-none of the enabled rule's configured patterns resolved to a concrete index or data stream in the
-inventory visible to deadair.
+the backend understood the enabled rule's input and positively resolved it to no concrete index,
+alias target, or data stream visible to the credential.
 
 It does not mean the SIEM, agent, or network connection is disconnected. A connection or
 authentication failure makes the scan or fleet instance fail and returns exit `2`; it is not a rule
@@ -101,9 +117,9 @@ Common explanations:
 
 First response:
 
-1. Read `dead_detections[].patterns` in the JSON report.
-2. Confirm whether any expected concrete index or data stream currently matches those patterns.
-3. Confirm the deadair credential can see that source.
+1. Read `dead_detections[].patterns` and the rule's `input_resolutions` evidence in the JSON report.
+2. Confirm whether the native resolver returned the expected alias, data stream, or concrete index.
+3. Confirm the deadair credential can resolve and read that source.
 4. Classify the finding as expected scope, onboarding work, or regression.
 5. Update the rule pattern, restore the integration, or disable the intentionally out-of-scope rule.
 
@@ -152,11 +168,19 @@ the source's real delivery behavior and the rule type.
 | `maintenance` | a downtime window currently suppresses stale/empty classification | confirm the declared window still matches the operating schedule |
 | low volume | source is below its own weekday/hour baseline after warmup and hysteresis | compare known business cycles and upstream volume before paging |
 | schema drift | fields were added, removed, or changed type since the prior snapshot | correlate with package, parser, and pipeline releases |
-| unused telemetry | source has data but no enabled rule pattern resolves to it | confirm intentional collection, disabled rules, and planned coverage before changing ingest |
+| unused telemetry | source has data and every enabled local input was assessed, but none resolves to it | confirm intentional collection, disabled rules, and planned coverage before changing ingest |
 
 `remote_rules` contains cross-cluster patterns such as `cluster:index-*`; scan the remote cluster as
-its own fleet instance. `unmapped` contains rules whose inputs cannot be derived from available
-metadata, such as some ML rules. Both are informational because deadair does not guess.
+its own fleet instance. `unmapped_rules` retains unsupported, unavailable, and ambiguous input
+assessments, including query types deadair cannot safely interpret yet. These are informational
+because deadair does not turn uncertainty into a finding.
+
+If an enabled local input is unsupported, unavailable, or ambiguous, unused telemetry is marked
+`unavailable` and withheld rather than turning incomplete coverage into a cost finding. Candidate
+reports mark it `not-applicable`.
+
+The full evidence is in `input_resolutions`. Each record includes the declared selector or ordered
+expression, status, resolution method, observation time, logical aliases, and resolved sources.
 
 `--include` and `--exclude` only change what the report lists. They do not change verdicts.
 
@@ -169,8 +193,9 @@ deadair scan --rule candidate-rule.json
 ```
 
 The candidate file can be a single JSON rule object or an ndjson export. deadair evaluates that
-rule against the live environment without installing it. The exit code reflects only the
-candidate rule, so an existing backlog does not block unrelated pull requests.
+rule against the live environment without installing it. Exit `1` means the candidate is dead or
+impaired; exit `2` means its inputs were unsupported, unavailable, ambiguous, remote, or otherwise
+not safely assessed. Existing source-health findings do not block the candidate gate.
 
 Use `diff` for scheduled checks while the backlog is still being worked down:
 
@@ -266,7 +291,9 @@ deadair serve --fleet fleet.json
 
 Fleet scans are sequential. One failed tenant is recorded as an instance error and the command
 exits `2`; successful tenants still appear in the same report. With `--state-file`, deadair writes
-one state file per instance.
+one state file per instance. The fleet summary carries `unused_telemetry_assessment`; it is
+`unavailable` if any instance failed or could not establish complete local consumer coverage, so a
+partial `unused_bytes` total is not presented as a fleet-wide measurement.
 
 Use `check --fleet` after onboarding a tenant or rotating a tenant secret.
 

@@ -3,12 +3,13 @@
 deadair needs read access to two things:
 
 1. Security Analytics detector metadata
-2. OpenSearch source inventory, freshness, and optional field metadata
+2. OpenSearch native index/alias/data-stream resolution, source inventory, freshness, and optional field metadata
 
 It does not need detector writes, document writes, index management, or user/role management.
 
-Status: proven against OpenSearch 2.19.3 by the integration suite. The test scans successfully
-with only the roles below, then verifies representative writes are rejected.
+Status: the trusted integration matrix tests OpenSearch 2.19.6 and 3.7.0. Each lane scans with only
+the roles below, exercises native input resolution, and verifies representative writes are
+rejected. See the [support policy](../support-policy.md) for exact-version support.
 
 ## Roles
 
@@ -87,10 +88,12 @@ deadair scan
 
 ## Calls deadair makes
 
+- `GET /` for backend version discovery
 - `POST /_plugins/_security_analytics/detectors/_search`
+- `GET /_resolve/index/<expression>?ignore_unavailable=true`
 - `GET /_data_stream/_stats`
 - `GET /_cat/indices?format=json&h=index,docs.count,store.size&bytes=b`
-- `POST /<index>/_search` with `size: 0` aggregations for freshness and ingest lag
+- `POST /<index>/_search` with `size: 0` aggregations for freshness
 - `GET /<index>/_field_caps` when `--schema` is enabled
 
 If an audit shows deadair requesting detector writes, document writes, index creation/deletion, or

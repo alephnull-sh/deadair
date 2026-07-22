@@ -12,17 +12,36 @@
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
 
-**deadair tells you which enabled SIEM detections cannot see the telemetry they depend on.**
+**Open-source SIEM detection health**
 
-It runs outside the SIEM with a read-only credential. It reads the rule inventory, reads source
-freshness and schema metadata, builds a rule-to-source map, then reports coverage gaps that normal
-rule execution health alone does not show.
+Find enabled detections that are blind because their telemetry is missing, stale, late, or
+schema-incompatible.
+
+Runs locally. Read-only. No agent. No telemetry upload.
+
+```sh
+deadair demo
+```
+
+The embedded demo needs no SIEM, credentials, or Docker. It produces the same terminal, JSON, and
+HTML findings as a live scan from deterministic synthetic evidence.
+
+### What deadair proves
+
+deadair verifies that a detection's observable telemetry prerequisites are present and healthy in
+the environment being scanned.
+
+### What it does not prove
+
+deadair does not prove that rule logic is correct or that a simulated attack will produce an
+alert. Pair it with static rule validation and end-to-end detection testing for those layers.
 
 In deadair reports, a **rule pattern** is an index or data-stream expression configured on a
 detection, such as `winlogbeat-*`. A **source** is a concrete index or data stream visible to the
 deadair credential, such as `winlogbeat-2026.07` or
 `logs-windows.sysmon_operational-default`. It is not the agent, connector, or upstream product.
-deadair reports a match when a rule pattern resolves to at least one of those concrete sources.
+deadair asks the backend to resolve rule inputs using its native index, alias, data-stream, and
+selector semantics, then connects the result to the concrete sources it can assess.
 
 Use it to answer three SOC questions:
 
@@ -35,13 +54,13 @@ Use it to answer three SOC questions:
 No agent. No SIEM-side install. No writes to the monitored cluster. Elastic Security and
 OpenSearch Security Analytics are the only supported backends today.
 
-[Get started](#get-started) | [Findings](#findings) | [CI gates](#ci-gates) |
+[Try the demo](#get-started) | [Findings](#findings) | [CI gates](#ci-gates) |
 [Fleet and MSSP use](#fleet-and-mssp-use) | [Exporter](#exporter) |
 [Supported SIEMs](#supported-siems) | [Validation](#validation) | [Docs](#docs)
 
-## Example
+## Live lab example
 
-This demo scans an Elastic 8.17 lab with the Elastic prebuilt rule package installed, about 500
+This separate live lab scan uses Elastic with the prebuilt rule package installed, about 500
 rules enabled, and only a few seeded data streams:
 
 <p align="center">
@@ -87,6 +106,8 @@ go install github.com/Big-Comfy/deadair/cmd/deadair@latest
 Then run:
 
 ```sh
+deadair demo    # deterministic evaluation; no credentials or Docker
+
 deadair setup   # print the least-privilege role and credential commands
 deadair check   # verify the connection and required privileges
 deadair scan    # produce the first report
@@ -133,7 +154,7 @@ deadair separates rule dependency findings from source-health findings.
 | empty source | the index or data stream exists with zero documents | confirm the integration, routing, and ingest pipeline |
 | missing fields | best-effort rule-declared fields are absent from every matched source mapping checked with `field_caps` | compare rule metadata with the current parser and mapping |
 | lag blind window | measured ingest lag exceeds the rule's lookback-minus-interval margin, so events can miss the search window | compare source lag with rule interval, lookback, and timestamp override |
-| unused telemetry | the source has data but no enabled rule pattern resolves to it | confirm intentional collection, disabled rules, and coverage plans |
+| unused telemetry | the source has data and every enabled local input was assessed, but none resolves to it | confirm intentional collection, disabled rules, and coverage plans |
 
 All findings are limited to the rules and sources visible to the configured credential. A narrowly
 scoped role that cannot see an expected index can look the same as an absent index. Validate role
@@ -175,8 +196,9 @@ deadair scan --json --out today.json
 deadair diff yesterday.json today.json
 ```
 
-`scan --rule` fails only for the candidate rule. `diff` fails only for new dead, impaired, or
-degraded findings. Both work on redacted reports because redaction is deterministic.
+`scan --rule` exits `1` for a dead or impaired candidate and `2` when the candidate cannot be
+assessed safely; unrelated source degradation does not fail it. `diff` fails only for new dead,
+impaired, or degraded findings. Both work on redacted reports because redaction is deterministic.
 
 <p align="center">
   <img alt="deadair scan --rule and diff CI gate output" src="docs/assets/ci.gif" width="860">
@@ -253,12 +275,16 @@ By default it binds `127.0.0.1:9317`. Grafana and Alertmanager examples are in
 
 ## Supported SIEMs
 
-Only two backends are supported today:
+Only two backends are supported today. The trusted integration matrix covers the current and
+previous major lines:
 
-| Backend | Version line | Status | Evidence |
+| Backend | Tested versions | Status | Evidence |
 |---|---|---|---|
-| Elastic Security | 8.x | supported | live CI, least-privilege docs, rejected-write proof |
-| OpenSearch Security Analytics | 2.x | supported | live CI, least-privilege docs, rejected-write proof |
+| Elastic Security | 8.19.19, 9.4.4 | supported | live matrix, least-privilege docs, rejected-write proof |
+| OpenSearch Security Analytics | 2.19.6, 3.7.0 | supported | live matrix, least-privilege docs, rejected-write proof |
+
+See the [backend support policy](docs/support-policy.md) for the meaning of tested, supported, and
+best effort, plus the removal policy.
 
 No preview or experimental backends ship in this release. Microsoft Sentinel is the first planned
 preview target. Google SecOps and other SIEMs are demand-ranked candidates. Splunk is out of

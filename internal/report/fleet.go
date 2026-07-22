@@ -12,12 +12,14 @@ import (
 // cross-instance rollups. Instance names can be client identities (MSSPs):
 // Redact digests them like everything else.
 type FleetReport struct {
-	GeneratedAt time.Time       `json:"generated_at"`
-	Redacted    bool            `json:"redacted,omitempty"`
-	Summary     FleetSummary    `json:"summary"`
-	Rollups     []FleetRollup   `json:"rollups,omitempty"`
-	Errors      []InstanceError `json:"errors,omitempty"`
-	Instances   []*Report       `json:"instances"`
+	SchemaVersion string          `json:"schema_version"`
+	GeneratedAt   time.Time       `json:"generated_at"`
+	Producer      Producer        `json:"producer"`
+	Redacted      bool            `json:"redacted,omitempty"`
+	Summary       FleetSummary    `json:"summary"`
+	Rollups       []FleetRollup   `json:"rollups,omitempty"`
+	Errors        []InstanceError `json:"errors,omitempty"`
+	Instances     []*Report       `json:"instances"`
 }
 
 // InstanceError records a fleet member whose scan failed entirely.
@@ -28,12 +30,13 @@ type InstanceError struct {
 
 // FleetSummary rolls the per-instance summaries up.
 type FleetSummary struct {
-	Instances          int   `json:"instances"`
-	InstancesFailed    int   `json:"instances_failed,omitempty"`
-	DeadDetections     int   `json:"dead_detections"`
-	ImpairedDetections int   `json:"impaired_detections,omitempty"`
-	DegradedSources    int   `json:"degraded_sources"`
-	UnusedBytes        int64 `json:"unused_bytes"`
+	Instances                 int                       `json:"instances"`
+	InstancesFailed           int                       `json:"instances_failed,omitempty"`
+	DeadDetections            int                       `json:"dead_detections"`
+	ImpairedDetections        int                       `json:"impaired_detections,omitempty"`
+	DegradedSources           int                       `json:"degraded_sources"`
+	UnusedBytes               int64                     `json:"unused_bytes"`
+	UnusedTelemetryAssessment UnusedTelemetryAssessment `json:"unused_telemetry_assessment"`
 }
 
 // FleetRollup is one rule identity (matched by name, since IDs differ per
@@ -48,9 +51,27 @@ type FleetRollup struct {
 
 // BuildFleet assembles the fleet view from per-instance reports.
 func BuildFleet(instances []*Report, errs []InstanceError) *FleetReport {
-	f := &FleetReport{GeneratedAt: time.Now().UTC(), Instances: instances, Errors: errs}
+	return BuildFleetWithVersion(instances, errs, "")
+}
+
+// BuildFleetWithVersion assembles a fleet report with an explicit producer
+// version, including when every instance failed before producing a report.
+func BuildFleetWithVersion(instances []*Report, errs []InstanceError, producerVersion string) *FleetReport {
+	if len(instances) > 0 {
+		if producerVersion == "" {
+			producerVersion = instances[0].Producer.Version
+		}
+	}
+	f := &FleetReport{
+		SchemaVersion: FleetReportSchemaVersion,
+		GeneratedAt:   time.Now().UTC(),
+		Producer:      producer(producerVersion),
+		Instances:     instances,
+		Errors:        errs,
+	}
 	f.Summary.Instances = len(instances) + len(errs)
 	f.Summary.InstancesFailed = len(errs)
+	f.Summary.UnusedTelemetryAssessment = fleetUnusedTelemetryAssessment(instances, errs)
 
 	type agg struct {
 		severity       string
@@ -98,6 +119,35 @@ func BuildFleet(instances []*Report, errs []InstanceError) *FleetReport {
 	return f
 }
 
+func fleetUnusedTelemetryAssessment(instances []*Report, errs []InstanceError) UnusedTelemetryAssessment {
+	if len(errs) > 0 || len(instances) == 0 {
+		return UnusedAssessmentUnavailable
+	}
+	sawAssessed, sawNotApplicable, sawLegacy := false, false, false
+	for _, instance := range instances {
+		switch instance.Summary.UnusedTelemetryAssessment {
+		case UnusedAssessmentComplete:
+			sawAssessed = true
+		case UnusedAssessmentLegacy:
+			sawAssessed, sawLegacy = true, true
+		case UnusedAssessmentNotApplicable:
+			sawNotApplicable = true
+		default:
+			return UnusedAssessmentUnavailable
+		}
+	}
+	if sawNotApplicable {
+		if sawAssessed {
+			return UnusedAssessmentUnavailable
+		}
+		return UnusedAssessmentNotApplicable
+	}
+	if sawLegacy {
+		return UnusedAssessmentLegacy
+	}
+	return UnusedAssessmentComplete
+}
+
 // ExitCode: any failed instance is an incomplete scan (2); otherwise findings
 // in any instance gate as usual.
 func (f *FleetReport) ExitCode() int {
@@ -110,6 +160,25 @@ func (f *FleetReport) ExitCode() int {
 		}
 	}
 	return ExitHealthy
+}
+
+// CandidateExitCode evaluates only candidate-rule outcomes across the fleet.
+// Instance errors or unassessed candidates make the gate incomplete (2);
+// unrelated source-health findings do not fail it.
+func (f *FleetReport) CandidateExitCode() int {
+	if len(f.Errors) > 0 {
+		return ExitError
+	}
+	result := ExitHealthy
+	for _, r := range f.Instances {
+		switch r.CandidateExitCode() {
+		case ExitError:
+			return ExitError
+		case ExitFindings:
+			result = ExitFindings
+		}
+	}
+	return result
 }
 
 // Write writes the JSON fleet report to path with 0600 permissions.

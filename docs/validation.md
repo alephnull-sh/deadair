@@ -6,15 +6,19 @@ triage, start with [Read the findings](usage.md#read-the-findings).
 
 ## What is proven today
 
-Current supported backends are Elastic Security 8.x and OpenSearch Security Analytics 2.x.
+The trusted integration matrix targets Elastic Security 8.19.19 and 9.4.4, plus OpenSearch
+Security Analytics 2.19.6 and 3.7.0. See the [support policy](support-policy.md) for how exact tested
+versions relate to current/previous-major support.
 
 The public test and lab coverage proves these paths:
 
 | Area | Evidence |
 |---|---|
 | core graph logic | unit tests and race tests in CI |
+| credential-free evaluation | deterministic embedded `deadair demo` fixture through terminal, JSON, and HTML output |
 | Elastic backend | live Elastic integration test with the documented read-only role |
 | OpenSearch backend | live OpenSearch integration test with the documented read-only role |
+| native input resolution | alias, data-stream, exclusion, empty, and unavailable outcomes in backend tests and the live matrix |
 | write safety | integration tests assert representative writes are rejected |
 | candidate-rule checks | `scan --rule` tests, including pretty-printed JSON rules |
 | fleet behavior | mixed-backend fleet integration test |
@@ -47,7 +51,7 @@ Start with the lowest level that your environment allows.
 
 | Level | Run | Goal |
 |---|---|---|
-| 0 - review | read the README and sample reports | decide whether the model makes sense for your team |
+| 0 - demo | `deadair demo` | inspect every core finding without credentials, Docker, or a SIEM |
 | 1 - lab | `make mssp-lab` | verify the local operator workflow in throwaway containers |
 | 2 - test SIEM | one `check` and one redacted `scan` against a test/dev SIEM | validate privileges and report shape |
 | 3 - production one-shot | one read-only redacted scan against a production SIEM | compare findings to known telemetry state |
@@ -98,11 +102,12 @@ what an operator can verify in the SIEM.
 
 | Finding | Evidence to compare | Useful confirmation |
 |---|---|---|
-| no matching source | rule name, configured patterns, credential-visible source inventory | confirm whether a concrete index/data stream should match; check role scope before calling it absent |
+| no matching source | rule name, declared selector, native `empty` resolution evidence | confirm the backend understood the selector; check role scope before calling it absent |
+| unassessed input | `unsupported`, `unavailable`, `remote`, or `ambiguous` resolution evidence | fix permissions/API access, scan the remote deployment, or report an unsupported rule type; do not classify it as dead |
 | all matching sources stale or empty | matched source names, status, document count, last-event age | compare with the source's expected cadence and upstream pipeline state |
 | missing fields | declared fields, `field_caps` result, matched sources | compare mappings after a known parser, package, or pipeline change |
 | lag blind window | affected source, measured lag, rule interval and lookback | compare with observed delivery delay and the rule's timestamp behavior |
-| unused telemetry | source name, document count, enabled and disabled consumers | confirm whether collection is intentional and whether relevant rules are disabled or missing |
+| unused telemetry | source name, document count, known resolved enabled and disabled consumers, plus `unused_telemetry_assessment=complete` | confirm whether collection is intentional and whether relevant rules are disabled or missing |
 | downtime suppression | source and matched downtime window | confirm the window matches the real operating schedule and timezone |
 | low volume | current rate, baseline, sample count, warmup and hysteresis state | compare with known business cycles after enough history exists |
 | fleet failure | instance error plus successful instance reports | confirm one bad credential or unreachable tenant does not hide the rest of the fleet |

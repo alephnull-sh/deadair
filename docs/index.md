@@ -22,7 +22,8 @@ sources are in. Here a source means a concrete index or data stream visible to t
 credential, not an agent, connector, or upstream product. The join breaks four ways, and I keep
 hitting the same four.
 
-- **No matching source.** Index patterns that resolve to zero indices or data streams. For example,
+- **No matching source.** Inputs the SIEM's native resolver positively resolves to zero aliases,
+  indices, or data streams. For example,
   a rule copied from a NetFlow-enabled tenant still searches `netflow-*`, but the receiving tenant
   has never onboarded NetFlow.
 - **All matching sources stale or empty.** The sources exist but have stopped sending data or never
@@ -38,6 +39,7 @@ queries `winlogbeat-*`, while current events now land in
 
 ```text
 configured rule pattern    winlogbeat-*
+resolution method          backend resolve-index API
 visible concrete sources   logs-windows.sysmon_operational-default
 sources matching pattern   none
 finding                    no matching source
@@ -59,10 +61,12 @@ empty.
 
 ## Dead detections and blast radius
 
-That scan is most of what deadair does. It resolves each rule's patterns against the credential-visible
+That scan is most of what deadair does. It asks the SIEM to resolve each rule input using native
+alias, data-stream, index, and exclusion semantics, connects those results to the credential-visible
 source inventory, checks matched-source state, and reports the evidence per rule. A no-match finding
-keeps the configured patterns; a stale-or-empty finding keeps the degraded source names and health
-evidence.
+requires a positive empty resolution; unsupported, unavailable, remote, and ambiguous inputs remain
+unassessed rather than being guessed dead. A stale-or-empty finding keeps the degraded source names
+and health evidence.
 
 The per-rule part is what makes it useful. Plenty of tools tell you a source went quiet; few tell you
 which enabled detection just died because of it. The graph also runs backwards, which is the view a SOC

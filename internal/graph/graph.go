@@ -10,20 +10,24 @@ import (
 
 // Graph is the rule ↔ source dependency graph.
 type Graph struct {
-	Rules   []backend.Rule
-	Sources []backend.Source
+	Rules            []backend.Rule
+	Sources          []backend.Source
+	Resolutions      []backend.InputResolution
+	NativeResolution bool
 
-	ruleSources map[string][]string // rule ID -> source names
-	sourceRules map[string][]string // source name -> rule IDs
+	ruleSources    map[string][]string                  // rule ID -> source names
+	sourceRules    map[string][]string                  // source name -> rule IDs
+	ruleResolution map[string][]backend.InputResolution // rule ID -> native evidence
 }
 
 // Build matches every rule's index patterns against every source name.
 func Build(rules []backend.Rule, sources []backend.Source) *Graph {
 	g := &Graph{
-		Rules:       rules,
-		Sources:     sources,
-		ruleSources: make(map[string][]string, len(rules)),
-		sourceRules: make(map[string][]string, len(sources)),
+		Rules:          rules,
+		Sources:        sources,
+		ruleSources:    make(map[string][]string, len(rules)),
+		sourceRules:    make(map[string][]string, len(sources)),
+		ruleResolution: make(map[string][]backend.InputResolution, len(rules)),
 	}
 	for _, r := range rules {
 		for _, s := range sources {
@@ -31,6 +35,54 @@ func Build(rules []backend.Rule, sources []backend.Source) *Graph {
 				g.ruleSources[r.ID] = append(g.ruleSources[r.ID], s.Name)
 				g.sourceRules[s.Name] = append(g.sourceRules[s.Name], r.ID)
 			}
+		}
+	}
+	return g
+}
+
+// BuildResolved constructs the graph from backend-native resolution evidence.
+// A resolution can only create an edge when it is resolved and the named
+// source is present in the supplied inventory.
+func BuildResolved(rules []backend.Rule, sources []backend.Source, resolutions []backend.InputResolution) *Graph {
+	g := &Graph{
+		Rules:            rules,
+		Sources:          sources,
+		Resolutions:      append([]backend.InputResolution(nil), resolutions...),
+		NativeResolution: true,
+		ruleSources:      make(map[string][]string, len(rules)),
+		sourceRules:      make(map[string][]string, len(sources)),
+		ruleResolution:   make(map[string][]backend.InputResolution, len(rules)),
+	}
+	inventory := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		inventory[source.Name] = struct{}{}
+	}
+	knownRules := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		knownRules[rule.ID] = struct{}{}
+	}
+	edges := make(map[string]map[string]struct{}, len(rules))
+	for _, resolution := range resolutions {
+		if _, ok := knownRules[resolution.RuleID]; !ok {
+			continue
+		}
+		g.ruleResolution[resolution.RuleID] = append(g.ruleResolution[resolution.RuleID], resolution)
+		if resolution.Status != backend.ResolutionResolved {
+			continue
+		}
+		for _, source := range resolution.ResolvedSources {
+			if _, ok := inventory[source]; !ok {
+				continue
+			}
+			if edges[resolution.RuleID] == nil {
+				edges[resolution.RuleID] = make(map[string]struct{})
+			}
+			if _, exists := edges[resolution.RuleID][source]; exists {
+				continue
+			}
+			edges[resolution.RuleID][source] = struct{}{}
+			g.ruleSources[resolution.RuleID] = append(g.ruleSources[resolution.RuleID], source)
+			g.sourceRules[source] = append(g.sourceRules[source], resolution.RuleID)
 		}
 	}
 	return g
@@ -59,6 +111,12 @@ func (g *Graph) SourcesFor(ruleID string) []string { return g.ruleSources[ruleID
 // RulesFor returns the IDs of the rules that consume the named source — its
 // blast radius.
 func (g *Graph) RulesFor(source string) []string { return g.sourceRules[source] }
+
+// ResolutionsFor returns the backend-native input-resolution evidence stored
+// for a rule.
+func (g *Graph) ResolutionsFor(ruleID string) []backend.InputResolution {
+	return g.ruleResolution[ruleID]
+}
 
 // MatchAny reports whether name matches any of the patterns.
 func MatchAny(patterns []string, name string) bool {

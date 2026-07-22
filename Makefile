@@ -13,10 +13,13 @@ MSSP_LAB_OUT ?= integration/mssp-lab-out
 MSSP_LAB_OUT_ABS := $(if $(filter /%,$(MSSP_LAB_OUT)),$(MSSP_LAB_OUT),$(CURDIR)/$(MSSP_LAB_OUT))
 MSSP_LAB_METRICS_ADDR ?= 127.0.0.1:19317
 
-.PHONY: build test vet fmt check release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
+.PHONY: build static-build test race vet fmt check tidy-check validate release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BIN) ./cmd/deadair
+
+static-build:
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o /dev/null ./cmd/deadair
 
 RELEASE_TARGETS := darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64 windows-arm64
 
@@ -32,6 +35,9 @@ release:
 	(cd $(DIST) && shasum -a 256 deadair_$(VERSION)_* > checksums.txt)
 
 test:
+	go test ./...
+
+race:
 	go test -race ./...
 
 vet:
@@ -40,8 +46,26 @@ vet:
 fmt:
 	gofmt -l -w .
 
-check: vet test
+check: vet test race
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:"; gofmt -l .; exit 1)
+
+tidy-check:
+	@set -eu; \
+	tmpmod=.deadair-tidy.$$$$.mod; \
+	tmpsum=$${tmpmod%.mod}.sum; \
+	trap 'rm -f "$$tmpmod" "$$tmpsum"' EXIT HUP INT TERM; \
+	cp go.mod "$$tmpmod"; \
+	if [ -f go.sum ]; then cp go.sum "$$tmpsum"; fi; \
+	go mod tidy -modfile="$$tmpmod"; \
+	diff -u go.mod "$$tmpmod"; \
+	if [ -f go.sum ]; then \
+		diff -u go.sum "$$tmpsum"; \
+	elif [ -s "$$tmpsum" ]; then \
+		echo "go mod tidy would create go.sum"; \
+		exit 1; \
+	fi
+
+validate: check static-build tidy-check
 
 integration-up:
 	$(COMPOSE) up -d --wait

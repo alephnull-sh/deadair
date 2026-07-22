@@ -2,7 +2,7 @@ name: deadair-integration
 
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.17.4}
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-9.4.4}
     environment:
       discovery.type: single-node
       ELASTIC_PASSWORD: ${DEADAIR_IT_PASSWORD:-changeme-deadair}
@@ -22,7 +22,7 @@ services:
 
   # one-shot: set the kibana_system password so Kibana can connect
   kibana-init:
-    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.17.4}
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-9.4.4}
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -35,7 +35,7 @@ services:
       -d "{\"password\":\"$${ELASTIC_PASSWORD}\"}"; do sleep 2; done'
 
   kibana:
-    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-8.17.4}
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-9.4.4}
     depends_on:
       kibana-init:
         condition: service_completed_successfully

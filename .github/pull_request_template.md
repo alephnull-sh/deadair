@@ -1,4 +1,18 @@
-External pull requests are not being accepted yet. CI runs live-container integration suites that
-cannot safely run on fork PRs.
+## What changed
 
-Please open an issue instead so the change can be discussed and picked up from there.
+Describe the operator problem and the smallest useful change.
+
+## How it was checked
+
+- [ ] `make validate`
+- [ ] Tests cover the new or changed behavior
+- [ ] Docker integration tests were run, or the reason they were not is noted below
+
+## Safety and compatibility
+
+- [ ] Production backend code remains read-only; no monitored-SIEM write API was added
+- [ ] Fixtures and examples contain no credentials, customer data, or unredacted SOC names
+- [ ] User-facing behavior, support claims, and report contract changes are documented, or none changed
+- [ ] New backend work has an accepted backend RFC, or this change does not touch backend APIs
+
+Notes for reviewers:

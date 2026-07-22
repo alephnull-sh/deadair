@@ -21,6 +21,14 @@ import (
 // touches: one healthy data stream, one unused data stream, one stale plain
 // index, and five rules covering every classification path.
 func fixtureServer(t *testing.T) *httptest.Server {
+	return fixtureServerOptions(t, "9.4.4", 0)
+}
+
+func fixtureServerOptions(t *testing.T, version string, resolveStatus int) *httptest.Server {
+	return fixtureServerCapabilities(t, version, resolveStatus, 0)
+}
+
+func fixtureServerCapabilities(t *testing.T, version string, resolveStatus, dataViewStatus int) *httptest.Server {
 	t.Helper()
 	now := time.Now()
 	mux := http.NewServeMux()
@@ -28,13 +36,27 @@ func fixtureServer(t *testing.T) *httptest.Server {
 		if got := r.Header.Get("Authorization"); got != "ApiKey testkey" {
 			t.Errorf("Authorization = %q, want ApiKey testkey", got)
 		}
-		fmt.Fprint(w, `{"page":1,"perPage":100,"total":5,"data":[
+		totalRules := 5
+		extraRule := ""
+		if dataViewStatus != 0 {
+			totalRules++
+			extraRule = `,
+			{"id":"r6","name":"Data view rule","enabled":true,"severity":"medium","risk_score":40,"data_view_id":"dv-check"}`
+		}
+		fmt.Fprintf(w, `{"page":1,"perPage":100,"total":%d,"data":[
 			{"id":"r1","name":"Endpoint process anomaly","enabled":true,"severity":"critical","risk_score":99,"index":["logs-endpoint.events.*"]},
 			{"id":"r2","name":"Winlog suspicious logon","enabled":true,"severity":"high","risk_score":73,"index":["winlogbeat-*"]},
 			{"id":"r3","name":"Legacy netflow rule","enabled":true,"severity":"medium","risk_score":47,"index":["netflow-*"]},
 			{"id":"r4","name":"ML anomaly rule","enabled":true,"severity":"low","risk_score":21},
-			{"id":"r5","name":"Disabled endpoint rule","enabled":false,"severity":"high","risk_score":73,"index":["logs-endpoint.events.*"]}
-		]}`)
+			{"id":"r5","name":"Disabled endpoint rule","enabled":false,"severity":"high","risk_score":73,"index":["logs-endpoint.events.*"]}%s
+		]}`, totalRules, extraRule)
+	})
+	mux.HandleFunc("/api/data_views/data_view/dv-check", func(w http.ResponseWriter, r *http.Request) {
+		if dataViewStatus != 0 {
+			http.Error(w, "data view denied", dataViewStatus)
+			return
+		}
+		fmt.Fprint(w, `{"data_view":{"id":"dv-check","title":"logs-endpoint.events.*"}}`)
 	})
 	mux.HandleFunc("/_data_stream/_stats", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"data_streams":[
@@ -62,6 +84,28 @@ func fixtureServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/winlogbeat-2026.07/_field_caps", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"fields":{"@timestamp":{"date":{}},"event.code":{"long":{}},"host.name":{"keyword":{}}}}`)
 	})
+	mux.HandleFunc("/_resolve/index/", func(w http.ResponseWriter, r *http.Request) {
+		if resolveStatus != 0 {
+			http.Error(w, "resolution denied", resolveStatus)
+			return
+		}
+		expression := strings.TrimPrefix(r.URL.Path, "/_resolve/index/")
+		switch expression {
+		case "logs-endpoint.events.*":
+			fmt.Fprint(w, `{"data_streams":[{"name":"logs-endpoint.events.process-default","backing_indices":[".ds-logs-endpoint.events.process-default-2026.07.01-000001"]}]}`)
+		case "winlogbeat-*":
+			fmt.Fprint(w, `{"indices":[{"name":"winlogbeat-2026.07"}]}`)
+		default:
+			fmt.Fprint(w, `{}`)
+		}
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprintf(w, `{"version":{"number":%q}}`, version)
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -81,8 +125,15 @@ func TestScanEndToEnd(t *testing.T) {
 		t.Fatalf("output is not a JSON report: %v", err)
 	}
 	s := r.Summary
-	if s.Sources != 3 || s.DeadDetections != 2 || s.UnmappedRules != 1 || s.UnusedSources != 1 {
+	if s.Sources != 3 || s.DeadDetections != 2 || s.UnmappedRules != 1 || s.UnusedSources != 0 ||
+		s.UnusedTelemetryAssessment != report.UnusedAssessmentUnavailable {
 		t.Errorf("summary = %+v", s)
+	}
+	if r.SchemaVersion != report.ReportSchemaVersion || r.Producer.Name != "deadair" || r.BackendMetadata.ObservedVersion != "9.4.4" {
+		t.Errorf("report contract metadata = schema %q producer %+v backend %+v", r.SchemaVersion, r.Producer, r.BackendMetadata)
+	}
+	if len(r.InputResolutions) != 5 || s.InputResolution.Resolved != 3 || s.InputResolution.Empty != 1 || s.InputResolution.Unsupported != 1 {
+		t.Errorf("input resolution evidence = %d / %+v", len(r.InputResolutions), s.InputResolution)
 	}
 	reasons := map[string]string{}
 	for _, d := range r.DeadDetections {
@@ -458,6 +509,24 @@ func opensearchFixtureServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/os-stale-2026/_search", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"aggregations":{"latest":{"value":%d}}}`, now.Add(-26*time.Hour).UnixMilli())
 	})
+	mux.HandleFunc("/_resolve/index/", func(w http.ResponseWriter, r *http.Request) {
+		expression := strings.TrimPrefix(r.URL.Path, "/_resolve/index/")
+		switch expression {
+		case "logs-os-*":
+			fmt.Fprint(w, `{"data_streams":[{"name":"logs-os-default","backing_indices":[".ds-logs-os-default-2026.07.01-000001"]}]}`)
+		case "os-stale-*":
+			fmt.Fprint(w, `{"indices":[{"name":"os-stale-2026"}]}`)
+		default:
+			fmt.Fprint(w, `{}`)
+		}
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"version":{"number":"3.7.0"}}`)
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -481,8 +550,12 @@ func TestScanOpenSearchEndToEnd(t *testing.T) {
 	if r.Backend != "opensearch" {
 		t.Errorf("backend = %q, want opensearch", r.Backend)
 	}
+	if r.BackendMetadata.ObservedVersion != "3.7.0" {
+		t.Errorf("observed OpenSearch version = %q", r.BackendMetadata.ObservedVersion)
+	}
 	s := r.Summary
-	if s.Sources != 3 || s.DeadDetections != 2 || s.UnmappedRules != 1 || s.UnusedSources != 1 {
+	if s.Sources != 3 || s.DeadDetections != 2 || s.UnmappedRules != 1 || s.UnusedSources != 0 ||
+		s.UnusedTelemetryAssessment != report.UnusedAssessmentUnavailable {
 		t.Errorf("summary = %+v", s)
 	}
 	reasons := map[string]string{}
@@ -530,6 +603,39 @@ func TestScanCandidateRule(t *testing.T) {
 	code = cli.Run([]string{"scan", "--es-url", srv.URL, "--kibana-url", srv.URL, "--json", "--rule", live}, &stdout, &stderr)
 	if code != report.ExitHealthy {
 		t.Fatalf("live candidate exit = %d, want 0; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
+	}
+
+	unsupported := filepath.Join(dir, "unsupported.json")
+	os.WriteFile(unsupported, []byte(`{"rule_id":"cand-3","name":"Candidate ES|QL","severity":"high","type":"esql","query":"FROM logs-*"}`), 0o600)
+	stdout.Reset()
+	stderr.Reset()
+	code = cli.Run([]string{"scan", "--es-url", srv.URL, "--kibana-url", srv.URL, "--json", "--rule", unsupported}, &stdout, &stderr)
+	if code != report.ExitError {
+		t.Fatalf("unassessed candidate exit = %d, want 2; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
+	}
+	var unassessed report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &unassessed); err != nil || unassessed.Summary.UnmappedRules != 1 {
+		t.Fatalf("unassessed candidate report = %+v, %v", unassessed.Summary, err)
+	}
+}
+
+func TestScanCandidateRuleRejectsUnsupportedBackendFormat(t *testing.T) {
+	srv := opensearchFixtureServer(t)
+	defer srv.Close()
+	t.Setenv("DEADAIR_OPENSEARCH_USERNAME", "admin")
+	t.Setenv("DEADAIR_OPENSEARCH_PASSWORD", "secret")
+
+	candidate := filepath.Join(t.TempDir(), "candidate.json")
+	if err := os.WriteFile(candidate, []byte(`{"name":"candidate","index":["logs-os-*"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := cli.Run([]string{
+		"scan", "--backend", "opensearch", "--opensearch-url", srv.URL,
+		"--rule", candidate,
+	}, &stdout, &stderr)
+	if code != report.ExitError || !strings.Contains(stderr.String(), `candidate-rule parsing is unavailable for backend "opensearch"`) {
+		t.Fatalf("exit = %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -604,6 +710,19 @@ func TestScanFleet(t *testing.T) {
 		t.Fatalf("expected 'dead in 2 of 2' rollup, got %+v", f.Rollups)
 	}
 
+	// The fixture contains an input-unsupported rule, so consumer coverage is
+	// incomplete and the terminal summary must not present zero unused bytes as
+	// a measured result.
+	stdout.Reset()
+	stderr.Reset()
+	code = cli.Run([]string{"scan", "--fleet", cfg}, &stdout, &stderr)
+	if code != report.ExitFindings {
+		t.Fatalf("terminal fleet exit = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "unused not assessed") || strings.Contains(stdout.String(), "0 B unused") {
+		t.Fatalf("terminal fleet summary misstates unused coverage:\n%s", stdout.String())
+	}
+
 	// Redacted fleet output leaks no tenant names.
 	stdout.Reset()
 	code = cli.Run([]string{"scan", "--fleet", cfg, "--json", "--redact"}, &stdout, &stderr)
@@ -622,7 +741,7 @@ func TestSetupCommand(t *testing.T) {
 	if code := cli.Run([]string{"setup"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("setup exit = %d", code)
 	}
-	for _, want := range []string{"deadair_monitor", "feature_siemV2.read", "DEADAIR_ES_URL", "deadair scan"} {
+	for _, want := range []string{"deadair_monitor", "feature_siemV2.read", "feature_indexPatterns.read", "DEADAIR_ES_URL", "deadair scan"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("setup output missing %q", want)
 		}
@@ -713,7 +832,7 @@ func TestBareInvocationShowsHelp(t *testing.T) {
 	if code := cli.Run(nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("bare invocation exit = %d, want 0", code)
 	}
-	for _, want := range []string{"COMMANDS", "GET STARTED", "deadair setup", "deadair check"} {
+	for _, want := range []string{"COMMANDS", "GET STARTED", "deadair demo", "deadair setup", "deadair check"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("help missing %q", want)
 		}
@@ -740,7 +859,7 @@ func TestCheck(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("check exit = %d; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
 	}
-	for _, want := range []string{"detection rules readable (5 rules)", "source stats readable (3 sources)", "field mappings readable", "ready"} {
+	for _, want := range []string{"backend version 9.4.4", "detection rules readable (5 rules)", "source stats readable (3 sources)", "field mappings readable", "native input resolution readable (empty)", "source_resolution", "ready"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("check output missing %q:\n%s", want, stdout.String())
 		}
@@ -753,6 +872,37 @@ func TestCheck(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "not readable") {
 		t.Errorf("failure output:\n%s", stdout.String())
+	}
+
+	unsupported := fixtureServerOptions(t, "7.17.0", 0)
+	defer unsupported.Close()
+	stdout.Reset()
+	stderr.Reset()
+	code = cli.Run([]string{"check", "--es-url", unsupported.URL, "--kibana-url", unsupported.URL}, &stdout, &stderr)
+	if code != report.ExitError || !strings.Contains(stdout.String(), "backend version 7.17.0 unsupported") ||
+		strings.Contains(stdout.String(), "ready —") {
+		t.Fatalf("unsupported version check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	denied := fixtureServerOptions(t, "9.4.4", http.StatusForbidden)
+	defer denied.Close()
+	stdout.Reset()
+	stderr.Reset()
+	code = cli.Run([]string{"check", "--es-url", denied.URL, "--kibana-url", denied.URL}, &stdout, &stderr)
+	if code != report.ExitError || !strings.Contains(stdout.String(), "native input resolution is unavailable") ||
+		!strings.Contains(stdout.String(), "source_resolution") || !strings.Contains(stdout.String(), "runtime native-resolution probe failed") {
+		t.Fatalf("resolution capability check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	dataViewDenied := fixtureServerCapabilities(t, "9.4.4", 0, http.StatusForbidden)
+	defer dataViewDenied.Close()
+	stdout.Reset()
+	stderr.Reset()
+	code = cli.Run([]string{"check", "--es-url", dataViewDenied.URL, "--kibana-url", dataViewDenied.URL}, &stdout, &stderr)
+	if code != report.ExitError || !strings.Contains(stdout.String(), "rule input discovery unavailable for 1 enabled rule(s)") ||
+		!strings.Contains(stdout.String(), "runtime rule-input discovery failed for 1 enabled rule(s)") ||
+		strings.Contains(stdout.String(), "ready —") {
+		t.Fatalf("data-view capability check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 }
 

@@ -57,6 +57,67 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+func TestBuildResolvedUsesOnlyInventoriedResolvedSources(t *testing.T) {
+	rules := []backend.Rule{
+		{ID: "resolved", Patterns: []string{"legacy-*"}},
+		{ID: "empty", Patterns: []string{"logs-b-*"}},
+		{ID: "remote", Patterns: []string{"logs-c-*"}},
+	}
+	sources := []backend.Source{
+		{Name: "logs-a-default"},
+		{Name: "logs-b-default"},
+	}
+	resolutions := []backend.InputResolution{
+		{
+			RuleID:          "resolved",
+			Expression:      "alias-a",
+			Status:          backend.ResolutionResolved,
+			ResolvedSources: []string{"logs-a-default", "not-in-inventory", "logs-a-default"},
+			Aliases:         []string{"alias-a"},
+		},
+		{
+			RuleID:          "empty",
+			Expression:      "logs-b-*",
+			Status:          backend.ResolutionEmpty,
+			ResolvedSources: []string{"logs-b-default"},
+		},
+		{
+			RuleID:          "remote",
+			Selector:        "cluster:logs-a-*",
+			Status:          backend.ResolutionRemote,
+			ResolvedSources: []string{"logs-a-default"},
+		},
+		{
+			RuleID:          "unknown-rule",
+			Status:          backend.ResolutionResolved,
+			ResolvedSources: []string{"logs-b-default"},
+		},
+	}
+
+	g := BuildResolved(rules, sources, resolutions)
+	if got := g.SourcesFor("resolved"); len(got) != 1 || got[0] != "logs-a-default" {
+		t.Errorf("SourcesFor(resolved) = %v, want one deduplicated inventoried source", got)
+	}
+	if got := g.RulesFor("logs-a-default"); len(got) != 1 || got[0] != "resolved" {
+		t.Errorf("RulesFor(logs-a-default) = %v, want [resolved]", got)
+	}
+	if got := g.RulesFor("logs-b-default"); len(got) != 0 {
+		t.Errorf("non-resolved evidence created an edge: %v", got)
+	}
+	if got := g.SourcesFor("empty"); len(got) != 0 {
+		t.Errorf("empty evidence created an edge: %v", got)
+	}
+	if got := g.ResolutionsFor("resolved"); len(got) != 1 || got[0].Aliases[0] != "alias-a" {
+		t.Errorf("ResolutionsFor(resolved) = %+v, want stored alias evidence", got)
+	}
+	if got := g.ResolutionsFor("unknown-rule"); len(got) != 0 {
+		t.Errorf("unknown rule evidence was stored: %+v", got)
+	}
+	if len(g.Resolutions) != len(resolutions) {
+		t.Errorf("all evidence snapshot length = %d, want %d", len(g.Resolutions), len(resolutions))
+	}
+}
+
 func TestFilterSources(t *testing.T) {
 	sources := []backend.Source{
 		{Name: "logs-a-default"},

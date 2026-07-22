@@ -7,12 +7,13 @@ Each scan reads:
 
 1. detection rule metadata
 2. source inventory and freshness
-3. optional source schema and history data
+3. backend-native input resolution evidence
+4. optional source schema and history data
 
 Then it builds a dependency graph:
 
 ```text
-enabled rule -> index pattern -> index or data stream -> health evidence
+enabled rule -> declared input -> native resolver -> index or data stream -> health evidence
 ```
 
 The graph answers two questions at the same time:
@@ -28,27 +29,33 @@ deadair normalizes every backend into a small set of objects.
 |---|---|
 | rule | SIEM detection metadata: id, name, enabled state, query type, index patterns, lookback, interval, required fields |
 | source | credential-visible index or data stream with doc count, last-event time, ingest-lag evidence, and optional schema |
-| edge | rule-to-source match created from the rule's index patterns |
-| report | rule findings, source findings, unused telemetry, unmapped rules, remote rules, and summary counts |
+| input resolution | evidence that a declared selector resolved, resolved empty, or could not be safely assessed |
+| edge | rule-to-source relationship created only from a successful backend-native resolution |
+| report | versioned rule findings, source findings, resolution evidence, capabilities, and summary counts |
 | fleet report | per-instance reports plus cross-tenant rollups and instance errors |
 
-The source inventory is an evidence boundary. An index hidden by the configured role is
-indistinguishable from an absent index to deadair. Least-privilege roles should therefore include
-every source pattern the operator intends to assess.
+The source inventory and native resolver are an evidence boundary. A permission or API failure is
+recorded as `unavailable`; it is not collapsed into an absent source. Least-privilege roles should
+include every source pattern the operator intends to assess plus the metadata privilege required by
+the backend's resolve-index API.
 
-The report format is additive once released. Existing JSON field names and reason codes should not
-be renamed or removed.
+Reports declare `schema_version`, producer metadata, backend capabilities, and observed resolution
+methods. The format is additive once released: existing JSON field names and reason codes are not
+renamed or removed. Checked-in JSON Schemas describe the single-instance and fleet contracts.
 
 ## Rule verdicts
 
 | JSON code | Human wording | Evidence retained in the report |
 |---|---|---|
 | `live` | no rule finding | at least one matched source is healthy or has unknown freshness |
-| `disconnected` | no matching source | configured patterns are retained; none resolved to a credential-visible source |
+| `disconnected` | no matching source | the native resolver understood the input and positively returned an empty result |
 | `starved` | all matching sources stale or empty | degraded source names are retained with source age, document count, and status |
 | `missing-fields` | missing fields | declared missing fields and matched sources are retained when schema was fetched |
 | `lag-blind-window` | lag blind window | affected sources, measured lag, rule lookback, and interval are retained |
-| `unmapped` | unmapped | rule metadata did not expose an input deadair can resolve, such as some ML rules |
+| `unsupported` | not assessed | deadair does not yet understand the rule input or query type |
+| `unavailable` | not assessed | permissions, transport, or a backend API prevented resolution |
+| `remote` | remote dependency | the input belongs to another deployment and is listed but not assessed locally |
+| `ambiguous` | not assessed | the rule exposes competing input declarations without enough evidence to choose safely |
 
 The terminal report is intentionally concise. JSON is the diagnostic artifact: dead detections
 include `patterns` and, when matched sources exist, `sources`; impaired detections include their
@@ -56,7 +63,10 @@ field or timing evidence.
 
 Impaired findings require positive evidence. If schema cannot be fetched, deadair does not invent
 a missing-field finding. If lag cannot be measured, it does not invent a lag finding. Unknown
-source freshness does not make a rule dead.
+source freshness does not make a rule dead. Likewise, only `empty` resolution evidence can support
+a disconnected verdict; `unsupported`, `unavailable`, `remote`, and `ambiguous` cannot.
+Unused-telemetry findings are also withheld when an enabled local input is unsupported,
+unavailable, or ambiguous, because zero consumers cannot be proved from incomplete coverage.
 
 ## Source health
 
@@ -79,6 +89,7 @@ Scans are built around cheap metadata calls first. Per-source queries are bounde
 | Need | Elastic API | Cost |
 |---|---|---|
 | rule inventory | Kibana `GET /api/detection_engine/rules/_find` | paginated metadata read |
+| rule input resolution | Elasticsearch `GET /_resolve/index/<expression>` | per distinct rule expression; read-only metadata |
 | data stream stats | `GET /_data_stream/_stats` | one call |
 | index inventory | `GET /_cat/indices` | one call |
 | freshness fallback | size-0 `max(@timestamp)` aggregation | per undated source, bounded concurrency |
@@ -86,7 +97,7 @@ Scans are built around cheap metadata calls first. Per-source queries are bounde
 | ingest lag | size-0 `max(@timestamp)` and `max(event.ingested)` aggregation | with `--state-file`, per source, bounded concurrency |
 
 OpenSearch uses the Security Analytics detector search API for rule metadata and the same style
-of source stats, freshness, and field-capability reads.
+of source stats, native resolve-index, freshness, and field-capability reads.
 
 A failed source-level read should degrade that source to `unknown`; it should not fail the whole
 scan.
@@ -95,6 +106,7 @@ scan.
 
 | Command | Role |
 |---|---|
+| `demo` | run deterministic embedded evidence through the normal report pipeline |
 | `setup` | print least-privilege credential setup for a backend |
 | `check` | verify connectivity, required privileges, and optional capabilities |
 | `scan` | produce a terminal, JSON, or HTML report |
@@ -145,10 +157,13 @@ Support tiers:
 
 Current backends:
 
-| Backend | Status |
-|---|---|
-| Elastic Security 8.x | supported |
-| OpenSearch Security Analytics 2.x | supported |
+| Backend | Trusted integration matrix | Status |
+|---|---|---|
+| Elastic Security | 8.19.19 and 9.4.4 | supported |
+| OpenSearch Security Analytics | 2.19.6 and 3.7.0 | supported |
+
+The [support policy](support-policy.md) defines current/previous-major coverage, exact tested
+versions, best-effort versions, and removal rules.
 
 No preview or experimental backend ships today. Microsoft Sentinel is the first planned preview
 target. Splunk is out of scope.
@@ -170,8 +185,9 @@ reach to the SIEM HTTP(S) APIs and nothing else.
 
 On Windows, POSIX file modes do not apply. Protect report and state directories with ACLs.
 
-CI tests the supported backend paths against pinned Elastic 8.17.x and OpenSearch 2.19.x
-containers. The MSSP lab also exercises mixed-backend fleet behavior in Docker.
+Trusted CI tests the supported backend paths against pinned Elastic 8.19.19 and 9.4.4 plus
+OpenSearch 2.19.6 and 3.7.0 containers. The fleet proof exercises the current Elastic/OpenSearch
+pair together in Docker.
 
 ## Non-goals
 

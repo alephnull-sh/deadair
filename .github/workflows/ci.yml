@@ -4,110 +4,52 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  validate:
+    name: Validate (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      - name: gofmt
-        run: test -z "$(gofmt -l .)" || (gofmt -l .; exit 1)
-      - name: vet
-        run: go vet ./...
-      - name: build
-        run: CGO_ENABLED=0 go build -trimpath ./cmd/deadair
-      - name: test
-        run: go test -race ./...
-      - name: cross-compile all release targets
+      - name: Format, vet, unit, race, static build, and module checks
+        run: make validate
+      - name: Cross-compile release targets
+        env:
+          CGO_ENABLED: "0"
         run: |
-          for t in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
-            echo "$t"; GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./cmd/deadair
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            echo "Building ${goos}/${goarch}"
+            GOOS=${goos} GOARCH=${goarch} go build -trimpath -o /dev/null ./cmd/deadair
           done
 
   windows:
+    name: Unit and build (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      - name: test
+      - name: Unit tests
         run: go test ./...
-
-  # M1 read-only proof: least-privilege role validated against a live Elastic
-  # stack, every write attempt with the deadair credential rejected.
-  elastic-integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        elastic-version: ["8.17.4"]
-    env:
-      ELASTIC_VERSION: ${{ matrix.elastic-version }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - name: start elastic stack ${{ matrix.elastic-version }}
-        run: docker compose -f integration/docker-compose.yml up -d --wait
-      - name: integration tests
-        run: go test -tags=integration -count=1 -v ./integration -run TestElastic
-      - name: stack logs on failure
-        if: failure()
-        run: docker compose -f integration/docker-compose.yml logs --tail=150
-      - name: teardown
-        if: always()
-        run: docker compose -f integration/docker-compose.yml down -v
-
-  opensearch-integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        opensearch-version: ["2.19.3"]
-    env:
-      OPENSEARCH_VERSION: ${{ matrix.opensearch-version }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - name: start opensearch stack ${{ matrix.opensearch-version }}
-        run: docker compose -f integration/opensearch-docker-compose.yml up -d --wait
-      - name: integration tests
-        run: go test -tags=integration -count=1 -v ./integration -run TestOpenSearch
-      - name: stack logs on failure
-        if: failure()
-        run: docker compose -f integration/opensearch-docker-compose.yml logs --tail=150
-      - name: teardown
-        if: always()
-        run: docker compose -f integration/opensearch-docker-compose.yml down -v
-
-  fleet-integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - name: start both stacks
-        run: |
-          docker compose -f integration/docker-compose.yml up -d --wait
-          docker compose -f integration/opensearch-docker-compose.yml up -d --wait
-      - name: cross-backend fleet proof
-        run: go test -tags=integration -count=1 -v ./integration -run TestFleet
-      - name: teardown
-        if: always()
-        run: |
-          docker compose -f integration/opensearch-docker-compose.yml down -v
-          docker compose -f integration/docker-compose.yml down -v
+      - name: Static build
+        run: go build -trimpath ./cmd/deadair
+        env:
+          CGO_ENABLED: "0"

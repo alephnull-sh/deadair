@@ -1,0 +1,110 @@
+name: integration
+
+on:
+  push:
+    branches: [main]
+  merge_group:
+  schedule:
+    - cron: "17 3 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  elastic:
+    name: Elastic ${{ matrix.elastic-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        elastic-version: ["8.19.19", "9.4.4"]
+    env:
+      ELASTIC_VERSION: ${{ matrix.elastic-version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Start Elastic stack
+        run: docker compose -f integration/docker-compose.yml up -d --wait
+      - name: Run Elastic integration tests
+        run: go test -tags=integration -count=1 -v ./integration -run '^TestElastic'
+      - name: Show stack logs on failure
+        if: failure()
+        run: docker compose -f integration/docker-compose.yml logs --tail=150
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f integration/docker-compose.yml down -v
+
+  opensearch:
+    name: OpenSearch ${{ matrix.opensearch-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        opensearch-version: ["2.19.6", "3.7.0"]
+    env:
+      OPENSEARCH_VERSION: ${{ matrix.opensearch-version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Start OpenSearch stack
+        run: docker compose -f integration/opensearch-docker-compose.yml up -d --wait
+      - name: Run OpenSearch integration tests
+        run: go test -tags=integration -count=1 -v ./integration -run '^TestOpenSearch'
+      - name: Show stack logs on failure
+        if: failure()
+        run: docker compose -f integration/opensearch-docker-compose.yml logs --tail=150
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f integration/opensearch-docker-compose.yml down -v
+
+  fleet:
+    name: Fleet (Elastic 9.4.4 + OpenSearch 3.7.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ELASTIC_VERSION: "9.4.4"
+      OPENSEARCH_VERSION: "3.7.0"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Start both stacks
+        run: |
+          docker compose -f integration/docker-compose.yml up -d --wait
+          docker compose -f integration/opensearch-docker-compose.yml up -d --wait
+      - name: Run cross-backend fleet proof
+        run: go test -tags=integration -count=1 -v ./integration -run '^TestFleet'
+      - name: Show stack logs on failure
+        if: failure()
+        run: |
+          docker compose -f integration/docker-compose.yml logs --tail=150
+          docker compose -f integration/opensearch-docker-compose.yml logs --tail=150
+      - name: Tear down stacks
+        if: always()
+        run: |
+          docker compose -f integration/opensearch-docker-compose.yml down -v
+          docker compose -f integration/docker-compose.yml down -v

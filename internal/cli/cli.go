@@ -45,6 +45,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintf(w, "\n%s\n", h("USAGE"))
 	fmt.Fprintln(w, "  deadair <command> [flags]")
 	fmt.Fprintf(w, "\n%s\n", h("COMMANDS"))
+	fmt.Fprintln(w, "  demo      run a credential-free report from embedded evidence")
 	fmt.Fprintln(w, "  setup     print least-privilege credential setup for a backend")
 	fmt.Fprintln(w, "  check     verify connectivity and privileges")
 	fmt.Fprintln(w, "  scan      one-shot report; exit 0 healthy, 1 findings, 2 error")
@@ -53,6 +54,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  tune      suggest baseline settings from accumulated state")
 	fmt.Fprintln(w, "  version   print version")
 	fmt.Fprintf(w, "\n%s\n", h("GET STARTED"))
+	fmt.Fprintln(w, "  deadair demo      # inspect every core finding without a SIEM")
 	fmt.Fprintln(w, "  deadair setup     # prints the role, key command, and env exports")
 	fmt.Fprintln(w, "  deadair check     # confirms the connection and privileges work")
 	fmt.Fprintln(w, "  deadair scan      # first report")
@@ -66,7 +68,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "\nRun \"deadair <command> -h\" for flags. Guides: docs/usage.md")
 }
 
-var commands = []string{"scan", "serve", "check", "diff", "tune", "setup", "version", "help"}
+var commands = []string{"demo", "scan", "serve", "check", "diff", "tune", "setup", "version", "help"}
 
 // suggest returns the closest command name, or "" if nothing is close.
 func suggest(input string) string {
@@ -106,6 +108,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	switch args[0] {
+	case "demo":
+		return runDemo(args[1:], stdout, stderr)
 	case "scan":
 		return runScan(args[1:], stdout, stderr)
 	case "serve":
@@ -171,7 +175,7 @@ func addConnFlags(fs *flag.FlagSet, o *connOpts) {
 	fs.StringVar(&o.opensearchPasswordFile, "opensearch-password-file", "", "file containing the OpenSearch password (default: env DEADAIR_OPENSEARCH_PASSWORD)")
 	fs.StringVar(&o.apiKeyFile, "api-key-file", "", "file containing the API key (default: env DEADAIR_API_KEY)")
 	fs.DurationVar(&o.timeout, "timeout", 60*time.Second, "overall timeout per scan")
-	fs.IntVar(&o.concurrency, "concurrency", 4, "max parallel freshness queries against the backend")
+	fs.IntVar(&o.concurrency, "concurrency", 4, "max parallel source-health and input-resolution queries")
 	fs.DurationVar(&o.maxStale, "max-stale", 30*time.Minute, "freshness window before a source counts as stale")
 	fs.Var(&o.include, "include", "source name pattern to include; repeatable, default includes all sources")
 	fs.Var(&o.exclude, "exclude", "source name pattern to exclude; repeatable, wins over --include")
@@ -408,6 +412,17 @@ func (s scanResult) commitState() error {
 }
 
 func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts) (scanResult, error) {
+	observedVersion := ""
+	if provider, ok := c.(backendpkg.VersionProvider); ok {
+		// Product version is useful report evidence, but a restricted root API
+		// must not turn an otherwise valid scan into an error.
+		versionCtx, versionCancel := context.WithTimeout(ctx, 5*time.Second)
+		version, verr := provider.Version(versionCtx)
+		versionCancel()
+		if verr == nil {
+			observedVersion = version
+		}
+	}
 	var rules []backendpkg.Rule
 	var err error
 	if o.ruleFile != "" {
@@ -417,7 +432,11 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts) (scanResult
 		if rerr != nil {
 			return scanResult{}, fmt.Errorf("reading rule file: %w", rerr)
 		}
-		rules, err = elastic.ParseRuleFile(data)
+		parser, ok := c.(backendpkg.CandidateParser)
+		if !ok {
+			return scanResult{}, fmt.Errorf("candidate-rule parsing is unavailable for backend %q", c.Name())
+		}
+		rules, err = parser.ParseCandidates(data)
 	} else {
 		rules, err = c.Rules(ctx)
 	}
@@ -447,14 +466,24 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts) (scanResult
 	if err != nil {
 		return scanResult{}, err
 	}
-	g := graph.Build(rules, all)
+	resolver, ok := c.(backendpkg.Resolver)
+	if !ok {
+		return scanResult{}, fmt.Errorf("backend %q does not provide native input resolution", c.Name())
+	}
+	resolutions, err := resolver.ResolveInputs(ctx, rules)
+	if err != nil {
+		return scanResult{}, fmt.Errorf("resolving rule inputs: %w", err)
+	}
+	g := graph.BuildResolved(rules, all, resolutions)
 	r := report.BuildWithOptions(c.Name(), g, report.BuildOptions{
-		Check:        check,
-		Volume:       stateAssess.volume,
-		Schema:       stateAssess.schema,
-		Scope:        scope,
-		SourceFields: stateAssess.fields,
-		SkipUnused:   o.ruleFile != "",
+		Check:                  check,
+		Volume:                 stateAssess.volume,
+		Schema:                 stateAssess.schema,
+		Scope:                  scope,
+		SourceFields:           stateAssess.fields,
+		SkipUnused:             o.ruleFile != "",
+		ProducerVersion:        Version,
+		BackendObservedVersion: observedVersion,
 	})
 	return scanResult{report: r, store: store, path: o.stateFile}, nil
 }
@@ -520,6 +549,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 				return report.ExitError
 			}
 		}
+		if o.ruleFile != "" {
+			return f.CandidateExitCode()
+		}
 		return f.ExitCode()
 	}
 
@@ -578,6 +610,12 @@ func printSummary(w io.Writer, r *report.Report) {
 	fmt.Fprintf(w, "sources:    %d (%d ok, %d stale, %d empty, %d unknown, %d maintenance)\n",
 		s.Sources, counts["ok"], counts["stale"], counts["empty"], counts["unknown"], counts["maintenance"])
 	fmt.Fprintf(w, "detections: %d enabled / %d total (%d unmapped)\n", s.EnabledRules, s.Rules, s.UnmappedRules)
+	if len(r.InputResolutions) > 0 {
+		resolution := s.InputResolution
+		fmt.Fprintf(w, "inputs:     %d resolved, %d empty, %d unsupported, %d unavailable, %d remote, %d ambiguous\n",
+			resolution.Resolved, resolution.Empty, resolution.Unsupported, resolution.Unavailable,
+			resolution.Remote, resolution.Ambiguous)
+	}
 	if s.VolumeLowSources > 0 {
 		fmt.Fprintf(w, "volume:     %d source(s) below same weekday/hour baseline\n", s.VolumeLowSources)
 	}
@@ -609,7 +647,32 @@ func printSummary(w io.Writer, r *report.Report) {
 			fmt.Fprintf(w, "  [%s] %s — %s%s\n", d.Severity, d.Name, strings.Join(d.Reasons, ", "), impairedDetail(d))
 		}
 	}
-	if s.UnusedSources > 0 {
+	if len(r.UnmappedRules) > 0 || len(r.RemoteRules) > 0 {
+		fmt.Fprintf(w, "\ninput assessment: %d unmapped rule(s), %d remote rule(s); neither is treated as dead\n",
+			len(r.UnmappedRules), len(r.RemoteRules))
+		shown := 0
+		for _, rule := range r.UnmappedRules {
+			if shown >= 10 {
+				break
+			}
+			fmt.Fprintf(w, "  [%s] %s — %s", rule.Severity, rule.Name, rule.AssessmentStatus)
+			if rule.Detail != "" {
+				fmt.Fprintf(w, ": %s", rule.Detail)
+			}
+			fmt.Fprintln(w)
+			shown++
+		}
+		for _, rule := range r.RemoteRules {
+			if shown >= 10 {
+				break
+			}
+			fmt.Fprintf(w, "  [%s] %s — remote dependency\n", rule.Severity, rule.Name)
+			shown++
+		}
+	}
+	if s.UnusedTelemetryAssessment == report.UnusedAssessmentUnavailable {
+		fmt.Fprintln(w, "\nunused telemetry: not assessed because one or more enabled local rule inputs could not be resolved safely")
+	} else if s.UnusedSources > 0 {
 		fmt.Fprintf(w, "\nunused telemetry: %d source(s), %s ingested with no enabled detection reading it\n",
 			s.UnusedSources, humanBytes(s.UnusedBytes))
 		for i, u := range r.UnusedTelemetry {
@@ -625,7 +688,11 @@ func printSummary(w io.Writer, r *report.Report) {
 		}
 	}
 	if r.ExitCode() == report.ExitHealthy {
-		fmt.Fprintf(w, "\n%s\n", color(w, "32", "healthy: no dead detections, no degraded sources"))
+		if len(r.UnmappedRules) > 0 || len(r.RemoteRules) > 0 {
+			fmt.Fprintln(w, "\nno positive findings; one or more rule inputs were not assessed")
+		} else {
+			fmt.Fprintf(w, "\n%s\n", color(w, "32", "healthy: no dead detections, no degraded sources"))
+		}
 	}
 }
 
