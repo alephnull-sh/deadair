@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Big-Comfy/deadair/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Big-Comfy/deadair/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/Big-Comfy/deadair/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Big-Comfy/deadair"></a>
+  <a href="https://github.com/alephnull-sh/deadair/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/alephnull-sh/deadair/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/alephnull-sh/deadair/releases"><img alt="Release" src="https://img.shields.io/github/v/release/alephnull-sh/deadair"></a>
   <img alt="Go 1.26" src="https://img.shields.io/badge/go-1.26-00ADD8">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
@@ -20,6 +20,11 @@
 
 <p align="center">
   Runs locally · Read-only · No agent · No telemetry upload
+</p>
+
+<p align="center">
+  <a href="https://alephnull-sh.github.io/deadair/">Read the technical write-up</a> ·
+  <a href="https://www.detectionengineering.net/i/208193682/detection-engineering-gem">Featured in Detection Engineering Weekly</a>
 </p>
 
 <p align="center">
@@ -49,7 +54,7 @@ Elastic Security and OpenSearch Security Analytics are supported today.
 ## Quick start
 
 Download a binary for macOS, Linux, or Windows from
-[GitHub Releases](https://github.com/Big-Comfy/deadair/releases), or install with Go:
+[GitHub Releases](https://github.com/alephnull-sh/deadair/releases), or install with Go:
 
 ```sh
 go install github.com/Big-Comfy/deadair/cmd/deadair@latest
@@ -205,7 +210,7 @@ and unused collection.
 - [Architecture](docs/architecture.md) — backend contract, data model, safety properties, and limits
 - [Best practices](docs/best-practices.md) — rollout order, alert context, and routing
 - [MSSP guide](docs/mssp.md) — secrets, redaction, retention, sizing, and tenant failure handling
-- [Detections that run but can't see](https://big-comfy.github.io/deadair/) — the problem and a reproducible simulation
+- [Detections that run but can't see](https://alephnull-sh.github.io/deadair/) — the problem and a reproducible simulation
 
 ## Contributing
 

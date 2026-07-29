@@ -125,7 +125,7 @@ window slides past, which leaves a gap of `P − L` for a run every `I` minutes 
   <figcaption>Fraction of events a rule catches as source ingest lag grows, for a rule with a 6-minute lookback running every 5 minutes. The line is the formula, the open points are the simulation, and the shaded area is coverage lost with no error and no alert.</figcaption>
 </figure>
 
-A [15-line simulation](https://github.com/Big-Comfy/deadair/blob/main/docs/assets/lagsim.py) matches
+A [15-line simulation](https://github.com/alephnull-sh/deadair/blob/main/docs/assets/lagsim.py) matches
 the model to within rounding, the open points on the chart. In numbers, a rule with `from: now-6m`
 every 5 minutes has a one-minute margin, so a source batching with 3 minutes of fixed lag catches
 around **60% of its events** in this model. Real schedulers have jitter, retries, manual runs,
@@ -193,4 +193,4 @@ If you know a failure mode I have missed, the issues are open. If nothing else s
 and a rule detecting are two different events. Native SIEM tooling watches a lot more than it used to;
 the missing piece I care about is the per-rule dependency report you can run as an operational check.
 
-<p style="margin-top:2rem"><a href="https://github.com/Big-Comfy/deadair">deadair on GitHub →</a></p>
+<p style="margin-top:2rem"><a href="https://github.com/alephnull-sh/deadair">deadair on GitHub →</a></p>

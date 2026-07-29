@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://big-comfy.github.io/deadair/schemas/report-v1.schema.json",
+  "$id": "https://alephnull-sh.github.io/deadair/schemas/report-v1.schema.json",
   "title": "deadair report v1",
   "type": "object",
   "required": [

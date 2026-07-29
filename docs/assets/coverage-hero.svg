@@ -54,5 +54,5 @@
   <text x="94" y="530" font-size="12" fill="#f27b70" letter-spacing="0">BLAST RADIUS</text>
   <text x="94" y="556" font-size="19"><tspan fill="#f1f0ec">one endpoint connector down    </tspan><tspan fill="#f27b70" font-weight="700">&#8594;  9 enabled detections go dark</tspan></text>
 
-  <text x="1136" y="600" text-anchor="end" font-size="12.5" fill="#85837e">big-comfy.github.io/deadair</text>
+  <text x="1136" y="600" text-anchor="end" font-size="12.5" fill="#85837e">alephnull-sh.github.io/deadair</text>
 </svg>

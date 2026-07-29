@@ -144,7 +144,7 @@ blind spots.
 Use the dogfood report issue template:
 
 ```text
-https://github.com/Big-Comfy/deadair/issues/new?template=dogfood_report.md
+https://github.com/alephnull-sh/deadair/issues/new?template=dogfood_report.md
 ```
 
 If the result contains sensitive details, keep the issue high level and say what kind of private
@@ -155,7 +155,7 @@ evidence exists. Do not paste unredacted SOC artifacts into a public issue.
 Microsoft Sentinel is not implemented yet. The open design-partner issue is here:
 
 ```text
-https://github.com/Big-Comfy/deadair/issues/3
+https://github.com/alephnull-sh/deadair/issues/3
 ```
 
 Useful Sentinel input includes real analytic-rule patterns, KQL table dependencies, custom tables,

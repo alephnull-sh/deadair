@@ -133,10 +133,10 @@ func TestReportContractSchemas(t *testing.T) {
 	}
 
 	assertSchemaHeader(t, reportSchema,
-		"https://big-comfy.github.io/deadair/schemas/report-v1.schema.json",
+		"https://alephnull-sh.github.io/deadair/schemas/report-v1.schema.json",
 		[]string{"schema_version", "generated_at", "producer", "backend", "backend_metadata", "summary", "sources", "dead_detections", "unused_telemetry"})
 	assertSchemaHeader(t, fleetSchema,
-		"https://big-comfy.github.io/deadair/schemas/fleet-report-v1.schema.json",
+		"https://alephnull-sh.github.io/deadair/schemas/fleet-report-v1.schema.json",
 		[]string{"schema_version", "generated_at", "producer", "summary", "instances"})
 
 	defs := objectAt(t, reportSchema, "$defs")
