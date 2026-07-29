@@ -3,7 +3,7 @@
 ## Report a vulnerability
 
 Report suspected vulnerabilities privately through
-[GitHub Security Advisories](https://github.com/Big-Comfy/deadair/security/advisories/new).
+[GitHub Security Advisories](https://github.com/alephnull-sh/deadair/security/advisories/new).
 Do not open a public issue for a security report.
 
 You can expect an acknowledgement within 7 days. Coordinated disclosure is preferred. Reporters
