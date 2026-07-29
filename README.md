@@ -23,6 +23,11 @@
 </p>
 
 <p align="center">
+  <a href="https://alephnull-sh.github.io/deadair/">Read the technical write-up</a> ·
+  <a href="https://www.detectionengineering.net/i/208193682/detection-engineering-gem">Featured in Detection Engineering Weekly</a>
+</p>
+
+<p align="center">
   <img alt="deadair demo showing dead detections, impaired detections, and unused telemetry" src="docs/assets/demo.gif" width="860">
 </p>
 
