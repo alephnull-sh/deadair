@@ -184,7 +184,7 @@ The useful parts are scheduling it, gating detection changes in CI, redacting re
 same check across Elastic and OpenSearch fleets. For an MSSP, that means one report can show which
 enabled detections lost coverage when a source degrades in one tenant.
 
-deadair is still young and currently supports Elastic Security and OpenSearch Security Analytics.
+deadair is still young and currently works with Elastic Security and OpenSearch Security Analytics.
 Some checks depend on rule metadata, so the results are limited by what each SIEM exposes. deadair
 checks whether a rule can see the data it expects. It does not assess the rule logic. CI creates a role
 with the minimum required permissions. The live integration tests also attempt writes and require

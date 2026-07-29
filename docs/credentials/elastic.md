@@ -11,7 +11,7 @@ privileges.
 
 Status: the trusted integration matrix tests Elastic 8.19.19 and 9.4.4. Each lane scans with only
 this role, exercises native input resolution, and verifies representative writes are rejected with
-403. See the [support policy](../support-policy.md) for exact-version support.
+403.
 
 ## Create the role
 

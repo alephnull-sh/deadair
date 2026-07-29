@@ -109,7 +109,7 @@ same incident, but they often belong to different queues.
 - Keep instance names stable. They key metrics, state files, baseline history, and redacted
   digests.
 - Run `deadair check --fleet fleet.json` after onboarding or rotating any tenant.
-- Use `--redact` for client-facing reports, shared Prometheus, demos, and support tickets.
+- Use `--redact` for client-facing reports, shared Prometheus, demos, and shared issue reports.
 - Size the interval from observed scan time. Fleet scans are sequential, so wall time is roughly
   the sum of tenant scan times.
 - Route `deadair_instance_up == 0` to the person who owns that tenant's credential and network
@@ -135,4 +135,4 @@ For a full MSSP deployment shape, see [mssp.md](mssp.md).
 - It does not evaluate events inline and it does not tune detections.
 - Cross-cluster rules are listed as `remote_rules`. Scan the remote cluster as its own fleet
   instance if you want coverage proof.
-- Supported backends are Elastic Security and OpenSearch Security Analytics only.
+- deadair currently has backends for Elastic Security and OpenSearch Security Analytics.

@@ -471,7 +471,7 @@ func TestWriteHTML(t *testing.T) {
 		ReportSchemaVersion,
 		"producer deadair 1.2.3",
 		"Elastic Security 8.17.4 (elastic)",
-		"supported versions 8.x",
+		"recognized versions 8.x",
 		"rule_inventory=supported",
 		"remote=listed-only",
 	} {
