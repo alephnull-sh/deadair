@@ -29,10 +29,9 @@ deadair's backend/report contracts. Call out any best-effort fields or unsupport
 ## Credential and integration proof
 
 Describe the least-privilege credential guide, synthetic fixtures, container or hosted test path,
-cleanup, supported-version matrix, and failure cases. Do not attach credentials, customer exports,
+cleanup, tested-version matrix, and failure cases. Do not attach credentials, customer exports,
 or unredacted SOC artifacts.
 
 ## Report compatibility and rollout
 
-Describe report-schema changes, preview exit criteria, dogfood evidence, documentation, and a safe
-removal or fallback plan.
+Describe report-schema changes, test evidence, documentation, and a safe removal or fallback plan.

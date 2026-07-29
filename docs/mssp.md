@@ -4,17 +4,6 @@ This guide is for running deadair across multiple client SIEMs from an operator-
 guide, a source is a concrete index or data stream visible to the tenant credential. See
 [Read the findings](usage.md#read-the-findings) for the evidence and triage model.
 
-Current support status:
-
-| Backend | MSSP status |
-|---|---|
-| Elastic Security 8.x and 9.x | controlled pilot-ready |
-| OpenSearch Security Analytics 2.x and 3.x | controlled pilot-ready |
-
-That means the fleet path, redaction, per-instance metrics, least-privilege credentials, and
-partial-failure behavior are implemented and tested. It does not mean the tool has completed a
-large real-client dogfood run across a production MSSP book.
-
 ## Run the lab first
 
 ```sh
@@ -189,7 +178,7 @@ Use `--redact` for:
 - client-facing reports
 - shared Prometheus
 - screenshots
-- support tickets
+- shared issue reports
 - demos
 - any artifact that leaves the restricted SOC workspace
 

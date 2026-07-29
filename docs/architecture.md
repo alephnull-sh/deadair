@@ -142,31 +142,16 @@ Fleet behavior:
 - cross-tenant rollups key on rule name because rule IDs can differ by tenant
 - `--redact` treats instance names as sensitive
 
-This is the main reason future backend work matters: the graph becomes more useful when a team can
-ask whether the same detection is blind across many SIEM instances.
+## Backend test matrix
 
-## Backend support
+Trusted integration tests currently run against:
 
-Support tiers:
-
-| Tier | Meaning |
+| Backend | Versions |
 |---|---|
-| supported | backend code, credential docs, live integration proof, rejected-write proof, and stable report compatibility |
-| preview | real backend proof exists, but field dogfooding is still pending |
-| experimental | parser or adapter work only; no support claim |
+| Elastic Security | 8.19.19 and 9.4.4 |
+| OpenSearch Security Analytics | 2.19.6 and 3.7.0 |
 
-Current backends:
-
-| Backend | Trusted integration matrix | Status |
-|---|---|---|
-| Elastic Security | 8.19.19 and 9.4.4 | supported |
-| OpenSearch Security Analytics | 2.19.6 and 3.7.0 | supported |
-
-The [support policy](support-policy.md) defines current/previous-major coverage, exact tested
-versions, best-effort versions, and removal rules.
-
-No preview or experimental backend ships today. Microsoft Sentinel is the first planned preview
-target. Splunk is out of scope.
+Other versions may work but are not covered by the current CI matrix.
 
 ## Security properties
 
@@ -184,10 +169,6 @@ The client is a static binary for macOS, Linux, and Windows on amd64 and arm64. 
 reach to the SIEM HTTP(S) APIs and nothing else.
 
 On Windows, POSIX file modes do not apply. Protect report and state directories with ACLs.
-
-Trusted CI tests the supported backend paths against pinned Elastic 8.19.19 and 9.4.4 plus
-OpenSearch 2.19.6 and 3.7.0 containers. The fleet proof exercises the current Elastic/OpenSearch
-pair together in Docker.
 
 ## Non-goals
 

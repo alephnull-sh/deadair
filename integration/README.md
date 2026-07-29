@@ -1,6 +1,6 @@
 # Integration tests
 
-The integration suite proves the supported backend paths against live Docker stacks:
+The integration suite runs backend checks against live Docker stacks:
 
 - least-privilege credentials can scan successfully
 - representative writes are rejected
@@ -43,9 +43,9 @@ make integration
 ```
 
 This runs Elastic, OpenSearch, and the mixed-backend fleet proof in sequence using the compose
-defaults. Trusted CI runs the fleet proof with Elastic 9.4.4 and OpenSearch 3.7.0. See the
-[backend support policy](../docs/support-policy.md) for the maintained major lines and the exact
-tested-version source of truth.
+defaults. Trusted CI runs the fleet proof with Elastic 9.4.4 and OpenSearch 3.7.0. The
+[trusted integration workflow](../.github/workflows/integration.yml) is the source of truth for
+the exact versions tested.
 
 Environment overrides:
 
@@ -58,7 +58,7 @@ Environment overrides:
 - `DEADAIR_IT_OPENSEARCH_ADMIN_PASSWORD`
 
 Defaults match the compose files. Version overrides select both Elasticsearch and Kibana for the
-Elastic stack. Use versions from the trusted CI matrix when reproducing a support issue.
+Elastic stack. Use versions from the trusted CI matrix when reproducing a version-specific issue.
 
 ## MSSP lab
 
@@ -113,7 +113,7 @@ client fleets.
 
 - Kibana can take a minute or two on first boot. The tests poll `/api/status` before failing.
 - The compose passwords are for throwaway stacks only.
-- Both supported backend suites run with `--schema --state-file` so field-capability permissions
+- Both backend suites run with `--schema --state-file` so field-capability permissions
   are part of the least-privilege proof.
 - Do not point these tests at a cluster you care about. They seed and remove test fixtures.
 

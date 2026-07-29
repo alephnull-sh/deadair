@@ -12,7 +12,7 @@ Describe the operator problem and the smallest useful change.
 
 - [ ] Production backend code remains read-only; no monitored-SIEM write API was added
 - [ ] Fixtures and examples contain no credentials, customer data, or unredacted SOC names
-- [ ] User-facing behavior, support claims, and report contract changes are documented, or none changed
+- [ ] User-facing behavior and report contract changes are documented, or none changed
 - [ ] New backend work has an accepted backend RFC, or this change does not touch backend APIs
 
 Notes for reviewers:

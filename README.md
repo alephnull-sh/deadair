@@ -49,7 +49,7 @@ It catches:
 - rules running with missing fields or an ingest-lag blind window;
 - healthy telemetry that no enabled detection reads.
 
-Elastic Security and OpenSearch Security Analytics are supported today.
+deadair currently works with Elastic Security and OpenSearch Security Analytics.
 
 ## Quick start
 
@@ -175,21 +175,16 @@ surface a source migration or renamed data stream before it becomes a silent det
 
 Sample terminal, JSON, and HTML reports are in [docs/examples](docs/examples/).
 
-## Supported backends
+## Tested backends
 
-The trusted integration matrix covers the current and previous major lines:
+The integration workflow currently tests these exact versions:
 
-| Backend | Exact live-CI versions | Support |
-|---|---|---|
-| Elastic Security | 8.19.19, 9.4.4 | supported |
-| OpenSearch Security Analytics | 2.19.6, 3.7.0 | supported |
+| Backend | Exact live-CI versions |
+|---|---|
+| Elastic Security | 8.19.19, 9.4.4 |
+| OpenSearch Security Analytics | 2.19.6, 3.7.0 |
 
-Other releases in those maintained major lines are best effort until added to the exact matrix. See
-the [backend support policy](docs/support-policy.md) for version status, evidence requirements, and
-the removal policy.
-
-No preview or experimental backends ship today. Microsoft Sentinel is the first planned preview
-target; see the [public roadmap](ROADMAP.md).
+Other versions may work but are not covered by the current CI matrix.
 
 ## Security model
 

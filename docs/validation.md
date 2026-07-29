@@ -7,8 +7,7 @@ triage, start with [Read the findings](usage.md#read-the-findings).
 ## What is proven today
 
 The trusted integration matrix targets Elastic Security 8.19.19 and 9.4.4, plus OpenSearch
-Security Analytics 2.19.6 and 3.7.0. See the [support policy](support-policy.md) for how exact tested
-versions relate to current/previous-major support.
+Security Analytics 2.19.6 and 3.7.0.
 
 The public test and lab coverage proves these paths:
 
@@ -38,12 +37,6 @@ These claims need outside dogfood before they should be described as proven:
 | real source cadence tuning | stateful baselines exist, but thresholds need real scan history |
 | hosted/backend edge cases | needs more Elastic and OpenSearch environments |
 | MSSP client reporting | redaction and fleet reports exist, but no real client-book run yet |
-| Microsoft Sentinel | not implemented; design partner needed before preview support |
-| Google SecOps and other SIEMs | not started |
-
-The right public claim today is: Elastic Security and OpenSearch Security Analytics are supported
-with live integration proof. MSSP/fleet mode is controlled-pilot ready. Broader backend coverage
-and large-fleet production proof are still open.
 
 ## Dogfood levels
 
@@ -56,7 +49,7 @@ Start with the lowest level that your environment allows.
 | 2 - test SIEM | one `check` and one redacted `scan` against a test/dev SIEM | validate privileges and report shape |
 | 3 - production one-shot | one read-only redacted scan against a production SIEM | compare findings to known telemetry state |
 | 4 - history | scheduled scans with `--state-file` for 7-14 days | validate volume baselines, hysteresis, and lag checks |
-| 5 - fleet pilot | `check --fleet`, `scan --fleet`, then `serve --fleet` | validate tenant separation, partial failures, metrics, and runtime |
+| 5 - fleet run | `check --fleet`, `scan --fleet`, then `serve --fleet` | validate tenant separation, partial failures, metrics, and runtime |
 
 Do not start with alerting. Start with a manual report, read it with detection engineering and
 pipeline owners, then decide which findings are actionable.
@@ -149,15 +142,3 @@ https://github.com/alephnull-sh/deadair/issues/new?template=dogfood_report.md
 
 If the result contains sensitive details, keep the issue high level and say what kind of private
 evidence exists. Do not paste unredacted SOC artifacts into a public issue.
-
-## Sentinel design partners
-
-Microsoft Sentinel is not implemented yet. The open design-partner issue is here:
-
-```text
-https://github.com/alephnull-sh/deadair/issues/3
-```
-
-Useful Sentinel input includes real analytic-rule patterns, KQL table dependencies, custom tables,
-functions, ASIM parsers, watchlists, cross-workspace queries, and read-only permissions that a SOC
-or MSSP would approve.
