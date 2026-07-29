@@ -51,6 +51,16 @@ It catches:
 
 deadair currently works with Elastic Security and OpenSearch Security Analytics.
 
+A small Elastic lab with the prebuilt rule package and about 500 enabled rules shows what the
+terminal report looks like when only a few data streams are present:
+
+<p align="center">
+  <img alt="deadair terminal report showing rules with no matching source and unused telemetry" src="docs/assets/demo-final.svg" width="860">
+</p>
+
+The JSON and HTML reports include rule patterns, matched sources, and resolution details.
+[See the sample reports](docs/examples/).
+
 ## Quick start
 
 Download a binary for macOS, Linux, or Windows from
@@ -158,22 +168,6 @@ storing secret values.
 See [CI gate behavior](docs/usage.md#gate-detection-changes),
 [fleet and MSSP deployment](docs/mssp.md), and the [Prometheus examples](contrib/) for production
 patterns.
-
-## Live lab evidence
-
-This scan used Elastic with the prebuilt rule package installed, about 500 rules enabled, and only a
-few seeded data streams:
-
-<p align="center">
-  <img alt="Live deadair scan showing enabled rules with no matching source and unused telemetry" src="docs/assets/demo-final.svg" width="860">
-</p>
-
-The terminal is a summary. The JSON report records the rule patterns, concrete matched sources, and
-native resolution evidence behind each verdict. In this small lab, a rule for WMI registry
-persistence had no Endpoint registry or Endgame source to query. In production, the same verdict can
-surface a source migration or renamed data stream before it becomes a silent detection gap.
-
-Sample terminal, JSON, and HTML reports are in [docs/examples](docs/examples/).
 
 ## Tested backends
 
