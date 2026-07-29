@@ -18,7 +18,7 @@ evaluate:
 - report unsupported or unavailable backend inputs explicitly instead of treating missing evidence
   as healthy
 
-## Directional: 31–60 days
+## Directional priorities
 
 These are candidates, not commitments. Ordering depends on evidence from the foundation and early
 adopters:
@@ -32,7 +32,7 @@ adopters:
 - signed releases with SBOM and provenance
 - fleet HTML reporting
 
-## Directional: 61–120 days
+## Directional follow-ons
 
 These are also candidates, not commitments:
 
