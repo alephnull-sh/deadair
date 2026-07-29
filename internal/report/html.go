@@ -50,7 +50,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 <body>
   <h1>deadair report</h1>
   <p class="muted">{{.BackendMetadata.Product}}{{with .BackendMetadata.ObservedVersion}} {{.}}{{end}} ({{.Backend}}) · {{.GeneratedAt.Format "2006-01-02 15:04:05 UTC"}}{{if .Redacted}} · redacted{{end}}</p>
-  <p class="muted">{{.SchemaVersion}} · producer {{.Producer.Name}} {{.Producer.Version}}{{with .BackendMetadata.SupportedVersionLines}} · supported versions {{versions .}}{{end}}<br>Capabilities: {{capabilities .BackendMetadata.Capabilities}}</p>
+  <p class="muted">{{.SchemaVersion}} · producer {{.Producer.Name}} {{.Producer.Version}}{{with .BackendMetadata.SupportedVersionLines}} · recognized versions {{versions .}}{{end}}<br>Capabilities: {{capabilities .BackendMetadata.Capabilities}}</p>
 
   <div class="grid">
     <div class="metric"><span>Sources</span><strong>{{.Summary.Sources}}</strong></div>

@@ -9,7 +9,7 @@ It does not need detector writes, document writes, index management, or user/rol
 
 Status: the trusted integration matrix tests OpenSearch 2.19.6 and 3.7.0. Each lane scans with only
 the roles below, exercises native input resolution, and verifies representative writes are
-rejected. See the [support policy](../support-policy.md) for exact-version support.
+rejected.
 
 ## Roles
 

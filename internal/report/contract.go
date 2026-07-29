@@ -63,7 +63,7 @@ type BackendMetadata struct {
 }
 
 // BackendVersionStatus describes how an observed product version relates to
-// the maintained and exact live-CI versions.
+// the recognized and exact live-CI versions.
 type BackendVersionStatus string
 
 const (
@@ -79,23 +79,23 @@ type BackendVersionAssessment struct {
 }
 
 type backendVersionPolicy struct {
-	maintainedLines []string
+	recognizedLines []string
 	testedVersions  []string
 }
 
 var backendVersionPolicies = map[string]backendVersionPolicy{
 	"elastic": {
-		maintainedLines: []string{"8.x", "9.x"},
+		recognizedLines: []string{"8.x", "9.x"},
 		testedVersions:  []string{"8.19.19", "9.4.4"},
 	},
 	"opensearch": {
-		maintainedLines: []string{"2.x", "3.x"},
+		recognizedLines: []string{"2.x", "3.x"},
 		testedVersions:  []string{"2.19.6", "3.7.0"},
 	},
 }
 
 // AssessBackendVersion classifies an observed backend version against the
-// support policy used by trusted integration CI.
+// version matrix used by trusted integration CI.
 func AssessBackendVersion(name, version string) BackendVersionAssessment {
 	policy, ok := backendVersionPolicies[name]
 	if !ok {
@@ -117,11 +117,11 @@ func AssessBackendVersion(name, version string) BackendVersionAssessment {
 	major, err := strconv.Atoi(majorText)
 	if err == nil {
 		line := fmt.Sprintf("%d.x", major)
-		for _, maintained := range policy.maintainedLines {
-			if line == maintained {
+		for _, recognized := range policy.recognizedLines {
+			if line == recognized {
 				return BackendVersionAssessment{
 					Status: BackendVersionBestEffort,
-					Detail: fmt.Sprintf("maintained major %s; exact live-CI versions: %s",
+					Detail: fmt.Sprintf("recognized major %s; exact live-CI versions: %s",
 						line, strings.Join(policy.testedVersions, ", ")),
 				}
 			}
@@ -129,8 +129,8 @@ func AssessBackendVersion(name, version string) BackendVersionAssessment {
 	}
 	return BackendVersionAssessment{
 		Status: BackendVersionUnsupported,
-		Detail: fmt.Sprintf("maintained major lines: %s; exact live-CI versions: %s",
-			strings.Join(policy.maintainedLines, ", "), strings.Join(policy.testedVersions, ", ")),
+		Detail: fmt.Sprintf("recognized major lines: %s; exact live-CI versions: %s",
+			strings.Join(policy.recognizedLines, ", "), strings.Join(policy.testedVersions, ", ")),
 	}
 }
 
@@ -149,7 +149,7 @@ func backendMetadata(name, observedVersion string) BackendMetadata {
 	switch name {
 	case "elastic":
 		metadata.Product = "Elastic Security"
-		metadata.SupportedVersionLines = append([]string(nil), backendVersionPolicies[name].maintainedLines...)
+		metadata.SupportedVersionLines = append([]string(nil), backendVersionPolicies[name].recognizedLines...)
 		for _, capability := range capabilityOrder() {
 			statuses[capability] = CapabilitySupported
 		}
@@ -159,7 +159,7 @@ func backendMetadata(name, observedVersion string) BackendMetadata {
 		details[CapabilityRemote] = "remote inputs are listed but not evaluated"
 	case "opensearch":
 		metadata.Product = "OpenSearch Security Analytics"
-		metadata.SupportedVersionLines = append([]string(nil), backendVersionPolicies[name].maintainedLines...)
+		metadata.SupportedVersionLines = append([]string(nil), backendVersionPolicies[name].recognizedLines...)
 		for _, capability := range []string{
 			CapabilityRuleInventory,
 			CapabilitySourceResolution,

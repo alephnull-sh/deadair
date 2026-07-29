@@ -1,7 +1,7 @@
 # Contributing
 
 External pull requests are welcome. Start with an issue for backend work or a change that affects
-the report contract, permissions, support claims, or command behavior. Small bug fixes and tests can
+the report contract, permissions, or command behavior. Small bug fixes and tests can
 go straight to a pull request.
 
 ## Local validation
@@ -62,8 +62,7 @@ finding.
 A new backend, new backend major, or material API/permission change starts with the
 [backend RFC template](.github/ISSUE_TEMPLATE/backend_rfc.md). The RFC must cover exact versions,
 API methods, least-privilege credentials, normalized capability gaps, rejected-write proof,
-fixtures, report compatibility, and preview exit criteria. Splunk remains out of scope.
+fixtures, and report compatibility.
 
-Backend support and removal rules are in [docs/support-policy.md](docs/support-policy.md). Keep the
-workflow matrix, compose defaults, integration guide, credential guides, and support policy aligned
-when changing tested versions.
+Keep the workflow matrix, compose defaults, integration guide, and credential guides aligned when
+changing tested versions.
