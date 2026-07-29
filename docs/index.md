@@ -184,13 +184,10 @@ The useful parts are scheduling it, gating detection changes in CI, redacting re
 same check across Elastic and OpenSearch fleets. For an MSSP, that means one report can show which
 enabled detections lost coverage when a source degrades in one tenant.
 
-The honest limits: deadair is young, supports two backends, uses best-effort rule metadata where the
-SIEM only exposes best-effort metadata, and only tells you whether a rule can see data, not whether the
-rule logic is good. CI provisions the least-privilege role and proves every write is rejected against a
-live cluster, so read-only is enforced, not claimed.
-
-If you know a failure mode I have missed, the issues are open. If nothing else sticks, a rule executing
-and a rule detecting are two different events. Native SIEM tooling watches a lot more than it used to;
-the missing piece I care about is the per-rule dependency report you can run as an operational check.
+deadair is still young and currently supports Elastic Security and OpenSearch Security Analytics.
+Some checks depend on rule metadata, so the results are limited by what each SIEM exposes. deadair
+checks whether a rule can see the data it expects. It does not assess the rule logic. CI creates a role
+with the minimum required permissions. The live integration tests also attempt writes and require
+every one to fail.
 
 <p style="margin-top:2rem"><a href="https://github.com/alephnull-sh/deadair">deadair on GitHub →</a></p>
