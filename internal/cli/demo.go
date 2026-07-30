@@ -57,13 +57,17 @@ func runDemo(args []string, stdout, stderr io.Writer) int {
 		}
 	} else {
 		printSummary(stdout, r)
-		fmt.Fprint(stdout, `
+		if interactiveOutput(stdout) {
+			printVisualDemoNextSteps(stdout)
+		} else {
+			fmt.Fprint(stdout, `
 This report uses embedded sample data; no SIEM connection was made.
 Run the same checks on your environment:
   deadair setup     # print least-privilege credential setup
   deadair check     # verify connectivity and privileges
   deadair scan      # scan live rules and telemetry
 `)
+		}
 	}
 
 	// Demo findings illustrate the report shape and must not act as a CI gate.

@@ -8,12 +8,15 @@ LINUX_AMD64  := $(DIST)/$(BIN)_$(VERSION)_linux-amd64
 LINUX_ARM64  := $(DIST)/$(BIN)_$(VERSION)_linux-arm64
 
 COMPOSE := docker compose -f integration/docker-compose.yml
+CI_DEMO_COMPOSE := docker compose -p deadair-ci-demo -f integration/docker-compose.yml
 OPENSEARCH_COMPOSE := docker compose -f integration/opensearch-docker-compose.yml
 MSSP_LAB_OUT ?= integration/mssp-lab-out
 MSSP_LAB_OUT_ABS := $(if $(filter /%,$(MSSP_LAB_OUT)),$(MSSP_LAB_OUT),$(CURDIR)/$(MSSP_LAB_OUT))
 MSSP_LAB_METRICS_ADDR ?= 127.0.0.1:19317
+CI_DEMO_OUT ?= integration/ci-demo-out
+CI_DEMO_OUT_ABS := $(if $(filter /%,$(CI_DEMO_OUT)),$(CI_DEMO_OUT),$(CURDIR)/$(CI_DEMO_OUT))
 
-.PHONY: build static-build test race vet fmt check tidy-check validate release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
+.PHONY: build static-build test race vet fmt check tidy-check validate release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down record-ci-demo mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BIN) ./cmd/deadair
@@ -97,6 +100,21 @@ fleet-integration:
 	$(COMPOSE) down -v
 
 integration: elastic-integration opensearch-integration fleet-integration
+
+record-ci-demo: build
+	@status=0; \
+	$(CI_DEMO_COMPOSE) up -d --wait elasticsearch || status=$$?; \
+	if [ $$status -eq 0 ]; then \
+		DEADAIR_CI_DEMO_OUT="$(CI_DEMO_OUT_ABS)" \
+		DEADAIR_CI_DEMO_BINARY="$(CURDIR)/bin/$(BIN)" \
+		./integration/prepare-ci-demo.sh || status=$$?; \
+	fi; \
+	if [ $$status -eq 0 ]; then \
+		DEADAIR_CI_DEMO_OUT="$(CI_DEMO_OUT_ABS)" \
+		vhs docs/assets/ci.tape || status=$$?; \
+	fi; \
+	$(CI_DEMO_COMPOSE) down -v; \
+	exit $$status
 
 mssp-lab-up:
 	$(COMPOSE) up -d --wait

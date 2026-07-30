@@ -32,8 +32,7 @@
 </p>
 
 <p align="center">
-  <sub>Real output from <code>deadair demo</code>. The recording is generated from
-  <a href="docs/assets/demo.tape">this reproducible VHS tape</a>.</sub>
+  <sub>Output from <code>deadair demo</code>. No SIEM required.</sub>
 </p>
 
 ## Why deadair
@@ -50,16 +49,6 @@ It catches:
 - healthy telemetry that no enabled detection reads.
 
 deadair currently works with Elastic Security and OpenSearch Security Analytics.
-
-A small Elastic lab with the prebuilt rule package and about 500 enabled rules shows what the
-terminal report looks like when only a few data streams are present:
-
-<p align="center">
-  <img alt="deadair terminal report showing rules with no matching source and unused telemetry" src="docs/assets/demo-final.svg" width="860">
-</p>
-
-The JSON and HTML reports include rule patterns, matched sources, and resolution details.
-[See the sample reports](docs/examples/).
 
 ## Quick start
 
@@ -164,6 +153,14 @@ deadair serve --interval 5m
 `scan --rule` isolates the candidate rule from unrelated backlog. `diff` works with deterministically
 redacted reports. Fleet configuration references secrets through environment variables rather than
 storing secret values.
+
+<p align="center">
+  <img alt="deadair candidate-rule gate followed by a report diff" src="docs/assets/ci.gif" width="860">
+</p>
+
+<p align="center">
+  <sub>A candidate-rule gate and report diff against a throwaway Elastic stack.</sub>
+</p>
 
 See [CI gate behavior](docs/usage.md#gate-detection-changes),
 [fleet and MSSP deployment](docs/mssp.md), and the [Prometheus examples](contrib/) for production
