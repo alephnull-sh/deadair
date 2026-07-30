@@ -601,6 +601,14 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 }
 
 func printSummary(w io.Writer, r *report.Report) {
+	if interactiveOutput(w) {
+		printVisualSummary(w, r)
+		return
+	}
+	printPlainSummary(w, r)
+}
+
+func printPlainSummary(w io.Writer, r *report.Report) {
 	s := r.Summary
 	fmt.Fprintf(w, "deadair scan — %s — %s\n", r.Backend, r.GeneratedAt.Format(time.RFC3339))
 	counts := map[string]int{}
@@ -795,6 +803,14 @@ func runDiff(args []string, stdout, stderr io.Writer) int {
 }
 
 func printDiff(w io.Writer, d *report.DiffResult) {
+	if interactiveOutput(w) {
+		printVisualDiff(w, d)
+		return
+	}
+	printPlainDiff(w, d)
+}
+
+func printPlainDiff(w io.Writer, d *report.DiffResult) {
 	if d.Regressions() == 0 && len(d.RecoveredDead)+len(d.RecoveredImpaired)+len(d.RecoveredSources)+len(d.NewSources)+len(d.RemovedSources)+len(d.NewlyUnused) == 0 {
 		fmt.Fprintln(w, "no changes")
 		return

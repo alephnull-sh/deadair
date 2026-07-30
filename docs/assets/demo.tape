@@ -6,13 +6,13 @@ Output docs/assets/demo.gif
 
 Set FontSize 14
 Set Width 1060
-Set Height 440
+Set Height 600
 Set Padding 14
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 35ms
 
 Hide
-Type `export PATH="$PWD/bin:$PATH" && clear`
+Type `export PATH="$PWD/bin:$PATH" && unset NO_COLOR && clear`
 Enter
 Type "deadair demo"
 Show

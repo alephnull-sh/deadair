@@ -69,8 +69,8 @@ make mssp-lab
 The lab starts both throwaway stacks, seeds them, runs a five-instance fleet, scrapes the exporter,
 writes redacted artifacts to `integration/mssp-lab-out/`, and tears everything down.
 
-The README and MSSP guide use [docs/assets/mssp-lab.gif](../docs/assets/mssp-lab.gif), recorded
-from these generated artifacts.
+The MSSP guide uses [docs/assets/mssp-lab.gif](../docs/assets/mssp-lab.gif), recorded from these
+generated artifacts.
 
 Lab instances:
 

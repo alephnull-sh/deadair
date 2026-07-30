@@ -9,6 +9,7 @@ deadair-report*.json
 *.report.json
 deadair-state*.json
 *.state.json
+integration/ci-demo-out/
 integration/mssp-lab-out/
 
 # agent onboarding stays local

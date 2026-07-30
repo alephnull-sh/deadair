@@ -1,31 +1,32 @@
-# vhs tape for the pipeline-checks gif: candidate-rule gate + report diff.
-# Staged files: new-rule.json (reads netflow-*, which doesn't exist),
-# last-week.json / today.json (reports before/after a source died).
+# vhs tape: candidate-rule gate followed by a report regression check.
+# Regenerate from the repository root:
+#   make record-ci-demo
 Output docs/assets/ci.gif
 
 Set FontSize 14
 Set Width 1060
-Set Height 400
+Set Height 440
 Set Padding 14
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 45ms
+Set TypingSpeed 30ms
 
 Hide
-Type `export DEADAIR_ES_URL=http://localhost:9200 DEADAIR_KIBANA_URL=http://localhost:5601 DEADAIR_API_KEY=$(cat "$DEADAIR_DEMO_KEY_FILE") PATH="$PWD/bin:$PATH" && cd "$DEADAIR_DEMO_DIR" && clear`
+Type `export PATH="$PWD/bin:$PATH" DEADAIR_ES_URL=http://localhost:9200 DEADAIR_KIBANA_URL=http://localhost:5601 DEADAIR_API_KEY=$(cat "$DEADAIR_CI_DEMO_OUT/api-key") && unset NO_COLOR && cd "$DEADAIR_CI_DEMO_OUT" && clear`
 Enter
-Sleep 1.5s
+Sleep 500ms
 Show
 
-Type "deadair scan --rule new-rule.json   # gate a PR: will this rule see data?"
-Sleep 600ms
-Enter
-Sleep 2.5s
-Type "echo exit=$?"
-Sleep 400ms
+Type "deadair scan --rule candidate-rule.json"
+Sleep 300ms
 Enter
 Sleep 2s
-Type "deadair diff last-week.json today.json   # what changed since last week?"
-Sleep 600ms
+
+Type "echo exit=$?"
+Sleep 250ms
 Enter
-Sleep 2.5s
-Sleep 5s
+Sleep 750ms
+
+Type "deadair diff baseline.json candidate.json"
+Sleep 300ms
+Enter
+Sleep 3s
