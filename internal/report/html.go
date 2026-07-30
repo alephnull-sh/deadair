@@ -152,7 +152,11 @@ func (r *Report) WriteHTML(path string) error {
 	if err := htmlReport.Execute(&b, r); err != nil {
 		return fmt.Errorf("rendering html report: %w", err)
 	}
-	if err := os.WriteFile(path, b.Bytes(), 0o600); err != nil {
+	lines := strings.Split(b.String(), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
 		return fmt.Errorf("writing html report: %w", err)
 	}
 	return nil

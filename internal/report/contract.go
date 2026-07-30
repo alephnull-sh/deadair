@@ -181,23 +181,6 @@ func backendMetadata(name, observedVersion string) BackendMetadata {
 		details[CapabilityCandidateParsing] = "candidate rule files are not parsed by this backend"
 		statuses[CapabilityRemote] = CapabilityListedOnly
 		details[CapabilityRemote] = "remote inputs are listed but not evaluated"
-	case "demo":
-		metadata.Product = "Embedded demo fixtures"
-		metadata.SupportedVersionLines = []string{"fixture-v1"}
-		for _, capability := range []string{
-			CapabilityRuleInventory,
-			CapabilityFreshness,
-			CapabilityDocsStorage,
-			CapabilitySchema,
-			CapabilityRequiredFields,
-			CapabilityIngestLag,
-		} {
-			statuses[capability] = CapabilitySupported
-		}
-		statuses[CapabilitySourceResolution] = CapabilitySupported
-		details[CapabilitySourceResolution] = "deterministic embedded resolution evidence"
-		statuses[CapabilityCandidateParsing] = CapabilityUnavailable
-		statuses[CapabilityRemote] = CapabilityUnavailable
 	default:
 		metadata.SupportedVersionLines = []string{}
 		for _, capability := range capabilityOrder() {

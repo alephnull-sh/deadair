@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	backendpkg "github.com/Big-Comfy/deadair/internal/backend"
 	"github.com/Big-Comfy/deadair/internal/backend/elastic"
@@ -119,6 +120,13 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 	}
 	if len(cfg.Instances) == 0 {
 		return nil, fmt.Errorf("fleet file lists no instances")
+	}
+	if o.ruleFile != "" {
+		for _, s := range cfg.Instances {
+			if strings.EqualFold(strings.TrimSpace(s.Backend), "opensearch") {
+				return nil, fmt.Errorf("--rule cannot scan fleet instance %q: candidate rules currently require Elastic", s.Name)
+			}
+		}
 	}
 	out := make([]fleetInstance, 0, len(cfg.Instances))
 	seen := map[string]bool{}

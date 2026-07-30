@@ -7,7 +7,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/Big-Comfy/deadair/internal/backend"
-	demodata "github.com/Big-Comfy/deadair/internal/demo"
 	"github.com/Big-Comfy/deadair/internal/report"
 )
 
@@ -78,15 +77,34 @@ func TestVisualSummaryUsesHierarchyAndHumanLabels(t *testing.T) {
 	}
 }
 
-func TestVisualDemoFitsEightyColumns(t *testing.T) {
-	r, err := demodata.Build()
-	if err != nil {
-		t.Fatal(err)
+func TestVisualSummaryFitsEightyColumns(t *testing.T) {
+	r := &report.Report{
+		Backend: "elastic",
+		Summary: report.Summary{
+			Sources: 4, Rules: 5, EnabledRules: 4, DeadDetections: 2,
+			ImpairedDetections: 1, UnusedSources: 1,
+			UnusedTelemetryAssessment: report.UnusedAssessmentComplete,
+			InputResolution:           report.InputResolutionSummary{Resolved: 3, Empty: 1},
+		},
+		Sources: []report.SourceHealth{
+			{Name: "logs-live-default", Status: "ok"},
+			{Name: "logs-stale-default", Status: "stale"},
+			{Name: "logs-empty-default", Status: "empty"},
+			{Name: "logs-unused-default", Status: "ok"},
+		},
+		DeadDetections: []report.DeadDetection{
+			{Name: "Registry persistence", Severity: "high", Reason: report.ReasonDisconnected, Patterns: []string{"logs-endpoint.events.registry-*"}},
+			{Name: "Dormant authentication source", Severity: "medium", Reason: report.ReasonStarved, Sources: []string{"logs-stale-default"}},
+		},
+		ImpairedDetections: []report.ImpairedDetection{{
+			Name: "Custom parser field coverage", Severity: "medium",
+			Reasons: []string{report.ReasonMissingFields}, MissingFields: []string{"process.command_line"},
+		}},
+		UnusedTelemetry: []report.UnusedSource{{Name: "logs-unused-default", SizeBytes: 4096}},
 	}
 
 	var output bytes.Buffer
 	printVisualSummary(&output, r)
-	printVisualDemoNextSteps(&output)
 	for _, line := range strings.Split(output.String(), "\n") {
 		if width := utf8.RuneCountInString(line); width > 80 {
 			t.Errorf("visual output is %d columns wide:\n%s", width, line)

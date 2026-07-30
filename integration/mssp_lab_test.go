@@ -87,7 +87,7 @@ func TestMSSPLab(t *testing.T) {
 		"--downtime-file", downtimeFile,
 		"--redact",
 		"--json",
-		"--out", baselineFile,
+		"--json-out", baselineFile,
 	})
 	if baselineCode != report.ExitError {
 		t.Fatalf("baseline fleet scan exit = %d, want 2 for bad lab tenants; stderr: %s", baselineCode, baselineErr)
@@ -105,7 +105,7 @@ func TestMSSPLab(t *testing.T) {
 		"--schema",
 		"--downtime-file", downtimeFile,
 		"--redact",
-		"--out", finalFile,
+		"--json-out", finalFile,
 	})
 	writeLabFile(t, filepath.Join(outDir, "fleet-summary.txt"), labCommandOutput(finalCode, finalOut, finalErr))
 	if finalCode != report.ExitError {

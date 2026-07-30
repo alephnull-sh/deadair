@@ -8,15 +8,18 @@ LINUX_AMD64  := $(DIST)/$(BIN)_$(VERSION)_linux-amd64
 LINUX_ARM64  := $(DIST)/$(BIN)_$(VERSION)_linux-arm64
 
 COMPOSE := docker compose -f integration/docker-compose.yml
-CI_DEMO_COMPOSE := docker compose -p deadair-ci-demo -f integration/docker-compose.yml
+CI_COMPOSE := docker compose -p deadair-ci-capture -f integration/docker-compose.yml
+SCAN_LAB_COMPOSE := docker compose -p deadair-scan-lab -f integration/docker-compose.yml
 OPENSEARCH_COMPOSE := docker compose -f integration/opensearch-docker-compose.yml
 MSSP_LAB_OUT ?= integration/mssp-lab-out
 MSSP_LAB_OUT_ABS := $(if $(filter /%,$(MSSP_LAB_OUT)),$(MSSP_LAB_OUT),$(CURDIR)/$(MSSP_LAB_OUT))
 MSSP_LAB_METRICS_ADDR ?= 127.0.0.1:19317
-CI_DEMO_OUT ?= integration/ci-demo-out
-CI_DEMO_OUT_ABS := $(if $(filter /%,$(CI_DEMO_OUT)),$(CI_DEMO_OUT),$(CURDIR)/$(CI_DEMO_OUT))
+CI_OUT ?= integration/ci-out
+CI_OUT_ABS := $(if $(filter /%,$(CI_OUT)),$(CI_OUT),$(CURDIR)/$(CI_OUT))
+SCAN_LAB_OUT ?= integration/scan-lab-out
+SCAN_LAB_OUT_ABS := $(if $(filter /%,$(SCAN_LAB_OUT)),$(SCAN_LAB_OUT),$(CURDIR)/$(SCAN_LAB_OUT))
 
-.PHONY: build static-build test race vet fmt check tidy-check validate release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down record-ci-demo mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
+.PHONY: build static-build test race vet fmt check tidy-check validate release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down record-ci record-scan-lab mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BIN) ./cmd/deadair
@@ -101,19 +104,40 @@ fleet-integration:
 
 integration: elastic-integration opensearch-integration fleet-integration
 
-record-ci-demo: build
+record-ci: build
 	@status=0; \
-	$(CI_DEMO_COMPOSE) up -d --wait elasticsearch || status=$$?; \
+	$(CI_COMPOSE) up -d --wait elasticsearch || status=$$?; \
 	if [ $$status -eq 0 ]; then \
-		DEADAIR_CI_DEMO_OUT="$(CI_DEMO_OUT_ABS)" \
-		DEADAIR_CI_DEMO_BINARY="$(CURDIR)/bin/$(BIN)" \
-		./integration/prepare-ci-demo.sh || status=$$?; \
+		DEADAIR_CI_OUT="$(CI_OUT_ABS)" \
+		DEADAIR_CI_BINARY="$(CURDIR)/bin/$(BIN)" \
+		./integration/prepare-ci.sh || status=$$?; \
 	fi; \
 	if [ $$status -eq 0 ]; then \
-		DEADAIR_CI_DEMO_OUT="$(CI_DEMO_OUT_ABS)" \
+		DEADAIR_CI_OUT="$(CI_OUT_ABS)" \
 		vhs docs/assets/ci.tape || status=$$?; \
 	fi; \
-	$(CI_DEMO_COMPOSE) down -v; \
+	$(CI_COMPOSE) down -v; \
+	exit $$status
+
+record-scan-lab: build
+	@status=0; \
+	$(SCAN_LAB_COMPOSE) up -d --wait || status=$$?; \
+	if [ $$status -eq 0 ]; then \
+		DEADAIR_SCAN_LAB_OUT="$(SCAN_LAB_OUT_ABS)" \
+		DEADAIR_SCAN_LAB_BINARY="$(CURDIR)/bin/$(BIN)" \
+		DEADAIR_SCAN_LAB_EXAMPLES="$(CURDIR)/docs/examples" \
+		./integration/prepare-scan-lab.sh || status=$$?; \
+	fi; \
+	if [ $$status -eq 0 ]; then \
+		rm -f docs/assets/check-lab.png docs/assets/scan-lab.png; \
+		DEADAIR_SCAN_LAB_OUT="$(SCAN_LAB_OUT_ABS)" \
+		vhs docs/assets/check-lab.tape || status=$$?; \
+	fi; \
+	if [ $$status -eq 0 ]; then \
+		DEADAIR_SCAN_LAB_OUT="$(SCAN_LAB_OUT_ABS)" \
+		vhs docs/assets/scan-lab.tape || status=$$?; \
+	fi; \
+	$(SCAN_LAB_COMPOSE) down -v; \
 	exit $$status
 
 mssp-lab-up:

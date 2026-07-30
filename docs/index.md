@@ -51,12 +51,12 @@ has chosen to collect it. That is why the finding should carry the rule, configu
 sources, and source state. The operator still decides whether it is accepted scope, unfinished
 onboarding, or a regression.
 
-Here is a lab scan. Every rule is enabled; the flagged ones resolve to something missing, stale, or
-empty.
+Here is a scan from a disposable Elastic lab. Every rule is enabled; the lab deliberately creates
+missing input, stale source, missing-field, ingest-lag, and unused-telemetry conditions.
 
 <figure class="bordered">
-  <img src="{{ '/assets/demo-final.svg' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Static deadair scan summary showing enabled rules with no matching source, one lag-impaired rule, and unused telemetry">
-  <figcaption>The terminal view is a summary; the JSON report retains each rule's configured patterns and matched sources. Missing index patterns may warn in Elastic; stale-but-existing sources are the quieter case.</figcaption>
+  <img src="{{ '/assets/scan-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Real deadair scan of a disposable Elastic lab showing missing, stale, late, and unused telemetry">
+  <figcaption>This is output from the real CLI against Elastic 9.4.4. The terminal view is a summary; the JSON report retains each rule's configured patterns and matched sources.</figcaption>
 </figure>
 
 ## Dead detections and blast radius

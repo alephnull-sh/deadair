@@ -28,11 +28,11 @@
 </p>
 
 <p align="center">
-  <img alt="deadair demo showing dead detections, impaired detections, and unused telemetry" src="docs/assets/demo.gif" width="860">
+  <img alt="deadair scan of a disposable Elastic lab showing dead and impaired detections" src="docs/assets/scan-lab.png" width="860">
 </p>
 
 <p align="center">
-  <sub>Output from <code>deadair demo</code>. No SIEM required.</sub>
+  <sub>Real scan of a disposable Elastic lab with deliberately missing, stale, late, and unused telemetry. Reproduce it with <code>make record-scan-lab</code>.</sub>
 </p>
 
 ## Why deadair
@@ -59,20 +59,12 @@ Download a binary for macOS, Linux, or Windows from
 go install github.com/Big-Comfy/deadair/cmd/deadair@latest
 ```
 
-Try the embedded evidence before creating credentials:
+Connect a read-only SIEM credential:
 
 ```sh
-deadair demo
-deadair demo --json
-deadair demo --html-out demo.html
-```
-
-Then connect a read-only SIEM credential:
-
-```sh
-deadair setup   # print the least-privilege setup
-deadair check   # verify access, backend version, and capabilities
-deadair scan    # print the first live report
+deadair setup elastic   # print the least-privilege setup
+deadair check           # verify the credential can scan
+deadair scan            # assess live rules and telemetry
 ```
 
 Exit codes are stable: `0` is healthy, `1` means findings, and `2` means the scan failed.
@@ -115,7 +107,7 @@ export DEADAIR_KIBANA_URL=https://kibana.example.internal:5601
 export DEADAIR_API_KEY=<read-only-api-key>
 
 deadair check
-deadair scan --out report.json --html-out report.html
+deadair scan --json-out report.json --html-out report.html
 ```
 
 OpenSearch:

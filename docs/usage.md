@@ -1,23 +1,8 @@
 # Usage guide
 
-This guide covers the day-to-day workflows: embedded demo, first scan, triage, CI gates, stateful checks,
-fleets, exporter mode, and report sharing. For credential setup, run `deadair setup` or use the
+This guide covers first scans, triage, CI gates, stateful checks, fleets, exporter mode, and report
+sharing. For credential setup, run `deadair setup` or use the
 backend guides under [credentials/](credentials/).
-
-## Try the embedded demo
-
-Run the complete reporting path before creating a credential:
-
-```sh
-deadair demo
-deadair demo --json
-deadair demo --out demo.json --html-out demo.html
-```
-
-The demo uses deterministic evidence embedded in the binary. It does not contact a SIEM, start a
-container, read environment credentials, or write anything unless an output path is supplied. It
-shows healthy telemetry alongside disconnected, starved, missing-field, lag, and unused-telemetry
-findings. The command exits `0` because its findings are illustrative.
 
 ## First scan
 
@@ -34,12 +19,17 @@ deadair scan
 `check` verifies the connection, required privileges, and optional capabilities such as schema
 visibility. `scan` prints the terminal report.
 
+![deadair check reporting READY against a disposable Elastic lab](assets/check-lab.png)
+
+The screenshot above is captured from the same disposable Elastic lab as the README scan with
+`make record-scan-lab`.
+
 Common output formats:
 
 ```sh
 deadair scan --json
-deadair scan --out report.json
-deadair scan --out report.json --html-out report.html
+deadair scan --json-out report.json
+deadair scan --json-out report.json --html-out report.html
 ```
 
 Exit codes:
@@ -94,11 +84,11 @@ A finding from the checked-in lab report:
 
 | Evidence | Value |
 |---|---|
-| Rule | `Persistence via WMI Standard Registry Provider` |
-| Configured patterns | `logs-endpoint.events.registry-*`, `endgame-*` |
+| Rule | `Lab registry persistence` |
+| Configured patterns | `deadair-lab-registry-*` |
 | Matched sources | none |
 | Impact | the rule currently has no source to query |
-| Lab explanation | the lab did not seed Endpoint registry or Endgame telemetry |
+| Lab explanation | the disposable lab intentionally does not create a matching registry source |
 
 That is an expected coverage gap in the lab. A production regression looks similar but has a change
 behind it: a Windows rule still queries `winlogbeat-*`, telemetry moves to
@@ -124,7 +114,7 @@ First response:
 5. Update the rule pattern, restore the integration, or disable the intentionally out-of-scope rule.
 
 ```sh
-deadair scan --json --out report.json
+deadair scan --json --json-out report.json
 jq '.dead_detections[] | select(.reason == "disconnected") | {name, patterns}' report.json
 ```
 
@@ -200,7 +190,7 @@ not safely assessed. Existing source-health findings do not block the candidate 
 Use `diff` for scheduled checks while the backlog is still being worked down:
 
 ```sh
-deadair scan --json --out today.json
+deadair scan --json --json-out today.json
 deadair diff yesterday.json today.json
 ```
 
@@ -319,7 +309,7 @@ stale or empty usually belong to telemetry pipeline owners.
 Use `--redact` for anything leaving the restricted SOC workspace:
 
 ```sh
-deadair scan --json --redact --out redacted-report.json
+deadair scan --json --redact --json-out redacted-report.json
 deadair serve --redact
 deadair tune --state-file deadair-state.json --redact
 ```

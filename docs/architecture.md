@@ -106,7 +106,6 @@ scan.
 
 | Command | Role |
 |---|---|
-| `demo` | run deterministic embedded evidence through the normal report pipeline |
 | `setup` | print least-privilege credential setup for a backend |
 | `check` | verify connectivity, required privileges, and optional capabilities |
 | `scan` | produce a terminal, JSON, or HTML report |

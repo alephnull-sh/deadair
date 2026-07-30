@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -19,9 +20,14 @@ import (
 func runCheck(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { checkUsage(stderr) }
 	var o connOpts
-	addConnFlags(fs, &o)
-	if err := fs.Parse(args); err != nil {
+	addBackendFlags(fs, &o)
+	if parsed, code := parseFlags(fs, args); !parsed {
+		return code
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "deadair: check does not accept positional arguments: %q\n", fs.Arg(0))
 		return report.ExitError
 	}
 	insts, err := o.resolveInstances(stderr)
@@ -30,35 +36,31 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		return report.ExitError
 	}
 
-	ok := true
+	var details bytes.Buffer
+	ready := true
+	limited := false
 	for _, inst := range insts {
-		fmt.Fprintf(stdout, "%s (%s)\n", inst.name, inst.backend.Name())
+		fmt.Fprintf(&details, "\n%s (%s)\n", inst.name, inst.backend.Name())
 		ctx, cancel := context.WithTimeout(context.Background(), o.timeout)
-		observedCapabilities := map[string]report.Capability{}
-		observeUnavailable := func(name, detail string) {
-			observedCapabilities[name] = report.Capability{
-				Name: name, Status: report.CapabilityUnavailable, Detail: detail,
-			}
-		}
-		observedVersion := ""
 		if provider, available := inst.backend.(backendpkg.VersionProvider); available {
 			versionCtx, versionCancel := context.WithTimeout(ctx, 5*time.Second)
 			version, verr := provider.Version(versionCtx)
 			versionCancel()
 			if verr == nil {
-				observedVersion = version
 				assessment := report.AssessBackendVersion(inst.backend.Name(), version)
 				switch assessment.Status {
 				case report.BackendVersionTested:
-					fmt.Fprintf(stdout, "  %s backend version %s (tested)\n", mark(stdout, true), version)
+					fmt.Fprintf(&details, "  %s backend version %s (tested)\n", mark(stdout, true), version)
 				case report.BackendVersionBestEffort:
-					fmt.Fprintf(stdout, "  - backend version %s (best-effort — %s)\n", version, assessment.Detail)
+					limited = true
+					fmt.Fprintf(&details, "  - backend version %s (best-effort — %s)\n", version, assessment.Detail)
 				case report.BackendVersionUnsupported:
-					ok = false
-					fmt.Fprintf(stdout, "  %s backend version %s unsupported — %s\n", mark(stdout, false), version, assessment.Detail)
+					ready = false
+					fmt.Fprintf(&details, "  %s backend version %s unsupported — %s\n", mark(stdout, false), version, assessment.Detail)
 				}
 			} else {
-				fmt.Fprintf(stdout, "  - backend version unavailable: %v\n", verr)
+				limited = true
+				fmt.Fprintf(&details, "  - backend version unavailable: %v\n", verr)
 			}
 		}
 
@@ -66,13 +68,11 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		ruleInputUnavailable := 0
 		ruleInputDetail := ""
 		if err != nil {
-			ok = false
-			observeUnavailable(report.CapabilityRuleInventory, "runtime rule-inventory probe failed")
-			observeUnavailable(report.CapabilityRequiredFields, "runtime rule-inventory probe failed")
-			fmt.Fprintf(stdout, "  %s detection rules not readable: %v\n", mark(stdout, false), err)
-			authHint(stdout, err)
+			ready = false
+			fmt.Fprintf(&details, "  %s detection rules not readable: %v\n", mark(stdout, false), err)
+			authHint(&details, err)
 		} else {
-			fmt.Fprintf(stdout, "  %s detection rules readable (%d rules)\n", mark(stdout, true), len(rules))
+			fmt.Fprintf(&details, "  %s detection rules readable (%d rules)\n", mark(stdout, true), len(rules))
 			for _, rule := range rules {
 				if !rule.Enabled || rule.InputStatus != backendpkg.ResolutionUnavailable {
 					continue
@@ -83,97 +83,88 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 				}
 			}
 			if ruleInputUnavailable > 0 {
-				ok = false
-				detail := fmt.Sprintf("runtime rule-input discovery failed for %d enabled rule(s)", ruleInputUnavailable)
-				observeUnavailable(report.CapabilitySourceResolution, detail)
-				fmt.Fprintf(stdout, "  %s rule input discovery unavailable for %d enabled rule(s)", mark(stdout, false), ruleInputUnavailable)
+				ready = false
+				fmt.Fprintf(&details, "  %s rule input discovery unavailable for %d enabled rule(s)", mark(stdout, false), ruleInputUnavailable)
 				if ruleInputDetail != "" {
-					fmt.Fprintf(stdout, ": %s", ruleInputDetail)
+					fmt.Fprintf(&details, ": %s", ruleInputDetail)
 				}
-				fmt.Fprintln(stdout)
+				fmt.Fprintln(&details)
 				if ruleInputDetail != "" {
-					authHint(stdout, fmt.Errorf("%s", ruleInputDetail))
+					authHint(&details, fmt.Errorf("%s", ruleInputDetail))
 				}
 			}
 		}
 
 		sources, err := inst.backend.Sources(ctx)
 		if err != nil {
-			ok = false
-			observeUnavailable(report.CapabilityFreshness, "runtime source-stats probe failed")
-			observeUnavailable(report.CapabilityDocsStorage, "runtime source-stats probe failed")
-			observeUnavailable(report.CapabilitySchema, "runtime source-stats probe failed before schema could be checked")
-			observeUnavailable(report.CapabilityIngestLag, "runtime source-stats probe failed")
-			fmt.Fprintf(stdout, "  %s source stats not readable: %v\n", mark(stdout, false), err)
-			authHint(stdout, err)
+			ready = false
+			fmt.Fprintf(&details, "  %s source stats not readable: %v\n", mark(stdout, false), err)
+			authHint(&details, err)
 		} else {
-			fmt.Fprintf(stdout, "  %s source stats readable (%d sources)\n", mark(stdout, true), len(sources))
+			fmt.Fprintf(&details, "  %s source stats readable (%d sources)\n", mark(stdout, true), len(sources))
 
 			// Optional capabilities: needed by specific flags, not by scan.
 			if len(sources) > 0 {
 				schemas, serr := inst.backend.Schemas(ctx, sources[:1])
 				if serr == nil && len(schemas) > 0 {
-					fmt.Fprintf(stdout, "  %s field mappings readable\n", mark(stdout, true))
+					fmt.Fprintf(&details, "  %s field mappings readable\n", mark(stdout, true))
 				} else {
-					observeUnavailable(report.CapabilitySchema, "runtime field-mapping probe failed")
-					fmt.Fprintf(stdout, "  - field mappings not readable (optional; used by --schema)\n")
+					limited = true
+					fmt.Fprintln(&details, "  - field mappings not readable (optional; used by --schema)")
 				}
 			} else {
-				observedCapabilities[report.CapabilitySchema] = report.Capability{
-					Name: report.CapabilitySchema, Status: report.CapabilityPartial,
-					Detail: "not probed because no sources were visible",
-				}
+				limited = true
+				fmt.Fprintln(&details, "  - field mappings not checked because no sources were visible")
 			}
 		}
 
 		resolver, available := inst.backend.(backendpkg.Resolver)
 		if !available {
-			ok = false
-			observeUnavailable(report.CapabilitySourceResolution, "backend adapter has no native resolver")
-			fmt.Fprintf(stdout, "  %s native input resolution unavailable\n", mark(stdout, false))
+			ready = false
+			fmt.Fprintf(&details, "  %s native input resolution unavailable\n", mark(stdout, false))
 		} else {
 			probe := backendpkg.Rule{ID: "deadair-resolution-probe", Patterns: []string{"deadair-resolution-probe-does-not-exist-*"}}
 			resolved, rerr := resolver.ResolveInputs(ctx, []backendpkg.Rule{probe})
 			if rerr != nil || len(resolved) != 1 || (resolved[0].Status != backendpkg.ResolutionResolved && resolved[0].Status != backendpkg.ResolutionEmpty) {
-				ok = false
-				observeUnavailable(report.CapabilitySourceResolution, "runtime native-resolution probe failed")
+				ready = false
 				if rerr != nil {
-					fmt.Fprintf(stdout, "  %s native input resolution not readable: %v\n", mark(stdout, false), rerr)
+					fmt.Fprintf(&details, "  %s native input resolution not readable: %v\n", mark(stdout, false), rerr)
 				} else if len(resolved) == 0 {
-					fmt.Fprintf(stdout, "  %s native input resolution returned no evidence\n", mark(stdout, false))
+					fmt.Fprintf(&details, "  %s native input resolution returned no evidence\n", mark(stdout, false))
 				} else {
-					fmt.Fprintf(stdout, "  %s native input resolution is %s: %s\n", mark(stdout, false), resolved[0].Status, resolved[0].Detail)
+					fmt.Fprintf(&details, "  %s native input resolution is %s: %s\n", mark(stdout, false), resolved[0].Status, resolved[0].Detail)
 				}
 			} else if ruleInputUnavailable > 0 {
-				fmt.Fprintf(stdout, "  - native index-pattern resolution readable (%s); rule input discovery failed above\n", resolved[0].Status)
+				fmt.Fprintf(&details, "  - native index-pattern resolution readable (%s); rule input discovery failed above\n", resolved[0].Status)
 			} else {
-				fmt.Fprintf(stdout, "  %s native input resolution readable (%s)\n", mark(stdout, true), resolved[0].Status)
+				fmt.Fprintf(&details, "  %s native input resolution readable (%s)\n", mark(stdout, true), resolved[0].Status)
 			}
-		}
-
-		metadata := report.MetadataForBackend(inst.backend.Name(), observedVersion)
-		for i := range metadata.Capabilities {
-			if observed, exists := observedCapabilities[metadata.Capabilities[i].Name]; exists {
-				metadata.Capabilities[i] = observed
-			}
-		}
-		fmt.Fprintln(stdout, "  capabilities (adapter limits; runtime failures override):")
-		for _, capability := range metadata.Capabilities {
-			fmt.Fprintf(stdout, "    %-20s %s", capability.Name, capability.Status)
-			if capability.Detail != "" {
-				fmt.Fprintf(stdout, " — %s", capability.Detail)
-			}
-			fmt.Fprintln(stdout)
 		}
 		cancel()
 	}
 
-	if ok {
+	switch {
+	case !ready:
+		fmt.Fprintln(stdout, color(stdout, "31;1", "BLOCKED"))
+		fmt.Fprintln(stdout, "A required read path failed. Fix the failures below before scanning.")
+	case limited:
+		fmt.Fprintln(stdout, color(stdout, "33;1", "READY WITH LIMITS"))
+		fmt.Fprintln(stdout, "Live scans can run, but an optional check is unavailable.")
+	default:
+		fmt.Fprintln(stdout, color(stdout, "32;1", "READY"))
+		fmt.Fprintln(stdout, "The credential can read rules, sources, and native resolution evidence.")
+	}
+	if _, err := io.Copy(stdout, &details); err != nil {
+		fmt.Fprintf(stderr, "deadair: writing check output: %v\n", err)
+		return report.ExitError
+	}
+
+	if ready {
 		next := "deadair scan"
 		if o.fleetFile != "" {
 			next = "deadair scan --fleet " + o.fleetFile
 		}
-		fmt.Fprintf(stdout, "\n%s\n", color(stdout, "32", "ready — run `"+next+"`"))
+		fmt.Fprintf(stdout, "\nnext: %s\n", next)
 		return report.ExitHealthy
 	}
 	return report.ExitError

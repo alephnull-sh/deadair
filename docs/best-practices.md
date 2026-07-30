@@ -11,7 +11,7 @@ each finding.
 
    ```sh
    deadair check
-   deadair scan --out first-report.json --html-out first-report.html
+   deadair scan --json-out first-report.json --html-out first-report.html
    ```
 
    Review it with detection engineering and telemetry pipeline owners. For each finding, inspect
@@ -109,7 +109,7 @@ same incident, but they often belong to different queues.
 - Keep instance names stable. They key metrics, state files, baseline history, and redacted
   digests.
 - Run `deadair check --fleet fleet.json` after onboarding or rotating any tenant.
-- Use `--redact` for client-facing reports, shared Prometheus, demos, and shared issue reports.
+- Use `--redact` for client-facing reports, shared Prometheus, public screenshots, and shared issue reports.
 - Size the interval from observed scan time. Fleet scans are sequential, so wall time is roughly
   the sum of tenant scan times.
 - Route `deadair_instance_up == 0` to the person who owns that tenant's credential and network
