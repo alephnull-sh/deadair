@@ -1,4 +1,4 @@
-deadair scan — elastic — 2026-07-30T04:35:21Z
+deadair scan — elastic — 2026-07-30T04:38:55Z
 sources:    5 (4 ok, 1 stale, 0 empty, 0 unknown, 0 maintenance)
 detections: 5 enabled / 5 total (0 unmapped)
 inputs:     4 resolved, 1 empty, 0 unsupported, 0 unavailable, 0 remote, 0 ambiguous

@@ -104,7 +104,7 @@ Compare two JSON reports. Exit 1 means the newer report contains regressions.
 
   --json  print the diff as JSON
 
-Guide: `+usageGuideURL+`#compare-two-reports`)
+Guide: `+usageGuideURL+`#gate-detection-changes`)
 }
 
 func tuneUsage(w io.Writer) {
@@ -116,7 +116,7 @@ Suggest volume-baseline settings from accumulated local state.
   --json             print the tuning summary as JSON
   --redact           replace source names with stable digests
 
-Guide: `+usageGuideURL+`#tune-volume-thresholds`)
+Guide: `+usageGuideURL+`#add-history-based-checks`)
 }
 
 func serveUsage(w io.Writer) {
@@ -148,5 +148,5 @@ Connection and scan:
   --schema                    track field mapping drift; requires --state-file
 
 Run `+"`deadair scan -h`"+` for the full connection and state option list.
-Guide: `+usageGuideURL+`#prometheus-exporter`)
+Guide: `+usageGuideURL+`#run-the-exporter`)
 }

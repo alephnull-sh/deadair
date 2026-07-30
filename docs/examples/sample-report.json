@@ -1,9 +1,9 @@
 {
   "schema_version": "deadair.report.v1",
-  "generated_at": "2026-07-30T04:35:21.163657Z",
+  "generated_at": "2026-07-30T04:38:55.944059Z",
   "producer": {
     "name": "deadair",
-    "version": "v0.4.0-8-g69fd783"
+    "version": "v0.4.0-8-g7d5ff25"
   },
   "backend": "elastic",
   "backend_metadata": {
@@ -81,7 +81,7 @@
     {
       "name": "deadair-lab-lag",
       "status": "ok",
-      "age_seconds": 12.163679,
+      "age_seconds": 12.944083,
       "docs": 1,
       "size_bytes": 4290,
       "volume": {
@@ -96,7 +96,7 @@
     {
       "name": "deadair-lab-live",
       "status": "ok",
-      "age_seconds": 12.16368,
+      "age_seconds": 12.944083,
       "docs": 1,
       "size_bytes": 5224,
       "volume": {
@@ -111,7 +111,7 @@
     {
       "name": "deadair-lab-schema",
       "status": "ok",
-      "age_seconds": 12.163678,
+      "age_seconds": 12.94408,
       "docs": 1,
       "size_bytes": 5227,
       "volume": {
@@ -126,7 +126,7 @@
     {
       "name": "deadair-lab-stale",
       "status": "stale",
-      "age_seconds": 259212.163679,
+      "age_seconds": 259212.944081,
       "docs": 1,
       "size_bytes": 5229,
       "volume": {
@@ -141,7 +141,7 @@
     {
       "name": "deadair-lab-unused",
       "status": "ok",
-      "age_seconds": 12.16368,
+      "age_seconds": 12.944084,
       "docs": 1,
       "size_bytes": 4224,
       "volume": {
@@ -156,7 +156,7 @@
   ],
   "dead_detections": [
     {
-      "id": "7326d9ee-3937-436a-b99d-52f4f4948f01",
+      "id": "3518c2b8-93bf-43b1-8d1d-d164bd846e86",
       "name": "Lab registry persistence",
       "severity": "high",
       "reason": "disconnected",
@@ -165,7 +165,7 @@
       ]
     },
     {
-      "id": "58aca106-0c74-4570-8d2a-c6b83bf4a43b",
+      "id": "bdee665c-093f-4985-b560-158e7db9dd5a",
       "name": "Lab authentication source",
       "severity": "medium",
       "reason": "starved",
@@ -179,7 +179,7 @@
   ],
   "impaired_detections": [
     {
-      "id": "221be7a8-0406-4726-8c5d-30aec20753d6",
+      "id": "10c6e1b5-31bc-41a6-8806-dfedf27cb8e9",
       "name": "Lab parser field coverage",
       "severity": "high",
       "reasons": [
@@ -193,7 +193,7 @@
       ]
     },
     {
-      "id": "afec5db0-79f9-447f-b7d7-cbeb033b88ac",
+      "id": "280d0ae1-8d7c-4232-ab6f-c9c0ea1275a2",
       "name": "Lab delayed ingest",
       "severity": "medium",
       "reasons": [
@@ -212,55 +212,55 @@
   ],
   "input_resolutions": [
     {
-      "rule_id": "221be7a8-0406-4726-8c5d-30aec20753d6",
+      "rule_id": "10c6e1b5-31bc-41a6-8806-dfedf27cb8e9",
       "expression": "deadair-lab-schema",
       "selector_kind": "index_expression",
       "resolved_sources": [
         "deadair-lab-schema"
       ],
       "resolution_method": "resolve_index",
-      "observed_at": "2026-07-30T04:35:21.16111Z",
+      "observed_at": "2026-07-30T04:38:55.941957Z",
       "status": "resolved"
     },
     {
-      "rule_id": "58aca106-0c74-4570-8d2a-c6b83bf4a43b",
-      "expression": "deadair-lab-stale",
-      "selector_kind": "index_expression",
-      "resolved_sources": [
-        "deadair-lab-stale"
-      ],
-      "resolution_method": "resolve_index",
-      "observed_at": "2026-07-30T04:35:21.161111Z",
-      "status": "resolved"
-    },
-    {
-      "rule_id": "7326d9ee-3937-436a-b99d-52f4f4948f01",
-      "expression": "deadair-lab-registry-*",
-      "selector_kind": "index_expression",
-      "resolution_method": "resolve_index",
-      "observed_at": "2026-07-30T04:35:21.161115Z",
-      "status": "empty"
-    },
-    {
-      "rule_id": "afec5db0-79f9-447f-b7d7-cbeb033b88ac",
+      "rule_id": "280d0ae1-8d7c-4232-ab6f-c9c0ea1275a2",
       "expression": "deadair-lab-lag",
       "selector_kind": "index_expression",
       "resolved_sources": [
         "deadair-lab-lag"
       ],
       "resolution_method": "resolve_index",
-      "observed_at": "2026-07-30T04:35:21.161116Z",
+      "observed_at": "2026-07-30T04:38:55.941957Z",
       "status": "resolved"
     },
     {
-      "rule_id": "d9f7ac41-8608-4ecd-b055-a231d641968d",
+      "rule_id": "3518c2b8-93bf-43b1-8d1d-d164bd846e86",
+      "expression": "deadair-lab-registry-*",
+      "selector_kind": "index_expression",
+      "resolution_method": "resolve_index",
+      "observed_at": "2026-07-30T04:38:55.941955Z",
+      "status": "empty"
+    },
+    {
+      "rule_id": "5d38ad7e-46eb-4656-b9e3-43587f25a6fd",
       "expression": "deadair-lab-live",
       "selector_kind": "index_expression",
       "resolved_sources": [
         "deadair-lab-live"
       ],
       "resolution_method": "resolve_index",
-      "observed_at": "2026-07-30T04:35:21.161112Z",
+      "observed_at": "2026-07-30T04:38:55.941955Z",
+      "status": "resolved"
+    },
+    {
+      "rule_id": "bdee665c-093f-4985-b560-158e7db9dd5a",
+      "expression": "deadair-lab-stale",
+      "selector_kind": "index_expression",
+      "resolved_sources": [
+        "deadair-lab-stale"
+      ],
+      "resolution_method": "resolve_index",
+      "observed_at": "2026-07-30T04:38:55.941953Z",
       "status": "resolved"
     }
   ],

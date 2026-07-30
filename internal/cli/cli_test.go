@@ -868,6 +868,36 @@ func TestCommandHelpIsSuccessfulAndFocused(t *testing.T) {
 	}
 }
 
+func TestCommandHelpLinksMatchUsageHeadings(t *testing.T) {
+	usage, err := os.ReadFile(filepath.Join("..", "..", "docs", "usage.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		command string
+		anchor  string
+		heading string
+	}{
+		{command: "diff", anchor: "#gate-detection-changes", heading: "## Gate detection changes"},
+		{command: "tune", anchor: "#add-history-based-checks", heading: "## Add history-based checks"},
+		{command: "serve", anchor: "#run-the-exporter", heading: "## Run the exporter"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := cli.Run([]string{tt.command, "-h"}, &stdout, &stderr); code != report.ExitHealthy {
+				t.Fatalf("%s -h exit = %d", tt.command, code)
+			}
+			if !strings.Contains(stderr.String(), tt.anchor) {
+				t.Errorf("%s help missing %s:\n%s", tt.command, tt.anchor, stderr.String())
+			}
+			if !bytes.Contains(usage, []byte(tt.heading)) {
+				t.Errorf("usage guide missing heading %q", tt.heading)
+			}
+		})
+	}
+}
+
 func TestEmbeddedDemoCommandWasRemoved(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := cli.Run([]string{"demo"}, &stdout, &stderr); code != report.ExitError {
