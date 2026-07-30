@@ -1,27 +1,15 @@
-deadair scan — elastic — 2026-07-05T15:45:49Z
-sources:    10 (9 ok, 1 stale, 0 empty, 0 unknown, 0 maintenance)
-detections: 499 enabled / 1276 total (0 unmapped)
+deadair scan — elastic — 2026-07-30T04:35:21Z
+sources:    5 (4 ok, 1 stale, 0 empty, 0 unknown, 0 maintenance)
+detections: 5 enabled / 5 total (0 unmapped)
+inputs:     4 resolved, 1 empty, 0 unsupported, 0 unavailable, 0 remote, 0 ambiguous
 
-DEAD: 46 enabled detection(s) cannot fire right now
-  [high] Persistence via WMI Standard Registry Provider — no matching source
-  [high] Potential Remote Credential Access via Registry — no matching source
-  [high] Sensitive Registry Hive Access via RegBack — no matching source
-  [high] Untrusted Driver Loaded — no matching source
-  [medium] Component Object Model Hijacking — no matching source
-  [medium] Deprecated - Container Workload Protection — no matching source
-  [medium] Downloaded Shortcut Files — no matching source
-  [medium] Downloaded URL Files — no matching source
-  [medium] Endpoint Security (Elastic Defend) — no matching source
-  [medium] Expired or Revoked Driver Loaded — no matching source
-  [medium] First Time Seen Driver Loaded — no matching source
-  [medium] LSASS Process Access via Windows API — no matching source
-  [medium] Persistence via a Windows Installer — no matching source
-  [medium] Potential LSA Authentication Package Abuse — no matching source
-  [medium] Potential Port Monitor or Print Processor Registration Abuse — no matching source
-  … and 31 more (use --json for the full list)
+DEAD: 2 enabled detection(s) cannot fire right now
+  [high] Lab registry persistence — no matching source
+  [medium] Lab authentication source — all matching sources stale or empty (deadair-lab-stale)
 
-IMPAIRED: 1 enabled detection(s) run with reduced visibility
-  [medium] Batch-fed source watcher — lag-blind-window (ingest lag 45m in batchy-events exceeds window margin)
+IMPAIRED: 2 enabled detection(s) run with reduced visibility
+  [high] Lab parser field coverage — missing-fields (missing process.command_line)
+  [medium] Lab delayed ingest — lag-blind-window (ingest lag 45m in deadair-lab-lag exceeds window margin)
 
-unused telemetry: 1 source(s), 7.0 KiB ingested with no enabled detection reading it
-  metrics-myapp.usage-default (7.0 KiB, 2 disabled rule(s) reference it)
+unused telemetry: 1 source(s), 4.1 KiB ingested with no enabled detection reading it
+  deadair-lab-unused (4.1 KiB)

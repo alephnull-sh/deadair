@@ -247,15 +247,6 @@ func countLabel(n int, singular, plural string) string {
 	return fmt.Sprintf("%d %s", n, plural)
 }
 
-func printVisualDemoNextSteps(w io.Writer) {
-	fmt.Fprintf(w, "\n%s\n", color(w, "36;1", "DEMO DATA"))
-	fmt.Fprintln(w, color(w, "2", "Embedded sample only. No SIEM connection was made."))
-	fmt.Fprintf(w, "\n%s\n", color(w, "1", "Run it on your environment"))
-	fmt.Fprintf(w, "  %s  %s\n", color(w, "1", "deadair setup"), color(w, "2", "create read-only access"))
-	fmt.Fprintf(w, "  %s  %s\n", color(w, "1", "deadair check"), color(w, "2", "verify the connection"))
-	fmt.Fprintf(w, "  %s  %s\n", color(w, "1", "deadair scan "), color(w, "2", "inspect detection coverage"))
-}
-
 func printVisualDiff(w io.Writer, d *report.DiffResult) {
 	if d.Regressions() == 0 && len(d.RecoveredDead)+len(d.RecoveredImpaired)+len(d.RecoveredSources)+len(d.NewSources)+len(d.RemovedSources)+len(d.NewlyUnused) == 0 {
 		fmt.Fprintln(w, color(w, "32;1", "NO CHANGE"))

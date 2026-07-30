@@ -20,135 +20,139 @@
 </head>
 <body>
   <h1>deadair report</h1>
-  <p class="muted">Elastic Security 8.17.4 (elastic) · 2026-07-05 15:45:50 UTC</p>
-  <p class="muted">deadair.report.v1 · producer deadair 0.3.4 · legacy live capture<br>
-  Source resolution is partial because this capture predates backend-native resolution evidence.</p>
+  <p class="muted">Elastic Security 9.4.4 (elastic) · 2026-07-30 04:35:21 UTC</p>
+  <p class="muted">deadair.report.v1 · producer deadair v0.4.0-8-g69fd783 · recognized versions 8.x, 9.x<br>Capabilities: rule_inventory=supported, source_resolution=partial, freshness=supported, docs_storage=supported, schema=supported, required_fields=supported, ingest_lag=supported, candidate_parsing=supported, remote=listed-only</p>
 
   <div class="grid">
-    <div class="metric"><span>Sources</span><strong>10</strong></div>
+    <div class="metric"><span>Sources</span><strong>5</strong></div>
     <div class="metric"><span>Degraded sources</span><strong>1</strong></div>
     <div class="metric"><span>Low-volume sources</span><strong>0</strong></div>
     <div class="metric"><span>Schema drift</span><strong>0</strong></div>
-    <div class="metric"><span>Dead detections</span><strong>45</strong></div>
-    <div class="metric"><span>Impaired detections</span><strong>1</strong></div>
-    <div class="metric"><span>Unused telemetry</span><strong>7.0 KiB</strong></div>
+    <div class="metric"><span>Dead detections</span><strong>2</strong></div>
+    <div class="metric"><span>Impaired detections</span><strong>2</strong></div>
+	    <div class="metric"><span>Unused telemetry</span><strong>4.1 KiB</strong></div>
   </div>
+
+
+  <h2>Input resolution</h2>
+  <table>
+    <thead><tr><th>Rule ID</th><th>Input</th><th>Kind</th><th>Status</th><th>Resolved sources</th><th>Method</th><th>Detail</th></tr></thead>
+    <tbody>
+
+      <tr>
+        <td>221be7a8-0406-4726-8c5d-30aec20753d6</td>
+        <td>deadair-lab-schema</td>
+        <td>index_expression</td>
+        <td class="status-resolved">resolved</td>
+        <td>deadair-lab-schema</td>
+        <td>resolve_index</td>
+        <td></td>
+      </tr>
+
+      <tr>
+        <td>58aca106-0c74-4570-8d2a-c6b83bf4a43b</td>
+        <td>deadair-lab-stale</td>
+        <td>index_expression</td>
+        <td class="status-resolved">resolved</td>
+        <td>deadair-lab-stale</td>
+        <td>resolve_index</td>
+        <td></td>
+      </tr>
+
+      <tr>
+        <td>7326d9ee-3937-436a-b99d-52f4f4948f01</td>
+        <td>deadair-lab-registry-*</td>
+        <td>index_expression</td>
+        <td class="status-empty">empty</td>
+        <td></td>
+        <td>resolve_index</td>
+        <td></td>
+      </tr>
+
+      <tr>
+        <td>afec5db0-79f9-447f-b7d7-cbeb033b88ac</td>
+        <td>deadair-lab-lag</td>
+        <td>index_expression</td>
+        <td class="status-resolved">resolved</td>
+        <td>deadair-lab-lag</td>
+        <td>resolve_index</td>
+        <td></td>
+      </tr>
+
+      <tr>
+        <td>d9f7ac41-8608-4ecd-b055-a231d641968d</td>
+        <td>deadair-lab-live</td>
+        <td>index_expression</td>
+        <td class="status-resolved">resolved</td>
+        <td>deadair-lab-live</td>
+        <td>resolve_index</td>
+        <td></td>
+      </tr>
+
+    </tbody>
+  </table>
+
 
   <h2>Sources</h2>
   <table>
     <thead><tr><th>Name</th><th>Status</th><th>Docs</th><th>Size</th><th>Known consumers</th><th>Volume</th><th>Z-score</th><th>Schema</th></tr></thead>
     <tbody>
-    
+
       <tr>
-        <td>batchy-events</td>
+        <td>deadair-lab-lag</td>
         <td class="status-ok">ok</td>
-        <td>30</td>
-        <td>6.6 KiB</td>
         <td>1</td>
+        <td>4.2 KiB</td>
+        <td>1</td>
+        <td><span class="status-unknown">unknown</span></td>
+        <td>-</td>
         <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
       </tr>
-    
+
       <tr>
-        <td>logs-endpoint.events.network-default</td>
+        <td>deadair-lab-live</td>
         <td class="status-ok">ok</td>
-        <td>25</td>
-        <td>5.0 KiB</td>
-        <td>60</td>
+        <td>1</td>
+        <td>5.1 KiB</td>
+        <td>1</td>
+        <td><span class="status-unknown">unknown</span></td>
+        <td>-</td>
         <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
       </tr>
-    
+
       <tr>
-        <td>logs-endpoint.events.process-default</td>
+        <td>deadair-lab-schema</td>
         <td class="status-ok">ok</td>
-        <td>25</td>
-        <td>5.0 KiB</td>
-        <td>248</td>
+        <td>1</td>
+        <td>5.1 KiB</td>
+        <td>1</td>
+        <td><span class="status-unknown">unknown</span></td>
+        <td>-</td>
         <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
       </tr>
-    
+
       <tr>
-        <td>logs-myapp.custom-default</td>
-        <td class="status-ok">ok</td>
-        <td>200</td>
-        <td>10.2 KiB</td>
-        <td>6</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
-      </tr>
-    
-      <tr>
-        <td>logs-system.auth-default</td>
+        <td>deadair-lab-stale</td>
         <td class="status-stale">stale</td>
-        <td>25</td>
-        <td>5.0 KiB</td>
-        <td>6</td>
+        <td>1</td>
+        <td>5.1 KiB</td>
+        <td>1</td>
+        <td><span class="status-unknown">unknown</span></td>
+        <td>-</td>
         <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
       </tr>
-    
+
       <tr>
-        <td>logs-system.security-default</td>
+        <td>deadair-lab-unused</td>
         <td class="status-ok">ok</td>
-        <td>25</td>
-        <td>5.0 KiB</td>
-        <td>192</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
-      </tr>
-    
-      <tr>
-        <td>logs-windows.powershell-default</td>
-        <td class="status-ok">ok</td>
-        <td>25</td>
-        <td>5.0 KiB</td>
-        <td>59</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
-      </tr>
-    
-      <tr>
-        <td>logs-windows.sysmon_operational-default</td>
-        <td class="status-ok">ok</td>
-        <td>25</td>
-        <td>5.0 KiB</td>
-        <td>306</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
-      </tr>
-    
-      <tr>
-        <td>metrics-myapp.usage-default</td>
-        <td class="status-ok">ok</td>
-        <td>100</td>
-        <td>7.0 KiB</td>
+        <td>1</td>
+        <td>4.1 KiB</td>
         <td>0</td>
+        <td><span class="status-unknown">unknown</span></td>
+        <td>-</td>
         <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
       </tr>
-    
-      <tr>
-        <td>winlogbeat-2026.07.04</td>
-        <td class="status-ok">ok</td>
-        <td>25</td>
-        <td>6.9 KiB</td>
-        <td>389</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>-</td>
-        <td>-</td>
-      </tr>
-    
+
     </tbody>
   </table>
 
@@ -156,118 +160,36 @@
   <table>
     <thead><tr><th>Severity</th><th>Name</th><th>Reason</th><th>Sources</th></tr></thead>
     <tbody>
-    
-      <tr><td>high</td><td>Persistence via WMI Standard Registry Provider</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>high</td><td>Potential Remote Credential Access via Registry</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>high</td><td>Sensitive Registry Hive Access via RegBack</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>high</td><td>Untrusted Driver Loaded</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Component Object Model Hijacking</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Deprecated - Container Workload Protection</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Downloaded Shortcut Files</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Downloaded URL Files</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Endpoint Security (Elastic Defend)</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Expired or Revoked Driver Loaded</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>First Time Seen Driver Loaded</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>LSASS Process Access via Windows API</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Persistence via a Windows Installer</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Potential LSA Authentication Package Abuse</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Potential Port Monitor or Print Processor Registration Abuse</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Potential Windows Session Hijacking via CcmExec</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Remote File Copy via TeamViewer</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Suspicious Module Loaded by LSASS</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Suspicious PowerShell Engine ImageLoad</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Third-party Backup Files Deleted via Unexpected Process</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Unsigned DLL Loaded by Svchost</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Unsigned DLL Side-Loading from a Suspicious Folder</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Veeam Backup Library Loaded by Unusual Process</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>medium</td><td>Windows Registry File Creation in SMB Share</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Archive File with Unusual Extension</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Compression DLL Loaded by Unusual Process</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Executable File with Unusual Extension</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>File Compressed or Archived into Common Format by Unsigned Process</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>File with Suspicious Extension Downloaded</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Image Loaded with Invalid Signature</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Ingress Transfer via Windows BITS</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Memory Dump File with Unusual Extension</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Office Test Registry Persistence</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Potential Credential Access via Memory Dump File Creation</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Potential Masquerading as System32 DLL</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Potential Masquerading as VLC DLL</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Service Disabled via Registry Modification</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Shortcut File Written or Modified on Startup Folder</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Startup or Run Key Registry Modification</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Suspicious Print Spooler SPL File Created</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Unsigned BITS Service Client Process</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Unsigned DLL Loaded by a Trusted Process</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Unusual Discovery Activity by User</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Unusual Discovery Signal Alert with Unusual Process Command Line</td><td>no matching source</td><td></td></tr>
-    
-      <tr><td>low</td><td>Unusual Discovery Signal Alert with Unusual Process Executable</td><td>no matching source</td><td></td></tr>
-    
+
+      <tr><td>high</td><td>Lab registry persistence</td><td>no matching source</td><td></td></tr>
+
+      <tr><td>medium</td><td>Lab authentication source</td><td>all matching sources stale or empty</td><td>deadair-lab-stale</td></tr>
+
     </tbody>
   </table>
 
   <h2>Impaired detections</h2>
   <table>
-    <thead><tr><th>Severity</th><th>Name</th><th>Reasons</th><th>Missing fields</th></tr></thead>
+    <thead><tr><th>Severity</th><th>Name</th><th>Reasons</th><th>Missing fields</th><th>Lag evidence</th></tr></thead>
     <tbody>
-    
-      <tr><td>medium</td><td>Batch-fed source watcher</td><td>lag-blind-window</td><td></td></tr>
-    
+
+      <tr><td>high</td><td>Lab parser field coverage</td><td>missing-fields</td><td>process.command_line</td><td>-</td></tr>
+
+      <tr><td>medium</td><td>Lab delayed ingest</td><td>lag-blind-window</td><td></td><td>2700s lag; deadair-lab-lag</td></tr>
+
     </tbody>
   </table>
 
-  <h2>Unused telemetry</h2>
-  <table>
+	  <h2>Unused telemetry</h2>
+
+	  <table>
     <thead><tr><th>Name</th><th>Docs</th><th>Size</th></tr></thead>
     <tbody>
-    
-      <tr><td>metrics-myapp.usage-default</td><td>100</td><td>7.0 KiB</td></tr>
-    
+
+      <tr><td>deadair-lab-unused</td><td>1</td><td>4.1 KiB</td></tr>
+
     </tbody>
-  </table>
+	  </table>
+
 </body>
 </html>

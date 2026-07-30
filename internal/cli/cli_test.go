@@ -619,7 +619,7 @@ func TestScanCandidateRule(t *testing.T) {
 	}
 }
 
-func TestScanCandidateRuleRejectsUnsupportedBackendFormat(t *testing.T) {
+func TestScanCandidateRuleRejectsOpenSearchBeforeBackendWork(t *testing.T) {
 	srv := opensearchFixtureServer(t)
 	defer srv.Close()
 	t.Setenv("DEADAIR_OPENSEARCH_USERNAME", "admin")
@@ -634,7 +634,7 @@ func TestScanCandidateRuleRejectsUnsupportedBackendFormat(t *testing.T) {
 		"scan", "--backend", "opensearch", "--opensearch-url", srv.URL,
 		"--rule", candidate,
 	}, &stdout, &stderr)
-	if code != report.ExitError || !strings.Contains(stderr.String(), `candidate-rule parsing is unavailable for backend "opensearch"`) {
+	if code != report.ExitError || !strings.Contains(stderr.String(), "--rule currently requires Elastic") {
 		t.Fatalf("exit = %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -832,10 +832,103 @@ func TestBareInvocationShowsHelp(t *testing.T) {
 	if code := cli.Run(nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("bare invocation exit = %d, want 0", code)
 	}
-	for _, want := range []string{"COMMANDS", "GET STARTED", "deadair demo", "deadair setup", "deadair check"} {
+	for _, want := range []string{"COMMANDS", "GET STARTED", "deadair setup", "deadair check", "deadair scan", "https://github.com/alephnull-sh/deadair/blob/main/docs/usage.md"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("help missing %q", want)
 		}
+	}
+	for _, unwanted := range []string{"deadair demo", "Guides: docs/usage.md"} {
+		if strings.Contains(stdout.String(), unwanted) {
+			t.Errorf("help contains stale guidance %q:\n%s", unwanted, stdout.String())
+		}
+	}
+}
+
+func TestCommandHelpIsSuccessfulAndFocused(t *testing.T) {
+	for _, command := range []string{"scan", "check", "diff", "serve", "tune", "setup"} {
+		t.Run(command, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := cli.Run([]string{command, "-h"}, &stdout, &stderr); code != report.ExitHealthy {
+				t.Fatalf("%s -h exit = %d, want 0\nstderr: %s", command, code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "Usage: deadair "+command) {
+				t.Fatalf("%s help is missing its usage line:\n%s", command, stderr.String())
+			}
+		})
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := cli.Run([]string{"check", "-h"}, &stdout, &stderr); code != report.ExitHealthy {
+		t.Fatalf("check -h exit = %d", code)
+	}
+	for _, scanOnly := range []string{"--max-stale", "--state-file", "--schema", "--volume-warmup", "--include"} {
+		if strings.Contains(stderr.String(), scanOnly) {
+			t.Errorf("check help exposes scan-only option %q:\n%s", scanOnly, stderr.String())
+		}
+	}
+}
+
+func TestEmbeddedDemoCommandWasRemoved(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := cli.Run([]string{"demo"}, &stdout, &stderr); code != report.ExitError {
+		t.Fatalf("demo exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), `unknown command "demo"`) {
+		t.Fatalf("demo command was not rejected clearly:\n%s", stderr.String())
+	}
+}
+
+func TestScanRejectsIncompatibleOptionsBeforeConfiguration(t *testing.T) {
+	fleetFile := filepath.Join(t.TempDir(), "fleet.json")
+	if err := os.WriteFile(fleetFile, []byte(`{"instances":[{
+		"name":"os-lab",
+		"backend":"opensearch",
+		"opensearch_url":"https://127.0.0.1:1",
+		"api_key_file":"missing-key"
+	}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "schema without state",
+			args: []string{"scan", "--schema"},
+			want: "--schema requires --state-file",
+		},
+		{
+			name: "fleet HTML before reading fleet",
+			args: []string{"scan", "--fleet", "does-not-exist.json", "--html-out", "report.html"},
+			want: "--html-out is available only for single-instance scans",
+		},
+		{
+			name: "candidate rule on OpenSearch",
+			args: []string{"scan", "--backend", "opensearch", "--rule", "candidate.json"},
+			want: "--rule currently requires Elastic",
+		},
+		{
+			name: "candidate fleet before credentials",
+			args: []string{"scan", "--fleet", fleetFile, "--rule", "candidate.json"},
+			want: `--rule cannot scan fleet instance "os-lab"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := cli.Run(tt.args, &stdout, &stderr); code != report.ExitError {
+				t.Fatalf("exit = %d, want 2", code)
+			}
+			if !strings.Contains(stderr.String(), tt.want) {
+				t.Fatalf("stderr missing %q:\n%s", tt.want, stderr.String())
+			}
+			if strings.Contains(stderr.String(), "no deployment configured") ||
+				strings.Contains(stderr.String(), "reading fleet file") ||
+				strings.Contains(stderr.String(), "missing-key") {
+				t.Fatalf("validation ran after configuration work:\n%s", stderr.String())
+			}
+		})
 	}
 }
 
@@ -859,10 +952,13 @@ func TestCheck(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("check exit = %d; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
 	}
-	for _, want := range []string{"backend version 9.4.4", "detection rules readable (5 rules)", "source stats readable (3 sources)", "field mappings readable", "native input resolution readable (empty)", "source_resolution", "ready"} {
+	for _, want := range []string{"READY", "backend version 9.4.4", "detection rules readable (5 rules)", "source stats readable (3 sources)", "field mappings readable", "native input resolution readable (empty)", "next: deadair scan"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("check output missing %q:\n%s", want, stdout.String())
 		}
+	}
+	if !strings.HasPrefix(stdout.String(), "READY\n") || strings.Contains(stdout.String(), "capabilities (") {
+		t.Errorf("check does not lead with a concise status:\n%s", stdout.String())
 	}
 
 	stdout.Reset()
@@ -880,7 +976,7 @@ func TestCheck(t *testing.T) {
 	stderr.Reset()
 	code = cli.Run([]string{"check", "--es-url", unsupported.URL, "--kibana-url", unsupported.URL}, &stdout, &stderr)
 	if code != report.ExitError || !strings.Contains(stdout.String(), "backend version 7.17.0 unsupported") ||
-		strings.Contains(stdout.String(), "ready —") {
+		!strings.HasPrefix(stdout.String(), "BLOCKED\n") || strings.Contains(stdout.String(), "next:") {
 		t.Fatalf("unsupported version check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 
@@ -890,7 +986,7 @@ func TestCheck(t *testing.T) {
 	stderr.Reset()
 	code = cli.Run([]string{"check", "--es-url", denied.URL, "--kibana-url", denied.URL}, &stdout, &stderr)
 	if code != report.ExitError || !strings.Contains(stdout.String(), "native input resolution is unavailable") ||
-		!strings.Contains(stdout.String(), "source_resolution") || !strings.Contains(stdout.String(), "runtime native-resolution probe failed") {
+		!strings.HasPrefix(stdout.String(), "BLOCKED\n") {
 		t.Fatalf("resolution capability check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 
@@ -900,9 +996,18 @@ func TestCheck(t *testing.T) {
 	stderr.Reset()
 	code = cli.Run([]string{"check", "--es-url", dataViewDenied.URL, "--kibana-url", dataViewDenied.URL}, &stdout, &stderr)
 	if code != report.ExitError || !strings.Contains(stdout.String(), "rule input discovery unavailable for 1 enabled rule(s)") ||
-		!strings.Contains(stdout.String(), "runtime rule-input discovery failed for 1 enabled rule(s)") ||
-		strings.Contains(stdout.String(), "ready —") {
+		!strings.HasPrefix(stdout.String(), "BLOCKED\n") || strings.Contains(stdout.String(), "next:") {
 		t.Fatalf("data-view capability check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+
+	bestEffort := fixtureServerOptions(t, "9.5.0", 0)
+	defer bestEffort.Close()
+	stdout.Reset()
+	stderr.Reset()
+	code = cli.Run([]string{"check", "--es-url", bestEffort.URL, "--kibana-url", bestEffort.URL}, &stdout, &stderr)
+	if code != report.ExitHealthy || !strings.HasPrefix(stdout.String(), "READY WITH LIMITS\n") ||
+		!strings.Contains(stdout.String(), "best-effort") || !strings.Contains(stdout.String(), "next: deadair scan") {
+		t.Fatalf("best-effort version check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -928,7 +1033,7 @@ func TestCheckFleet(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("check --fleet exit = %d; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
 	}
-	for _, want := range []string{"tenant-a (elastic)", "tenant-b (elastic)", "ready — run `deadair scan --fleet " + fleetFile + "`"} {
+	for _, want := range []string{"READY", "tenant-a (elastic)", "tenant-b (elastic)", "next: deadair scan --fleet " + fleetFile} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("check --fleet output missing %q:\n%s", want, stdout.String())
 		}

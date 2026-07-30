@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"flag"
 	"fmt"
 	"io"
 
@@ -11,9 +12,28 @@ import (
 // role, the key mint, the env exports. It never touches the SIEM itself —
 // the operator runs the commands with their own admin credentials.
 func runSetup(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, `Usage: deadair setup [elastic|opensearch]
+
+Print the least-privilege role, credential command, and environment variables
+for a backend. This command does not contact the SIEM.
+
+Credential guides:
+  Elastic:    https://github.com/alephnull-sh/deadair/blob/main/docs/credentials/elastic.md
+  OpenSearch: https://github.com/alephnull-sh/deadair/blob/main/docs/credentials/opensearch.md`)
+	}
+	if parsed, code := parseFlags(fs, args); !parsed {
+		return code
+	}
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "deadair: setup accepts one backend, got %q\n", fs.Args())
+		return report.ExitError
+	}
 	backend := "elastic"
-	if len(args) > 0 {
-		backend = args[0]
+	if fs.NArg() == 1 {
+		backend = fs.Arg(0)
 	}
 	switch backend {
 	case "elastic":
@@ -37,7 +57,8 @@ export DEADAIR_API_KEY=<encoded>
 deadair check
 deadair scan
 
-# Details and tighter scoping: docs/credentials/elastic.md
+# Details and tighter scoping:
+# https://github.com/alephnull-sh/deadair/blob/main/docs/credentials/elastic.md
 `)
 		return report.ExitHealthy
 	case "opensearch":
@@ -45,7 +66,8 @@ deadair scan
 # 1. Create a read-only user and map it (run as admin):
 #    roles: security_analytics_read_access + a role with cluster_monitor and
 #    indices monitor/read on your telemetry patterns.
-#    Full role JSON: docs/credentials/opensearch.md
+#    Full role JSON:
+#    https://github.com/alephnull-sh/deadair/blob/main/docs/credentials/opensearch.md
 
 # 2. Point deadair at the deployment:
 export DEADAIR_BACKEND=opensearch
