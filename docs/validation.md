@@ -14,7 +14,6 @@ The public test and lab coverage proves these paths:
 | Area | Evidence |
 |---|---|
 | core graph logic | unit tests and race tests in CI |
-| credential-free evaluation | deterministic embedded `deadair demo` fixture through terminal, JSON, and HTML output |
 | Elastic backend | live Elastic integration test with the documented read-only role |
 | OpenSearch backend | live OpenSearch integration test with the documented read-only role |
 | native input resolution | alias, data-stream, exclusion, empty, and unavailable outcomes in backend tests and the live matrix |
@@ -44,12 +43,11 @@ Start with the lowest level that your environment allows.
 
 | Level | Run | Goal |
 |---|---|---|
-| 0 - demo | `deadair demo` | inspect every core finding without credentials, Docker, or a SIEM |
-| 1 - lab | `make mssp-lab` | verify the local operator workflow in throwaway containers |
-| 2 - test SIEM | one `check` and one redacted `scan` against a test/dev SIEM | validate privileges and report shape |
-| 3 - production one-shot | one read-only redacted scan against a production SIEM | compare findings to known telemetry state |
-| 4 - history | scheduled scans with `--state-file` for 7-14 days | validate volume baselines, hysteresis, and lag checks |
-| 5 - fleet run | `check --fleet`, `scan --fleet`, then `serve --fleet` | validate tenant separation, partial failures, metrics, and runtime |
+| 0 - lab | `make record-scan-lab` or `make mssp-lab` | verify the operator workflow against throwaway backends |
+| 1 - test SIEM | one `check` and one redacted `scan` against a test/dev SIEM | validate privileges and report shape |
+| 2 - production one-shot | one read-only redacted scan against a production SIEM | compare findings to known telemetry state |
+| 3 - history | scheduled scans with `--state-file` for 7-14 days | validate volume baselines, hysteresis, and lag checks |
+| 4 - fleet run | `check --fleet`, `scan --fleet`, then `serve --fleet` | validate tenant separation, partial failures, metrics, and runtime |
 
 Do not start with alerting. Start with a manual report, read it with detection engineering and
 pipeline owners, then decide which findings are actionable.
@@ -60,7 +58,7 @@ Use a read-only credential from `deadair setup`, then run:
 
 ```sh
 deadair check
-deadair scan --redact --json --out deadair-redacted.json --html-out deadair-report.html
+deadair scan --redact --json --json-out deadair-redacted.json --html-out deadair-report.html
 ```
 
 If schema visibility is approved:
@@ -71,7 +69,7 @@ deadair scan \
   --schema \
   --state-file deadair-state.json \
   --json \
-  --out deadair-redacted.json \
+  --json-out deadair-redacted.json \
   --html-out deadair-report.html
 ```
 

@@ -112,7 +112,7 @@ deadair scan \
   --schema \
   --redact \
   --json \
-  --out /var/lib/deadair/reports/latest-redacted.json
+  --json-out /var/lib/deadair/reports/latest-redacted.json
 ```
 
 Keep an unredacted internal report only where analysts need exact source and rule names:
@@ -123,7 +123,7 @@ deadair scan \
   --state-file /var/lib/deadair/state/fleet-state.json \
   --schema \
   --json \
-  --out /var/lib/deadair/reports/latest-internal.json
+  --json-out /var/lib/deadair/reports/latest-internal.json
 ```
 
 With `--fleet`, one `--state-file` prefix becomes one state file per instance.
@@ -179,7 +179,6 @@ Use `--redact` for:
 - shared Prometheus
 - screenshots
 - shared issue reports
-- demos
 - any artifact that leaves the restricted SOC workspace
 
 Redaction covers tenant, source, rule, pattern, and field names with stable digests. Stable
@@ -247,7 +246,7 @@ fleet scan time ~= sum(per-tenant scan time) + network/auth overhead
 Measure your own p95:
 
 ```sh
-time deadair scan --fleet /etc/deadair/fleet.json --json --out /tmp/deadair.json
+time deadair scan --fleet /etc/deadair/fleet.json --json --json-out /tmp/deadair.json
 ```
 
 Starting intervals:

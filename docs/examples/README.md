@@ -1,25 +1,14 @@
 # Examples
 
-These files show what deadair reports look like before you point it at your own SIEM.
+These files were captured from the disposable Elastic 9.4.4 lab used by
+`make record-scan-lab`. The lab creates:
 
-For a reproducible report generated entirely from the installed binary, run:
-
-```sh
-deadair demo
-deadair demo --out demo-report.json --html-out demo-report.html
-```
-
-That embedded demo is deterministic and makes no network calls. The checked-in `sample-*` files
-below remain a separate live-backend artifact.
-
-They were captured from a live Elastic 8.17.4 Docker lab with:
-
-- the Elastic prebuilt detection package installed
-- about 500 Windows rules enabled
-- one live data stream
-- one stale data stream
-- one unused data stream
-- one source with 45-minute ingest lag
+- one healthy rule and source
+- one rule with no matching source
+- one rule whose source is stale
+- one rule with a declared field missing from its source mapping
+- one rule whose source has 45-minute ingest lag
+- one unused source
 - the least-privilege Elastic role from [credentials/elastic.md](../credentials/elastic.md)
 
 Files:
@@ -33,11 +22,11 @@ example, the first no-match finding in this sample is:
 
 | Evidence | Value |
 |---|---|
-| Rule | `Persistence via WMI Standard Registry Provider` |
+| Rule | `Lab registry persistence` |
 | JSON reason | `disconnected` |
-| Configured patterns | `logs-endpoint.events.registry-*`, `endgame-*` |
+| Configured patterns | `deadair-lab-registry-*` |
 | Matched sources | none |
-| Lab explanation | no Endpoint registry or Endgame source was seeded |
+| Lab explanation | the disposable lab intentionally does not create a matching registry source |
 
 The finding does not mean Elasticsearch or the agent is disconnected. It means none of that rule's
 configured patterns resolved to a concrete index or data stream visible to the scan credential.
@@ -48,9 +37,5 @@ Inspect the same fields in your own report with:
 jq '.dead_detections[] | {name, reason, patterns, sources}' report.json
 ```
 
-The sample uses public Elastic prebuilt rule names and generic stream names, so it is not
-redacted. Use `--redact` before sharing real reports outside your restricted SOC workspace.
-
-The JSON sample has been wrapped in the v1 additive report contract for schema validation. Its
-capability block marks source resolution `partial` because the underlying live capture predates
-backend-native resolution evidence; current scans populate `input_resolutions` directly.
+The sample uses synthetic lab names and contains no production data, so it is not redacted. Use
+`--redact` before sharing reports from a real environment outside your restricted SOC workspace.

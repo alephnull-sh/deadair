@@ -1,6 +1,6 @@
 # vhs tape: candidate-rule gate followed by a report regression check.
 # Regenerate from the repository root:
-#   make record-ci-demo
+#   make record-ci
 Output docs/assets/ci.gif
 
 Set FontSize 14
@@ -11,7 +11,7 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 30ms
 
 Hide
-Type `export PATH="$PWD/bin:$PATH" DEADAIR_ES_URL=http://localhost:9200 DEADAIR_KIBANA_URL=http://localhost:5601 DEADAIR_API_KEY=$(cat "$DEADAIR_CI_DEMO_OUT/api-key") && unset NO_COLOR && cd "$DEADAIR_CI_DEMO_OUT" && clear`
+Type `export PATH="$PWD/bin:$PATH" DEADAIR_ES_URL=http://localhost:9200 DEADAIR_KIBANA_URL=http://localhost:5601 DEADAIR_API_KEY=$(cat "$DEADAIR_CI_OUT/api-key") && unset NO_COLOR && cd "$DEADAIR_CI_OUT" && clear`
 Enter
 Sleep 500ms
 Show

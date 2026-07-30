@@ -489,6 +489,11 @@ func TestWriteHTML(t *testing.T) {
 	if strings.Contains(string(data), ">disconnected<") || strings.Contains(string(data), ">starved<") {
 		t.Fatalf("html report exposes machine reason codes:\n%s", data)
 	}
+	for lineNo, line := range strings.Split(string(data), "\n") {
+		if strings.TrimRight(line, " \t") != line {
+			t.Errorf("html report line %d has trailing whitespace", lineNo+1)
+		}
+	}
 }
 
 func TestRemoteRulesNeverDead(t *testing.T) {

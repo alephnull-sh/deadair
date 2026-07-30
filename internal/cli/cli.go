@@ -45,30 +45,28 @@ func printHelp(w io.Writer) {
 	fmt.Fprintf(w, "\n%s\n", h("USAGE"))
 	fmt.Fprintln(w, "  deadair <command> [flags]")
 	fmt.Fprintf(w, "\n%s\n", h("COMMANDS"))
-	fmt.Fprintln(w, "  demo      run a credential-free report from embedded evidence")
 	fmt.Fprintln(w, "  setup     print least-privilege credential setup for a backend")
-	fmt.Fprintln(w, "  check     verify connectivity and privileges")
+	fmt.Fprintln(w, "  check     verify readiness for a live scan")
 	fmt.Fprintln(w, "  scan      one-shot report; exit 0 healthy, 1 findings, 2 error")
 	fmt.Fprintln(w, "  serve     Prometheus exporter with periodic scans")
 	fmt.Fprintln(w, "  diff      compare two reports; exit 1 on regressions")
 	fmt.Fprintln(w, "  tune      suggest baseline settings from accumulated state")
 	fmt.Fprintln(w, "  version   print version")
 	fmt.Fprintf(w, "\n%s\n", h("GET STARTED"))
-	fmt.Fprintln(w, "  deadair demo      # inspect every core finding without a SIEM")
-	fmt.Fprintln(w, "  deadair setup     # prints the role, key command, and env exports")
-	fmt.Fprintln(w, "  deadair check     # confirms the connection and privileges work")
-	fmt.Fprintln(w, "  deadair scan      # first report")
+	fmt.Fprintln(w, "  deadair setup     # print the read-only credential setup")
+	fmt.Fprintln(w, "  deadair check     # confirm the credential can scan")
+	fmt.Fprintln(w, "  deadair scan      # assess live rules and telemetry")
 	if os.Getenv("DEADAIR_ES_URL") != "" {
-		fmt.Fprintf(w, "\nconfigured: elastic (%s)\n", os.Getenv("DEADAIR_ES_URL"))
+		fmt.Fprintln(w, "\nconfigured: elastic")
 	} else if os.Getenv("DEADAIR_OPENSEARCH_URL") != "" {
-		fmt.Fprintf(w, "\nconfigured: opensearch (%s)\n", os.Getenv("DEADAIR_OPENSEARCH_URL"))
+		fmt.Fprintln(w, "\nconfigured: opensearch")
 	} else {
 		fmt.Fprintln(w, "\nnot configured yet — start with: deadair setup")
 	}
-	fmt.Fprintln(w, "\nRun \"deadair <command> -h\" for flags. Guides: docs/usage.md")
+	fmt.Fprintf(w, "\nRun \"deadair <command> -h\" for flags. Guide: %s\n", usageGuideURL)
 }
 
-var commands = []string{"demo", "scan", "serve", "check", "diff", "tune", "setup", "version", "help"}
+var commands = []string{"scan", "serve", "check", "diff", "tune", "setup", "version", "help"}
 
 // suggest returns the closest command name, or "" if nothing is close.
 func suggest(input string) string {
@@ -108,8 +106,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	switch args[0] {
-	case "demo":
-		return runDemo(args[1:], stdout, stderr)
 	case "scan":
 		return runScan(args[1:], stdout, stderr)
 	case "serve":
@@ -166,7 +162,7 @@ type connOpts struct {
 	instanceName           string
 }
 
-func addConnFlags(fs *flag.FlagSet, o *connOpts) {
+func addBackendFlags(fs *flag.FlagSet, o *connOpts) {
 	fs.StringVar(&o.backendName, "backend", envOr("DEADAIR_BACKEND", "elastic"), "backend to scan: elastic or opensearch (env DEADAIR_BACKEND)")
 	fs.StringVar(&o.esURL, "es-url", os.Getenv("DEADAIR_ES_URL"), "Elasticsearch base URL (env DEADAIR_ES_URL)")
 	fs.StringVar(&o.kibanaURL, "kibana-url", os.Getenv("DEADAIR_KIBANA_URL"), "Kibana base URL (env DEADAIR_KIBANA_URL)")
@@ -176,6 +172,14 @@ func addConnFlags(fs *flag.FlagSet, o *connOpts) {
 	fs.StringVar(&o.apiKeyFile, "api-key-file", "", "file containing the API key (default: env DEADAIR_API_KEY)")
 	fs.DurationVar(&o.timeout, "timeout", 60*time.Second, "overall timeout per scan")
 	fs.IntVar(&o.concurrency, "concurrency", 4, "max parallel source-health and input-resolution queries")
+	fs.StringVar(&o.caCert, "ca-cert", "", "PEM file with the CA that signed the SIEM's TLS certificate")
+	fs.BoolVar(&o.insecureTLS, "insecure-skip-verify", false, "skip TLS certificate verification (testing only)")
+	fs.StringVar(&o.kibanaSpace, "kibana-space", "", "Kibana space holding the detection rules (default: default space)")
+	fs.StringVar(&o.fleetFile, "fleet", "", "fleet config JSON: scan multiple instances/tenants in one run")
+	fs.StringVar(&o.instanceName, "instance-name", "", "instance label in reports and metrics (default: backend name)")
+}
+
+func addAssessmentFlags(fs *flag.FlagSet, o *connOpts) {
 	fs.DurationVar(&o.maxStale, "max-stale", 30*time.Minute, "freshness window before a source counts as stale")
 	fs.Var(&o.include, "include", "source name pattern to include; repeatable, default includes all sources")
 	fs.Var(&o.exclude, "exclude", "source name pattern to exclude; repeatable, wins over --include")
@@ -186,11 +190,6 @@ func addConnFlags(fs *flag.FlagSet, o *connOpts) {
 	fs.IntVar(&o.volumeMinSamples, "volume-min-samples", 4, "same weekday/hour samples required before volume baselines evaluate")
 	fs.Float64Var(&o.volumeZThreshold, "volume-z-threshold", 3, "negative z-score threshold for low-volume findings")
 	fs.BoolVar(&o.schemaTrack, "schema", false, "track field_caps schema drift; requires --state-file")
-	fs.StringVar(&o.caCert, "ca-cert", "", "PEM file with the CA that signed the SIEM's TLS certificate")
-	fs.BoolVar(&o.insecureTLS, "insecure-skip-verify", false, "skip TLS certificate verification (testing only)")
-	fs.StringVar(&o.kibanaSpace, "kibana-space", "", "Kibana space holding the detection rules (default: default space)")
-	fs.StringVar(&o.fleetFile, "fleet", "", "fleet config JSON: scan multiple instances/tenants in one run")
-	fs.StringVar(&o.instanceName, "instance-name", "", "instance label in reports and metrics (default: backend name)")
 }
 
 type patternList []string
@@ -491,15 +490,33 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts) (scanResult
 func runScan(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { scanUsage(stderr) }
 	var o connOpts
-	addConnFlags(fs, &o)
-	jsonOut := fs.Bool("json", false, "write the full JSON report to stdout")
-	outFile := fs.String("out", "", "also write the JSON report to a file (created 0600)")
+	addBackendFlags(fs, &o)
+	addAssessmentFlags(fs, &o)
+	jsonOut := fs.Bool("json", false, "print the full JSON report to stdout")
+	jsonFile := fs.String("json-out", "", "write the JSON report to a file (created 0600)")
+	legacyOutFile := fs.String("out", "", "deprecated alias for --json-out")
 	htmlFile := fs.String("html-out", "", "write a static HTML report to a file (created 0600)")
 	redactNames := fs.Bool("redact", false, "replace source/rule names with stable digests (shareable report)")
-	fs.StringVar(&o.ruleFile, "rule", "", "evaluate candidate rule file (JSON/ndjson export) against the environment instead of installed rules")
-	fs.StringVar(&o.ruleFile, "change", "", "alias for --rule: generic proposed-change input")
-	if err := fs.Parse(args); err != nil {
+	fs.StringVar(&o.ruleFile, "rule", "", "evaluate an Elastic candidate rule file (JSON/ndjson export)")
+	if parsed, code := parseFlags(fs, args); !parsed {
+		return code
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "deadair: scan does not accept positional arguments: %q\n", fs.Arg(0))
+		return report.ExitError
+	}
+	if *jsonFile != "" && *legacyOutFile != "" {
+		fmt.Fprintln(stderr, "deadair: use either --json-out or --out, not both")
+		return report.ExitError
+	}
+	outFile := *jsonFile
+	if outFile == "" {
+		outFile = *legacyOutFile
+	}
+	if err := validateScanOptions(o, *htmlFile); err != nil {
+		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
 	}
 
@@ -507,6 +524,14 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
+	}
+	if o.ruleFile != "" {
+		for _, inst := range insts {
+			if _, ok := inst.backend.(backendpkg.CandidateParser); !ok {
+				fmt.Fprintf(stderr, "deadair: --rule is unavailable for backend %q; candidate rules currently require Elastic\n", inst.backend.Name())
+				return report.ExitError
+			}
+		}
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -523,12 +548,8 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		if *redactNames {
 			f.Redact()
 		}
-		if *htmlFile != "" {
-			fmt.Fprintln(stderr, "deadair: --html-out is per-instance and not yet supported with --fleet")
-			return report.ExitError
-		}
-		if *outFile != "" {
-			if err := f.Write(*outFile); err != nil {
+		if outFile != "" {
+			if err := f.Write(outFile); err != nil {
 				fmt.Fprintf(stderr, "deadair: %v\n", err)
 				return report.ExitError
 			}
@@ -568,8 +589,8 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	if *redactNames {
 		r.Redact()
 	}
-	if *outFile != "" {
-		if err := r.Write(*outFile); err != nil {
+	if outFile != "" {
+		if err := r.Write(outFile); err != nil {
 			fmt.Fprintf(stderr, "deadair: %v\n", err)
 			return report.ExitError
 		}
@@ -598,6 +619,23 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		return r.CandidateExitCode()
 	}
 	return r.ExitCode()
+}
+
+func validateScanOptions(o connOpts, htmlFile string) error {
+	if o.schemaTrack && o.stateFile == "" {
+		return fmt.Errorf("--schema requires --state-file")
+	}
+	if o.fleetFile != "" && htmlFile != "" {
+		return fmt.Errorf("--html-out is available only for single-instance scans")
+	}
+	if o.fleetFile != "" && o.instanceName != "" {
+		return fmt.Errorf("--instance-name cannot be combined with --fleet; fleet instances already have names")
+	}
+	if o.ruleFile != "" && o.fleetFile == "" &&
+		strings.EqualFold(strings.TrimSpace(o.backendName), "opensearch") {
+		return fmt.Errorf("--rule currently requires Elastic")
+	}
+	return nil
 }
 
 func printSummary(w io.Writer, r *report.Report) {
@@ -756,12 +794,13 @@ func humanDuration(seconds float64) string {
 func runDiff(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("diff", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { diffUsage(stderr) }
 	jsonOut := fs.Bool("json", false, "write the diff as JSON")
-	if err := fs.Parse(args); err != nil {
-		return report.ExitError
+	if parsed, code := parseFlags(fs, args); !parsed {
+		return code
 	}
 	if fs.NArg() != 2 {
-		fmt.Fprintln(stderr, "usage: deadair diff [--json] <old-report.json> <new-report.json>")
+		diffUsage(stderr)
 		return report.ExitError
 	}
 	load := func(path string) (*report.Report, error) {
@@ -860,10 +899,15 @@ func humanBytes(n int64) string {
 func runTune(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("tune", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { tuneUsage(stderr) }
 	stateFile := fs.String("state-file", "", "state file to summarize")
 	jsonOut := fs.Bool("json", false, "write tuning summary as JSON")
 	redactNames := fs.Bool("redact", false, "replace source names with stable digests")
-	if err := fs.Parse(args); err != nil {
+	if parsed, code := parseFlags(fs, args); !parsed {
+		return code
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "deadair: tune does not accept positional arguments: %q\n", fs.Arg(0))
 		return report.ExitError
 	}
 	if *stateFile == "" {
@@ -913,12 +957,22 @@ func redactTune(prefix, name string) string {
 func runServe(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { serveUsage(stderr) }
 	var o connOpts
-	addConnFlags(fs, &o)
+	addBackendFlags(fs, &o)
+	addAssessmentFlags(fs, &o)
 	bind := fs.String("bind", "127.0.0.1:9317", "exporter listen address; keep loopback unless the scrape path is authenticated")
 	interval := fs.Duration("interval", 5*time.Minute, "time between scans")
 	redactNames := fs.Bool("redact", false, "replace source names in metric labels with stable digests")
-	if err := fs.Parse(args); err != nil {
+	if parsed, code := parseFlags(fs, args); !parsed {
+		return code
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "deadair: serve does not accept positional arguments: %q\n", fs.Arg(0))
+		return report.ExitError
+	}
+	if err := validateScanOptions(o, ""); err != nil {
+		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
 	}
 
