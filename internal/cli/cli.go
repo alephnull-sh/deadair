@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -33,6 +34,28 @@ import (
 
 // Version is stamped at build time via -ldflags.
 var Version = "dev"
+
+func init() {
+	info, ok := debug.ReadBuildInfo()
+	Version = versionFromBuildInfo(Version, info, ok)
+}
+
+func versionFromBuildInfo(stamped string, info *debug.BuildInfo, ok bool) string {
+	if stamped != "" && stamped != "dev" {
+		return stamped
+	}
+	fallback := stamped
+	if fallback == "" {
+		fallback = "dev"
+	}
+	if !ok || info == nil || info.Main.Path != "github.com/alephnull-sh/deadair" {
+		return fallback
+	}
+	if info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return fallback
+	}
+	return info.Main.Version
+}
 
 // printHelp writes the top-level help. Shown on bare invocation (exit 0, per
 // CLI convention: typing the program name is a request for orientation, not
