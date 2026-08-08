@@ -2,6 +2,7 @@
 layout: default
 cover: true
 title: Detections that run but can't see
+author: Nikhil Satyakrishna
 description: A read-only look at enabled detections that run on schedule, report success, and quietly stop seeing their data, plus what native SIEM health views already cover.
 date: 2026-07-16
 hero_image: /assets/coverage-hero.png

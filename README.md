@@ -28,6 +28,10 @@
 </p>
 
 <p align="center">
+  Built by <a href="https://github.com/alephnull-sh">Nikhil Satyakrishna</a>
+</p>
+
+<p align="center">
   <img alt="deadair scan of a disposable Elastic lab showing dead and impaired detections" src="docs/assets/scan-lab.png" width="860">
 </p>
 
