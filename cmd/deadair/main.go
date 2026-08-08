@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/Big-Comfy/deadair/internal/cli"
+	"github.com/alephnull-sh/deadair/internal/cli"
 )
 
 func main() {

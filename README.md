@@ -56,7 +56,7 @@ Download a binary for macOS, Linux, or Windows from
 [GitHub Releases](https://github.com/alephnull-sh/deadair/releases), or install with Go:
 
 ```sh
-go install github.com/Big-Comfy/deadair/cmd/deadair@latest
+go install github.com/alephnull-sh/deadair/cmd/deadair@latest
 ```
 
 Connect a read-only SIEM credential:

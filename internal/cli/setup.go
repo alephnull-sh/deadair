@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/Big-Comfy/deadair/internal/report"
+	"github.com/alephnull-sh/deadair/internal/report"
 )
 
 // runSetup prints copy-paste least-privilege onboarding for a backend: the

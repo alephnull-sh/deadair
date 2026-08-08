@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Big-Comfy/deadair/internal/cli"
-	"github.com/Big-Comfy/deadair/internal/report"
+	"github.com/alephnull-sh/deadair/internal/cli"
+	"github.com/alephnull-sh/deadair/internal/report"
 )
 
 var openSearchURL = envOr("DEADAIR_IT_OPENSEARCH_URL", "http://localhost:9201")

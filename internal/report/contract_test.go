@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Big-Comfy/deadair/internal/graph"
+	"github.com/alephnull-sh/deadair/internal/graph"
 )
 
 func TestBuildInitializesReportContract(t *testing.T) {

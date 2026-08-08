@@ -21,14 +21,14 @@ import (
 	"syscall"
 	"time"
 
-	backendpkg "github.com/Big-Comfy/deadair/internal/backend"
-	"github.com/Big-Comfy/deadair/internal/backend/elastic"
-	"github.com/Big-Comfy/deadair/internal/backend/opensearch"
-	"github.com/Big-Comfy/deadair/internal/exporter"
-	"github.com/Big-Comfy/deadair/internal/graph"
-	"github.com/Big-Comfy/deadair/internal/health"
-	"github.com/Big-Comfy/deadair/internal/report"
-	"github.com/Big-Comfy/deadair/internal/state"
+	backendpkg "github.com/alephnull-sh/deadair/internal/backend"
+	"github.com/alephnull-sh/deadair/internal/backend/elastic"
+	"github.com/alephnull-sh/deadair/internal/backend/opensearch"
+	"github.com/alephnull-sh/deadair/internal/exporter"
+	"github.com/alephnull-sh/deadair/internal/graph"
+	"github.com/alephnull-sh/deadair/internal/health"
+	"github.com/alephnull-sh/deadair/internal/report"
+	"github.com/alephnull-sh/deadair/internal/state"
 )
 
 // Version is stamped at build time via -ldflags.
