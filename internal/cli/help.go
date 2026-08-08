@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/Big-Comfy/deadair/internal/report"
+	"github.com/alephnull-sh/deadair/internal/report"
 )
 
 const usageGuideURL = "https://github.com/alephnull-sh/deadair/blob/main/docs/usage.md"

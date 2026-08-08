@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Big-Comfy/deadair/internal/report"
+	"github.com/alephnull-sh/deadair/internal/report"
 )
 
 func interactiveOutput(w io.Writer) bool {

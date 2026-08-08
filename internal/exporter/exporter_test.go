@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Big-Comfy/deadair/internal/report"
+	"github.com/alephnull-sh/deadair/internal/report"
 )
 
 func get(t *testing.T, url string) string {

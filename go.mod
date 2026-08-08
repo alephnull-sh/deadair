@@ -1,3 +1,3 @@
-module github.com/Big-Comfy/deadair
+module github.com/alephnull-sh/deadair
 
 go 1.26

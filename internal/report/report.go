@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Big-Comfy/deadair/internal/backend"
-	"github.com/Big-Comfy/deadair/internal/graph"
-	"github.com/Big-Comfy/deadair/internal/health"
-	"github.com/Big-Comfy/deadair/internal/state"
+	"github.com/alephnull-sh/deadair/internal/backend"
+	"github.com/alephnull-sh/deadair/internal/graph"
+	"github.com/alephnull-sh/deadair/internal/health"
+	"github.com/alephnull-sh/deadair/internal/state"
 )
 
 // Exit codes for `deadair scan`, designed as a CI gate.

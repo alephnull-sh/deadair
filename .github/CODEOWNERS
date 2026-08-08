@@ -1,19 +1,19 @@
-* @Big-Comfy
+* @alephnull-sh
 
 # CI and dependency execution
-/.github/workflows/** @Big-Comfy
-/.github/dependabot.yml @Big-Comfy
-/go.mod @Big-Comfy
-/go.sum @Big-Comfy
+/.github/workflows/** @alephnull-sh
+/.github/dependabot.yml @alephnull-sh
+/go.mod @alephnull-sh
+/go.sum @alephnull-sh
 
 # Backend API and least-privilege contracts
-/internal/backend/** @Big-Comfy
-/internal/cli/setup.go @Big-Comfy
-/docs/credentials/** @Big-Comfy
-/integration/** @Big-Comfy
+/internal/backend/** @alephnull-sh
+/internal/cli/setup.go @alephnull-sh
+/docs/credentials/** @alephnull-sh
+/integration/** @alephnull-sh
 
 # Reports, redaction, credentials, and security policy
-/internal/report/** @Big-Comfy
-/internal/state/** @Big-Comfy
-/internal/exporter/** @Big-Comfy
-/SECURITY.md @Big-Comfy
+/internal/report/** @alephnull-sh
+/internal/state/** @alephnull-sh
+/internal/exporter/** @alephnull-sh
+/SECURITY.md @alephnull-sh
