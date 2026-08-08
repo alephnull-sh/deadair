@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Big-Comfy/deadair/internal/cli"
-	"github.com/Big-Comfy/deadair/internal/report"
+	"github.com/alephnull-sh/deadair/internal/cli"
+	"github.com/alephnull-sh/deadair/internal/report"
 )
 
 // fixtureServer emulates the minimal Kibana + Elasticsearch surface a scan

@@ -1,6 +1,6 @@
 BIN     := deadair
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X github.com/Big-Comfy/deadair/internal/cli.Version=$(VERSION)
+LDFLAGS := -s -w -X github.com/alephnull-sh/deadair/internal/cli.Version=$(VERSION)
 DIST    := dist
 
 DARWIN_ARM64 := $(DIST)/$(BIN)_$(VERSION)_darwin-arm64

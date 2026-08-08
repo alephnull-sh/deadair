@@ -7,10 +7,10 @@ import (
 	"os"
 	"strings"
 
-	backendpkg "github.com/Big-Comfy/deadair/internal/backend"
-	"github.com/Big-Comfy/deadair/internal/backend/elastic"
-	"github.com/Big-Comfy/deadair/internal/backend/opensearch"
-	"github.com/Big-Comfy/deadair/internal/report"
+	backendpkg "github.com/alephnull-sh/deadair/internal/backend"
+	"github.com/alephnull-sh/deadair/internal/backend/elastic"
+	"github.com/alephnull-sh/deadair/internal/backend/opensearch"
+	"github.com/alephnull-sh/deadair/internal/report"
 )
 
 // fleetConfig lists the instances (tenants / deployments) one scan covers.

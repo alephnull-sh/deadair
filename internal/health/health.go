@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Big-Comfy/deadair/internal/backend"
+	"github.com/alephnull-sh/deadair/internal/backend"
 )
 
 // Status is the health verdict for a source.

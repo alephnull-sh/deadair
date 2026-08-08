@@ -28,6 +28,10 @@
 </p>
 
 <p align="center">
+  Built by <a href="https://github.com/alephnull-sh">Nikhil Satyakrishna</a>
+</p>
+
+<p align="center">
   <img alt="deadair scan of a disposable Elastic lab showing dead and impaired detections" src="docs/assets/scan-lab.png" width="860">
 </p>
 
@@ -56,7 +60,7 @@ Download a binary for macOS, Linux, or Windows from
 [GitHub Releases](https://github.com/alephnull-sh/deadair/releases), or install with Go:
 
 ```sh
-go install github.com/Big-Comfy/deadair/cmd/deadair@latest
+go install github.com/alephnull-sh/deadair/cmd/deadair@latest
 ```
 
 Connect a read-only SIEM credential:

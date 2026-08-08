@@ -5,7 +5,7 @@
 package graph
 
 import (
-	"github.com/Big-Comfy/deadair/internal/backend"
+	"github.com/alephnull-sh/deadair/internal/backend"
 )
 
 // Graph is the rule ↔ source dependency graph.

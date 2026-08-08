@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	backendpkg "github.com/Big-Comfy/deadair/internal/backend"
-	"github.com/Big-Comfy/deadair/internal/report"
+	backendpkg "github.com/alephnull-sh/deadair/internal/backend"
+	"github.com/alephnull-sh/deadair/internal/report"
 )
 
 // runCheck verifies connectivity and privileges without producing a report.
