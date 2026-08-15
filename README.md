@@ -24,7 +24,8 @@
 
 <p align="center">
   <a href="https://alephnull-sh.github.io/deadair/">Read the technical write-up</a> ·
-  <a href="https://www.detectionengineering.net/i/208193682/detection-engineering-gem">Featured in Detection Engineering Weekly</a>
+  <a href="https://www.detectionengineering.net/i/208193682/detection-engineering-gem">Featured in Detection Engineering Weekly</a> ·
+  <a href="https://tldrsec.com/p/tldr-sec-341">Featured in tl;dr sec #341</a>
 </p>
 
 <p align="center">
