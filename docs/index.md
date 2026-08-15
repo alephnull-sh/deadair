@@ -18,10 +18,9 @@ it warn. The second question is messier. Did the rule's sources exist, were they
 fields still line up, and did events arrive before the lookback window moved on? "Ran successfully, 0
 alerts" can still mean "the search completed over data that could not have matched."
 
-Treat coverage as its own question and it is a small join, what each rule reads against the state its
-sources are in. Here a source means a concrete index or data stream visible to the monitoring
-credential, not an agent, connector, or upstream product. The join breaks four ways, and I keep
-hitting the same four.
+deadair compares each enabled rule's configured inputs with the concrete indices and data streams
+visible to its read-only credential. It resolves those inputs with the SIEM's own rules, then checks
+the state of the sources it finds. Four failures matter:
 
 - **No matching source.** Inputs the SIEM's native resolver positively resolves to zero aliases,
   indices, or data streams. For example,
@@ -47,10 +46,9 @@ finding                    no matching source
 impact                     the rule has no source to query
 ```
 
-The same verdict can be harmless during onboarding: a rule pack may expect NetFlow before the SOC
-has chosen to collect it. That is why the finding should carry the rule, configured patterns, matched
-sources, and source state. The operator still decides whether it is accepted scope, unfinished
-onboarding, or a regression.
+A no-match finding is not always an incident. During onboarding, a rule pack may expect NetFlow before
+the SOC has chosen to collect it. The report includes the rule, configured patterns, matched sources,
+and source state so the operator can distinguish accepted scope from a regression.
 
 Here is a scan from a disposable Elastic lab. Every rule is enabled; the lab deliberately creates
 missing input, stale source, missing-field, ingest-lag, and unused-telemetry conditions.
@@ -60,55 +58,46 @@ missing input, stale source, missing-field, ingest-lag, and unused-telemetry con
   <figcaption>This is output from the real CLI against Elastic 9.4.4. The terminal view is a summary; the JSON report retains each rule's configured patterns and matched sources.</figcaption>
 </figure>
 
-## Dead detections and blast radius
+## Resolving sources and affected rules
 
-That scan is most of what deadair does. It asks the SIEM to resolve each rule input using native
-alias, data-stream, index, and exclusion semantics, connects those results to the credential-visible
-source inventory, checks matched-source state, and reports the evidence per rule. A no-match finding
-requires a positive empty resolution; unsupported, unavailable, remote, and ambiguous inputs remain
-unassessed rather than being guessed dead. A stale-or-empty finding keeps the degraded source names
-and health evidence.
+For each rule input, deadair calls the SIEM's native resolver so the backend handles aliases, data
+streams, indices, and exclusions. It checks the state of each resolved source and records the evidence
+against the rule. A no-match finding requires a positive empty resolution. Unsupported, unavailable,
+remote, and ambiguous inputs remain unassessed rather than being guessed dead. A stale-or-empty
+finding includes the degraded source names and health evidence.
 
-The per-rule part is what makes it useful. Plenty of tools tell you a source went quiet; few tell you
-which enabled detection just died because of it. The graph also runs backwards, which is the view a SOC
-wants when a source breaks. One failed connector shows up as "these nine detections just went dark,"
-ranked by severity, instead of a freshness alert someone has to trace back to the affected rules by
-hand. Turn on a prebuilt rule package and it gets loud fast, since a big chunk of those rules expect
-integrations you do not run.
+For each degraded source, the report lists the enabled rules that resolve to it. A failed connector
+can then be triaged as a set of affected detections instead of an isolated freshness alert. Prebuilt
+rule packages make this especially visible because many enabled rules may expect integrations the
+tenant does not run.
 
-Credential scope is part of the evidence boundary. If the monitoring role cannot see an expected
-index, the report cannot distinguish hidden from absent. A first deployment therefore needs one
-known-good rule/source pair checked against the report before the team treats no-match findings as
-coverage incidents.
+The report can only see indices available to the monitoring role. If that role cannot see an expected
+index, deadair cannot distinguish hidden from absent. Before acting on no-match findings, check that
+one known-good rule and source pair appears in the report.
 
 ## When a field quietly disappears
 
-Of the four, this is the nastiest, because it hides best. Index alive, volume normal, rule green. But an
-integration upgrade renamed a field, an agent changed its mapping, or a pipeline stopped populating a
-value the rule depends on. The condition never matches, the rule returns nothing forever, and nothing
-lights up. It rides a legitimate change, so nobody touched the rule; the ground under it moved. Say a
-rule keys on `process.command_line` and an agent update stops mapping it. That rule is blind from the
-next run onward, and every health view still shows it running clean. The catch is diffing what each
-rule declares it needs against what the source's `field_caps` exposes right now.
+Missing fields are hard to spot because the index can stay live, volume can look normal, and the rule
+can keep reporting success. An integration upgrade may rename a field, change its mapping, or stop
+populating it. If a rule filters on `process.command_line` and an agent update stops mapping that field,
+the condition no longer matches. deadair compares the fields declared by the rule with the current
+`field_caps` response for each resolved source.
 
-That check is best-effort, not magic. Elastic's `required_fields` metadata is explicitly
-informational and does not affect rule execution, so it is good evidence for well-authored prebuilt
-rules and weaker evidence for custom rules. `field_caps` tells you whether a field is mapped and
-searchable; it does not prove recent events actually contain values. And broad patterns need per-index
-care, because one matching backing index can have the field while another is unmapped. So the finding
-should be worded as "the rule declares this dependency, and these concrete sources do not expose it,"
-not as a universal proof that the rule can never match.
+Elastic's `required_fields` metadata is informational and does not affect rule execution. It is only
+available when a rule populates it, and custom rules may omit it. `field_caps` shows whether a field is
+mapped and searchable, but not whether recent events contain values. Broad patterns also need to be
+checked per index because one backing index may expose the field while another does not. The report
+records the declared dependency and the concrete sources that do not expose it.
 
 ## Ingest lag
 
-This one has useful math, but it is a model. Elastic already documents timestamp override and
-additional look-back as fixes for ingestion delay. A scheduled rule matches on event time but can only
-see events already ingested when it runs, and batched sources like cloud audit logs and polled APIs
-arrive late. An event that lands after the rule's window has slid past is missed, with no error.
+The calculation below uses a fixed schedule and fixed ingest lag. A scheduled rule matches on event
+time but can only see events already ingested when it runs. Batched sources such as cloud audit logs
+and polled APIs can arrive after the rule's window has moved past the event, with no execution error.
 
-Three numbers decide it. The lookback P (Elastic's `from`, e.g. `now-6m`), the interval I, and the
-source's lag L. A run catches an event only if it fires after the event is searchable but before the
-window slides past, which leaves a gap of `P − L` for a run every `I` minutes to land in.
+Let P be the lookback (Elastic's `from`, for example `now-6m`), I the rule interval, and L the source's
+lag. A run catches an event only if it fires after the event is searchable and before the window moves
+past it. That leaves `P − L` minutes for a run on an `I`-minute cadence to land in.
 
 <div class="keystat" markdown="0">
   <p class="formula">catch rate&nbsp; C(L) = clamp( (P − L) / I, 0, 1 )</p>
@@ -127,68 +116,53 @@ window slides past, which leaves a gap of `P − L` for a run every `I` minutes 
 </figure>
 
 A [15-line simulation](https://github.com/alephnull-sh/deadair/blob/main/docs/assets/lagsim.py) matches
-the model to within rounding, the open points on the chart. In numbers, a rule with `from: now-6m`
-every 5 minutes has a one-minute margin, so a source batching with 3 minutes of fixed lag catches
-around **60% of its events** in this model. Real schedulers have jitter, retries, manual runs,
-deduplication, timestamp fallback, and rule-type differences, so treat the result as exposure
-estimation, not a universal truth.
+the model to within rounding, shown by the open points on the chart. A rule with `from: now-6m` running
+every 5 minutes has a one-minute margin. With 3 minutes of fixed lag, it catches around **60% of its
+events** in this model. Real schedulers add jitter, retries, manual runs, deduplication, timestamp
+fallback, and rule-type differences.
 
-This only bites rules windowing on `@timestamp`, and both vendors document the fix. Elastic's is to set
-the timestamp override to `event.ingested` so the rule windows on ingest time; widening the additional
-look-back is the fallback. The operational question is which rules, sources, and tenants still have a
-bad margin, and that reads off metadata: timestamp field, `from`, interval, and measured source lag.
+The model applies to rules windowing on `@timestamp`. Elastic recommends overriding the timestamp with
+`event.ingested`, or widening the additional look-back. deadair reads the timestamp field, `from`,
+interval, and measured source lag to find rules with too little margin.
 
 ## The check I got wrong
 
-One check I built and killed taught me the rule I hold the tool to. It sounds right. A rule looks back
-90 days, the index keeps 30 (ILM deletes at 30d), so two thirds of the window is empty. I shipped it as
-a blind spot and felt clever. It is wrong. A normally scheduled rule catches events as they arrive,
-well inside 30 days, and never needs the 31-to-90-day-old data. Retention only costs a scheduled rule
-an event when data is deleted before the next run reads it (`retention < interval`), which with days
-against minutes never happens. It fired on nearly every rule, pure noise, so I pulled it.
+I originally added a check that compared a rule's lookback with index retention. A rule looked back 90
+days while ILM kept 30, so the check reported two thirds of the window as empty.
 
-The real exception is the tell. Rule types that are only correct if the window genuinely holds data,
-like a New Terms rule whose baseline is only as deep as retention, are a property of the rule type and
-its `history_window_start`, not a lookback-versus-retention comparison. The lesson I kept is that these
-checks all assume something about timing, and a wrong assumption invents a false finding rather than
-missing a real one. False positives are how a health tool gets muted and then uninstalled, so the tool
-needs positive evidence before it says anything and stays quiet without it.
+That was wrong for normally scheduled rules. They catch events as they arrive and do not need data
+from days 31 through 90. Retention only loses an event when the data is deleted before the next run
+reads it (`retention < interval`). The check fired on nearly every rule without finding a real coverage
+problem, so I removed it.
 
-## What native tools already cover, and what they do not
+Retention does matter for rule types whose operation depends on historical data. Elastic New Terms
+rules, for example, use `history_window_start` to define their baseline. That needs a rule-type-specific
+check, not a general lookback-versus-retention comparison.
 
-Elastic ships health signals worth knowing, and the honest version of this argument has to start
-there. [SIEM Readiness](https://www.elastic.co/docs/solutions/security/get-started/siem-readiness)
+## Existing Elastic coverage
+
+Elastic already has several related health views. [SIEM Readiness](https://www.elastic.co/docs/solutions/security/get-started/siem-readiness)
 tracks coverage, quality, continuity, and retention. Its data rule coverage view calls out enabled
 rules that are missing required integrations, and its data coverage view calls out missing log
 categories. [Data Quality](https://www.elastic.co/docs/solutions/security/dashboards/data-quality-dashboard)
 checks ECS mapping problems per index. [Rule monitoring](https://www.elastic.co/docs/solutions/security/detect-and-alert/monitor-rule-executions)
-tracks success, failure, warnings, gaps, durations, and missing index-pattern warnings; Elastic is clear
-that "succeeded" means the rule completed its search, not that it produced an alert. And
+tracks success, failure, warnings, gaps, durations, and missing index-pattern warnings. A successful
+execution means the search completed, not that it produced an alert. The
 [common rule settings](https://www.elastic.co/docs/solutions/security/detect-and-alert/common-rule-settings)
-already document timestamp override and additional look-back for ingestion delay.
+document timestamp override and additional look-back for ingestion delay.
 
-Those views cover real parts of the problem. What I wanted was a rule dependency report I could run
-outside the SIEM: for each enabled rule, resolve the concrete sources it reads, show whether those
-sources are live, check whether declared fields are exposed, estimate whether ingest lag leaves enough
-margin, and point out telemetry no enabled rule reads.
+For each enabled rule, deadair resolves the concrete sources, records their state and declared-field
+availability, and compares source lag with rule timing. It also lists sources that no enabled rule
+reads.
 
-## Where deadair fits
+## Implementation and limits
 
-You do not need a product to prove the idea. For one SIEM, pull the rule inventory, treat declared
-required fields as best-effort metadata, inspect `field_caps` per concrete source, resolve patterns,
-check freshness, and work out the lag. It is a handful of API calls.
+deadair runs outside the SIEM with a read-only credential. It does not read event bodies. It reads
+counts, timestamps, mappings, `field_caps`, and size-0 `max(@timestamp)` and
+`max(event.ingested)` aggregations.
 
-I built **deadair** to make that check boring enough to run repeatedly. It runs outside the SIEM with a
-read-only credential, never touches event bodies, and reports from metadata and stats: counts,
-timestamps, mappings, `field_caps`, and size-0 `max(@timestamp)` / `max(event.ingested)` aggregations.
-The useful parts are scheduling it, gating detection changes in CI, redacting reports, and running the
-same check across Elastic and OpenSearch fleets. For an MSSP, that means one report can show which
-enabled detections lost coverage when a source degrades in one tenant.
-
-deadair is still young and currently works with Elastic Security and OpenSearch Security Analytics.
-Some checks depend on rule metadata, so the results are limited by what each SIEM exposes. deadair
-checks whether a rule can see the data it expects. It does not assess the rule logic. CI creates a role
-with the minimum required permissions. The live integration tests also attempt writes and require
-every one to fail.
+It currently supports Elastic Security and OpenSearch Security Analytics. Some checks depend on rule
+metadata and are limited by what each SIEM exposes. deadair checks whether a rule can see the data it
+expects. It does not assess the rule logic.
 
 <p style="margin-top:2rem"><a href="https://github.com/alephnull-sh/deadair">deadair on GitHub →</a></p>
