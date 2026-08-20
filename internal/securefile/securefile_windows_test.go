@@ -3,11 +3,36 @@
 package securefile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func isTransientReadError(err error) bool {
+	return errors.Is(err, syscall.ERROR_ACCESS_DENIED) || errors.Is(err, errorSharingViolation)
+}
+
+func TestTransientReadErrors(t *testing.T) {
+	for _, err := range []error{
+		&os.PathError{Op: "open", Path: "state.json", Err: syscall.ERROR_ACCESS_DENIED},
+		&os.PathError{Op: "open", Path: "state.json", Err: errorSharingViolation},
+	} {
+		if !isTransientReadError(err) {
+			t.Fatalf("isTransientReadError(%v) = false, want true", err)
+		}
+	}
+	for _, err := range []error{
+		&os.PathError{Op: "open", Path: "state.json", Err: syscall.ERROR_FILE_NOT_FOUND},
+		errors.New("other read failure"),
+	} {
+		if isTransientReadError(err) {
+			t.Fatalf("isTransientReadError(%v) = true, want false", err)
+		}
+	}
+}
 
 func TestWriteWhileDestinationIsOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")

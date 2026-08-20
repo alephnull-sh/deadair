@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestWriteReplacesPermissiveFileWithRestrictedFile(t *testing.T) {
@@ -68,6 +69,10 @@ func TestWritePublishesOnlyCompleteContents(t *testing.T) {
 		default:
 			data, err := os.ReadFile(path)
 			if err != nil {
+				if isTransientReadError(err) {
+					time.Sleep(time.Millisecond)
+					continue
+				}
 				t.Fatal(err)
 			}
 			if !bytes.Equal(data, a) && !bytes.Equal(data, b) {
