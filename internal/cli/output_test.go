@@ -34,6 +34,26 @@ func TestPrintSummaryUsesPlainLanguageReasons(t *testing.T) {
 	}
 }
 
+func TestPrintSummaryShowsPartialInputWithoutCallingItDead(t *testing.T) {
+	r := &report.Report{
+		Backend: "elastic",
+		Summary: report.Summary{PartialInputs: 1},
+		PartialInputCoverage: []report.PartialInputCoverage{{
+			RuleName: "Migrating input", Severity: "medium", Selector: "logs-legacy-*",
+		}},
+	}
+	var output bytes.Buffer
+	printSummary(&output, r)
+	for _, want := range []string{"partial input coverage: 1 selector", "Migrating input — missing selector: logs-legacy-*"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("summary missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "DEAD") {
+		t.Fatalf("partial input was presented as dead:\n%s", output.String())
+	}
+}
+
 func TestVisualSummaryUsesHierarchyAndHumanLabels(t *testing.T) {
 	r := &report.Report{
 		Backend: "elastic",

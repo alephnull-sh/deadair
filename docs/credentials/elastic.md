@@ -41,8 +41,8 @@ Privilege notes:
 |---|---|
 | `cluster: monitor` | read data-stream and index stats |
 | `indices: monitor` | read index and data-stream metadata |
-| `view_index_metadata` | resolve index, alias, and data-stream selectors; read mappings and `field_caps` when `--schema` is used |
-| `read` | run size-0 freshness and lag aggregations |
+| `view_index_metadata` | resolve index, alias, and data-stream selectors; read targeted `field_caps`, plus full mappings when `--schema` is used |
+| `read` | run size-0 freshness aggregations and read a bounded sample of paired timestamps for lag checks |
 | `feature_siem.read`, `feature_siemV2.read` | read detection rules through Kibana |
 | `feature_indexPatterns.read` | read Data View Management objects referenced by detection rules |
 
@@ -112,8 +112,9 @@ deadair serve \
 - `GET /_resolve/index/<expression>?ignore_unavailable=true`
 - `GET /_data_stream/_stats`
 - `GET /_cat/indices`
-- `POST /<index>/_search` with `size: 0` aggregations for freshness and ingest lag
-- `GET /<index>/_field_caps` when `--schema` is enabled
+- `POST /<index>/_search` with a `size: 0` aggregation for freshness
+- `POST /<index>/_search` for up to 500 recent events, limited to paired `event.ingested` and `@timestamp` fields, when an enabled rule can be affected by lag
+- `POST /<index>/_field_caps` for targeted declared-field checks, with a full `fields=*` snapshot read by `GET` only when `--schema` is enabled
 
 If an audit shows deadair requesting a write API or broader privileges than this document, treat
 that as a bug.

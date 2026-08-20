@@ -9,6 +9,7 @@
     "generated_at": { "type": "string", "format": "date-time" },
     "producer": { "$ref": "report-v1.schema.json#/$defs/producer" },
     "redacted": { "type": "boolean" },
+    "redaction": { "$ref": "report-v1.schema.json#/$defs/redactionMetadata" },
     "summary": { "$ref": "#/$defs/fleetSummary" },
     "rollups": {
       "type": "array",
@@ -33,6 +34,7 @@
         "instances_failed": { "type": "integer" },
         "dead_detections": { "type": "integer" },
         "impaired_detections": { "type": "integer" },
+        "partial_inputs": { "type": "integer" },
         "degraded_sources": { "type": "integer" },
         "unused_bytes": { "type": "integer" },
         "unused_telemetry_assessment": {

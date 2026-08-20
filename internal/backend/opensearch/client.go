@@ -316,6 +316,14 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 	expressionIndex := make(map[string]int)
 	var expressions []string
 	var expressionObservedAt []time.Time
+	registerExpression := func(expression string, observedAt time.Time) {
+		if _, exists := expressionIndex[expression]; exists {
+			return
+		}
+		expressionIndex[expression] = len(expressions)
+		expressions = append(expressions, expression)
+		expressionObservedAt = append(expressionObservedAt, observedAt)
+	}
 	for _, rule := range rules {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -347,15 +355,28 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 				}})
 			}
 		} else {
-			if _, exists := expressionIndex[expression]; !exists {
-				expressionIndex[expression] = len(expressions)
-				expressions = append(expressions, expression)
-				expressionObservedAt = append(expressionObservedAt, observedAt)
-			}
+			registerExpression(expression, observedAt)
 			plans = append(plans, plannedResolution{
 				expression: expression,
-				resolution: backend.InputResolution{RuleID: rule.ID},
+				resolution: backend.InputResolution{
+					RuleID:           rule.ID,
+					SelectorKind:     "index_expression",
+					ResolutionMethod: "resolve_index",
+				},
 			})
+			for _, diagnostic := range diagnosticInputExpressions(local) {
+				registerExpression(diagnostic.expression, observedAt)
+				plans = append(plans, plannedResolution{
+					expression: diagnostic.expression,
+					resolution: backend.InputResolution{
+						RuleID:           rule.ID,
+						Selector:         diagnostic.selector,
+						Diagnostic:       true,
+						SelectorKind:     "index_selector",
+						ResolutionMethod: "resolve_index_diagnostic",
+					},
+				})
+			}
 		}
 
 		for _, selector := range remote {
@@ -385,9 +406,48 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 		resolution.ResolvedSources = append([]string(nil), resolution.ResolvedSources...)
 		resolution.Aliases = append([]string(nil), resolution.Aliases...)
 		resolution.RuleID = plan.resolution.RuleID
+		resolution.Selector = plan.resolution.Selector
+		resolution.Diagnostic = plan.resolution.Diagnostic
+		resolution.SelectorKind = plan.resolution.SelectorKind
+		resolution.ResolutionMethod = plan.resolution.ResolutionMethod
 		resolutions = append(resolutions, resolution)
 	}
 	return resolutions, nil
+}
+
+type diagnosticInputExpression struct {
+	selector   string
+	expression string
+}
+
+func diagnosticInputExpressions(local []string) []diagnosticInputExpression {
+	var positives, exclusions []string
+	seenPositive := make(map[string]bool)
+	for _, selector := range local {
+		if strings.HasPrefix(selector, "-") {
+			exclusions = append(exclusions, selector)
+			continue
+		}
+		if !seenPositive[selector] {
+			seenPositive[selector] = true
+			positives = append(positives, selector)
+		}
+	}
+	if len(positives) < 2 {
+		return nil
+	}
+	out := make([]diagnosticInputExpression, 0, len(positives))
+	seenExpression := make(map[string]bool, len(positives))
+	for _, selector := range positives {
+		parts := append([]string{selector}, exclusions...)
+		expression := strings.Join(parts, ",")
+		if seenExpression[expression] {
+			continue
+		}
+		seenExpression[expression] = true
+		out = append(out, diagnosticInputExpression{selector: selector, expression: expression})
+	}
+	return out
 }
 
 func (c *Client) resolveInputExpressions(ctx context.Context, expressions []string, observedAt []time.Time) ([]backend.InputResolution, error) {
@@ -528,8 +588,8 @@ func sortedUnique(values []string) []string {
 }
 
 func detectorSeverity(triggers []detectorTrigger) string {
-	best := "medium"
-	bestRank := severityRank(best)
+	best := ""
+	bestRank := severityRank("low") + 1
 	for _, t := range triggers {
 		for _, sev := range triggerSeverities(t) {
 			if r := severityRank(sev); r < bestRank {
@@ -537,6 +597,9 @@ func detectorSeverity(triggers []detectorTrigger) string {
 				bestRank = r
 			}
 		}
+	}
+	if best == "" {
+		return "medium"
 	}
 	return best
 }

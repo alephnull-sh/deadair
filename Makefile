@@ -129,7 +129,6 @@ record-scan-lab: build
 		./integration/prepare-scan-lab.sh || status=$$?; \
 	fi; \
 	if [ $$status -eq 0 ]; then \
-		rm -f docs/assets/check-lab.png docs/assets/scan-lab.png; \
 		DEADAIR_SCAN_LAB_OUT="$(SCAN_LAB_OUT_ABS)" \
 		vhs docs/assets/check-lab.tape || status=$$?; \
 	fi; \

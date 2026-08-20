@@ -15,7 +15,7 @@ Files:
 
 - [sample-scan.txt](sample-scan.txt) - concise operator summary
 - [sample-report.json](sample-report.json) - diagnostic report with rule patterns, matched sources, and source evidence
-- [sample-report.html](sample-report.html) - shareable overview for human review
+- [sample-report.html](sample-report.html) - browser-readable overview for human review
 
 Start with the terminal summary, then use JSON to answer why a rule received its verdict. For
 example, the first no-match finding in this sample is:

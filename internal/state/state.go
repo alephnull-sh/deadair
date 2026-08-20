@@ -1,6 +1,7 @@
-// Package state stores cross-scan source history. L1 health checks need
-// memory: volume baselines, warmup, and hysteresis cannot be derived from one
-// poll. The file is as sensitive as a report because it stores source names.
+// Package state stores cross-scan source and finding history. Volume
+// baselines, warmup, hysteresis, and finding lifecycle cannot be derived from
+// one poll. The file is as sensitive as a report because it stores source and
+// rule names.
 package state
 
 import (
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alephnull-sh/deadair/internal/backend"
+	"github.com/alephnull-sh/deadair/internal/securefile"
 )
 
 const (
@@ -33,8 +35,33 @@ const (
 
 // Store is the persisted state file.
 type Store struct {
-	Version int                    `json:"version"`
-	Sources map[string]SourceState `json:"sources"`
+	Version  int                     `json:"version"`
+	TargetID string                  `json:"target_id,omitempty"`
+	Sources  map[string]SourceState  `json:"sources"`
+	Findings map[string]FindingState `json:"findings,omitempty"`
+}
+
+// FindingState is the lifecycle record for one stable report finding. The
+// descriptive fields let a later scan report a recovery without retaining a
+// copy of the previous report.
+type FindingState struct {
+	FindingID       string    `json:"finding_id"`
+	ScopeID         string    `json:"scope_id"`
+	FirstSeen       time.Time `json:"first_seen"`
+	LastSeen        time.Time `json:"last_seen"`
+	Occurrences     int       `json:"occurrences"`
+	Active          bool      `json:"active"`
+	Class           string    `json:"class"`
+	Reason          string    `json:"reason,omitempty"`
+	RuleID          string    `json:"rule_id,omitempty"`
+	BackendObjectID string    `json:"backend_object_id,omitempty"`
+	RuleName        string    `json:"rule_name,omitempty"`
+	Severity        string    `json:"severity,omitempty"`
+	Source          string    `json:"source,omitempty"`
+	Dependency      string    `json:"dependency,omitempty"`
+	TargetID        string    `json:"target_id,omitempty"`
+	Instance        string    `json:"instance,omitempty"`
+	Backend         string    `json:"backend,omitempty"`
 }
 
 // SourceState is the state for one concrete source.
@@ -122,7 +149,25 @@ type SourceTuning struct {
 
 // New returns an empty state store.
 func New() *Store {
-	return &Store{Version: Version, Sources: map[string]SourceState{}}
+	return &Store{Version: Version, Sources: map[string]SourceState{}, Findings: map[string]FindingState{}}
+}
+
+// BindTarget ties a state file to one backend endpoint/namespace identity.
+// Source names are not globally unique, so reusing their volume and schema
+// history against another target would produce false baselines and drift.
+// Legacy state files acquire their binding on their first successful scan.
+func (s *Store) BindTarget(targetID string) error {
+	if targetID == "" {
+		return fmt.Errorf("state target identity is missing")
+	}
+	if s.TargetID == "" {
+		s.TargetID = targetID
+		return nil
+	}
+	if s.TargetID != targetID {
+		return fmt.Errorf("state file belongs to target %q, not %q", s.TargetID, targetID)
+	}
+	return nil
 }
 
 // Load reads a state file. A missing file starts a new store.
@@ -140,6 +185,9 @@ func Load(path string) (*Store, error) {
 	}
 	if s.Sources == nil {
 		s.Sources = map[string]SourceState{}
+	}
+	if s.Findings == nil {
+		s.Findings = map[string]FindingState{}
 	}
 	if s.Version == 0 {
 		s.Version = Version
@@ -166,12 +214,29 @@ func (s *Store) PruneStale(now time.Time, retention time.Duration) {
 			delete(s.Sources, name)
 		}
 	}
+	s.pruneFindings(now, retention)
 }
 
 // Save writes the state file with report-like permissions.
 func (s *Store) Save(path string) error {
+	return s.save(path, true)
+}
+
+// SaveFindingUpdates persists finding lifecycle changes without pruning or
+// otherwise changing source history. Candidate-rule scans use this path: they
+// may keep their own scoped finding lifecycle, but must not consume schema
+// drift or alter an installed scan's volume baseline.
+func (s *Store) SaveFindingUpdates(path string) error {
+	return s.save(path, false)
+}
+
+func (s *Store) save(path string, pruneSources bool) error {
 	s.Version = Version
-	s.PruneStale(time.Now().UTC(), pruneRetention)
+	if pruneSources {
+		s.PruneStale(time.Now().UTC(), pruneRetention)
+	} else {
+		s.pruneFindings(time.Now().UTC(), pruneRetention)
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding state file: %w", err)
@@ -179,10 +244,18 @@ func (s *Store) Save(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("creating state directory: %w", err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	if err := securefile.Write(path, append(data, '\n')); err != nil {
 		return fmt.Errorf("writing state file: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) pruneFindings(now time.Time, retention time.Duration) {
+	for id, finding := range s.Findings {
+		if !finding.LastSeen.IsZero() && now.Sub(finding.LastSeen) > retention {
+			delete(s.Findings, id)
+		}
+	}
 }
 
 // AssessVolumes updates state and returns current volume-baseline verdicts.

@@ -93,8 +93,9 @@ Scans are built around cheap metadata calls first. Per-source queries are bounde
 | data stream stats | `GET /_data_stream/_stats` | one call |
 | index inventory | `GET /_cat/indices` | one call |
 | freshness fallback | size-0 `max(@timestamp)` aggregation | per undated source, bounded concurrency |
+| declared-field check | targeted `POST /<index>/_field_caps?include_unmapped=true` | sources used by rules that declare required fields, bounded concurrency |
 | schema snapshots | `GET /<index>/_field_caps` | opt-in, per source, bounded concurrency |
-| ingest lag | size-0 `max(@timestamp)` and `max(event.ingested)` aggregation | with `--state-file`, per source, bounded concurrency |
+| ingest lag | paired `event.ingested` and `@timestamp` values from up to 500 recent events | only sources used by an applicable event-time rule, bounded concurrency |
 
 OpenSearch uses the Security Analytics detector search API for rule metadata and the same style
 of source stats, native resolve-index, freshness, and field-capability reads.
@@ -114,15 +115,15 @@ scan.
 | `serve` | run periodic scans and expose cached Prometheus metrics |
 | `tune` | suggest baseline settings from accumulated state |
 
-Exit codes are part of the compatibility contract: `0` healthy, `1` findings, `2` error.
+Exit codes are part of the compatibility contract: `0` passed the configured gate, `1` gated findings, `2` error.
 
 ## State
 
 State is a local JSON file written `0600` on POSIX systems. It stores:
 
 - source volume buckets by weekday and hour
-- ingest-lag history
 - last successful schema snapshot per source
+- active and recovered finding lifecycle state
 - timestamps used for pruning old inactive sources
 
 State is local by design. deadair does not create indices, tables, or hidden objects in the SIEM.
@@ -157,8 +158,10 @@ Other versions may work but are not covered by the current CI matrix.
 - The backend interface has no write methods.
 - Integration tests provision the documented least-privilege roles and assert representative
   writes are rejected.
-- Reports, HTML output, and state files are written `0600` on POSIX systems.
-- `--redact` replaces tenant, source, rule, pattern, and field names with stable digests.
+- Reports, HTML output, and state files atomically replace their destination with a `0600` file on
+  POSIX systems.
+- `--redact` replaces tenant, source, rule, pattern, and field names with HMAC-SHA256 pseudonyms.
+  A caller-held key file enables controlled cross-run correlation.
 - The exporter binds `127.0.0.1` by default.
 - deadair has no phone-home behavior and no usage telemetry.
 

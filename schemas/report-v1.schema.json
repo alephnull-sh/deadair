@@ -20,9 +20,16 @@
     "producer": { "$ref": "#/$defs/producer" },
     "backend": { "type": "string" },
     "backend_metadata": { "$ref": "#/$defs/backendMetadata" },
+    "target_id": { "type": "string" },
+    "scope": { "$ref": "#/$defs/scanScope" },
     "instance": { "type": "string" },
     "redacted": { "type": "boolean" },
+    "redaction": { "$ref": "#/$defs/redactionMetadata" },
     "summary": { "$ref": "#/$defs/summary" },
+    "assessments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/runtimeAssessment" }
+    },
     "sources": {
       "type": ["array", "null"],
       "items": { "$ref": "#/$defs/sourceHealth" }
@@ -43,6 +50,10 @@
       "type": "array",
       "items": { "$ref": "#/$defs/ruleRef" }
     },
+    "partial_input_coverage": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/partialInputCoverage" }
+    },
     "input_resolutions": {
       "type": "array",
       "items": { "$ref": "#/$defs/inputResolution" }
@@ -50,10 +61,93 @@
     "unused_telemetry": {
       "type": ["array", "null"],
       "items": { "$ref": "#/$defs/unusedSource" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "recovered_findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "policy": { "$ref": "#/$defs/policySummary" },
+    "required_field_evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/requiredFieldAssessment" }
     }
   },
   "additionalProperties": true,
   "$defs": {
+    "scanScope": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["installed", "candidate"] },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "schema_tracking": { "type": "boolean" },
+        "stateful": { "type": "boolean" },
+        "configuration_id": { "type": "string" },
+        "candidate_rule_ids": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "findingAcceptance": {
+      "type": "object",
+      "required": ["status", "reason", "expires_at"],
+      "properties": {
+        "status": { "type": "string", "enum": ["active", "expired"] },
+        "reason": { "type": "string" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    },
+    "finding": {
+      "type": "object",
+      "required": ["id", "class", "first_seen", "last_seen", "occurrences", "gates"],
+      "properties": {
+        "id": { "type": "string" },
+        "class": {
+          "type": "string",
+          "enum": ["dead-detection", "impaired-detection", "source-degraded", "volume-low", "schema-drift", "unused-telemetry", "partial-input"]
+        },
+        "reason": { "type": "string" },
+        "rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
+        "rule_name": { "type": "string" },
+        "severity": { "type": "string" },
+        "source": { "type": "string" },
+        "dependency": { "type": "string" },
+        "first_seen": { "type": "string", "format": "date-time" },
+        "last_seen": { "type": "string", "format": "date-time" },
+        "occurrences": { "type": "integer", "minimum": 1 },
+        "recovered_at": { "type": "string", "format": "date-time" },
+        "accepted": { "$ref": "#/$defs/findingAcceptance" },
+        "gates": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "policySummary": {
+      "type": "object",
+      "required": ["version", "gate_classes", "accepted_active"],
+      "properties": {
+        "version": { "const": 1 },
+        "severity_threshold": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "gate_classes": { "type": "array", "items": { "type": "string" } },
+        "accepted_active": { "type": "integer" },
+        "accepted_expired": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "redactionMetadata": {
+      "type": "object",
+      "required": ["algorithm", "key_id"],
+      "properties": {
+        "algorithm": { "const": "hmac-sha256" },
+        "key_id": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
     "producer": {
       "type": "object",
       "required": ["name", "version"],
@@ -107,6 +201,23 @@
       },
       "additionalProperties": true
     },
+    "runtimeAssessment": {
+      "type": "object",
+      "required": ["name", "status"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": ["source_resolution", "required_fields", "ingest_lag", "schema_drift", "candidate_parsing"]
+        },
+        "status": { "$ref": "#/$defs/evidenceStatus" },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "evidenceStatus": {
+      "type": "string",
+      "enum": ["assessed", "disabled", "incomplete", "unavailable"]
+    },
     "summary": {
       "type": "object",
       "required": [
@@ -132,10 +243,12 @@
         "impaired_detections": { "type": "integer" },
         "unmapped_rules": { "type": "integer" },
         "remote_rules": { "type": "integer" },
+        "partial_inputs": { "type": "integer" },
         "unused_sources": { "type": "integer" },
         "unused_bytes": { "type": "integer" },
         "volume_low_sources": { "type": "integer" },
         "schema_drift_sources": { "type": "integer" },
+        "gated_findings": { "type": "integer" },
         "input_resolution": { "$ref": "#/$defs/inputResolutionSummary" },
         "unused_telemetry_assessment": {
           "type": "string",
@@ -172,7 +285,23 @@
         "expected_downtime": { "type": "boolean" },
         "volume": { "$ref": "#/$defs/volumeHealth" },
         "schema": { "$ref": "#/$defs/schemaHealth" },
+        "ingest_lag": { "$ref": "#/$defs/ingestLagHealth" },
         "consumers": { "type": "integer" }
+      },
+      "additionalProperties": true
+    },
+    "ingestLagHealth": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "$ref": "#/$defs/evidenceStatus" },
+        "method": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "window_seconds": { "type": "number" },
+        "sample_count": { "type": "integer" },
+        "p95_seconds": { "type": "number" },
+        "max_seconds": { "type": "number" },
+        "detail": { "type": "string" }
       },
       "additionalProperties": true
     },
@@ -238,6 +367,8 @@
       "required": ["id", "name", "severity", "reason", "patterns"],
       "properties": {
         "id": { "type": "string" },
+        "rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
         "name": { "type": "string" },
         "severity": { "type": "string" },
         "reason": {
@@ -260,6 +391,8 @@
       "required": ["id", "name", "severity", "reasons"],
       "properties": {
         "id": { "type": "string" },
+        "rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
         "name": { "type": "string" },
         "severity": { "type": "string" },
         "reasons": {
@@ -276,6 +409,7 @@
         "lookback_seconds": { "type": "number" },
         "interval_seconds": { "type": "number" },
         "max_lag_seconds": { "type": "number" },
+        "p95_lag_seconds": { "type": "number" },
         "lag_sources": {
           "type": "array",
           "items": { "type": "string" }
@@ -287,11 +421,41 @@
       },
       "additionalProperties": true
     },
+    "requiredFieldAssessment": {
+      "type": "object",
+      "required": ["rule_id", "rule_name", "sources"],
+      "properties": {
+        "rule_id": { "type": "string" },
+        "rule_name": { "type": "string" },
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/requiredFieldSourceEvidence" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "requiredFieldSourceEvidence": {
+      "type": "object",
+      "required": ["source", "status"],
+      "properties": {
+        "source": { "type": "string" },
+        "status": { "$ref": "#/$defs/evidenceStatus" },
+        "present": { "type": "array", "items": { "type": "string" } },
+        "missing": { "type": "array", "items": { "type": "string" } },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
     "ruleRef": {
       "type": "object",
       "required": ["id", "name", "severity"],
       "properties": {
         "id": { "type": "string" },
+        "rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
+        "finding_id": { "type": "string" },
+        "reason": { "type": "string" },
+        "dependency": { "type": "string" },
         "name": { "type": "string" },
         "severity": { "type": "string" },
         "assessment_status": {
@@ -307,8 +471,11 @@
       "required": ["rule_id", "selector_kind", "resolution_method", "observed_at", "status"],
       "properties": {
         "rule_id": { "type": "string" },
+        "logical_rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
         "selector": { "type": "string" },
         "expression": { "type": "string" },
+        "diagnostic": { "type": "boolean" },
         "selector_kind": { "type": "string" },
         "resolved_sources": { "type": "array", "items": { "type": "string" } },
         "aliases": { "type": "array", "items": { "type": "string" } },
@@ -319,6 +486,20 @@
           "enum": ["resolved", "empty", "unsupported", "unavailable", "remote", "ambiguous"]
         },
         "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "partialInputCoverage": {
+      "type": "object",
+      "required": ["rule_id", "rule_name", "severity", "expression", "observed_at"],
+      "properties": {
+        "rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
+        "rule_name": { "type": "string" },
+        "severity": { "type": "string" },
+        "selector": { "type": "string" },
+        "expression": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" }
       },
       "additionalProperties": true
     },

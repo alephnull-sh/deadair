@@ -8,6 +8,7 @@ binary=${DEADAIR_CI_BINARY:?set DEADAIR_CI_BINARY}
 
 umask 077
 mkdir -p "$out_dir"
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 curl_json() {
 	curl --fail --silent --show-error \
@@ -18,9 +19,9 @@ curl_json() {
 
 curl_json -X DELETE "$es_url/deadair-ci-live?ignore_unavailable=true" >/dev/null
 curl_json -X PUT "$es_url/deadair-ci-live" \
-	-d '{"mappings":{"properties":{"@timestamp":{"type":"date"}}}}' >/dev/null
+	-d '{"mappings":{"properties":{"@timestamp":{"type":"date"},"event":{"properties":{"ingested":{"type":"date"}}}}}}' >/dev/null
 curl_json -X POST "$es_url/deadair-ci-live/_doc?refresh=true" \
-	-d "{\"@timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"message\":\"synthetic CI event\"}" >/dev/null
+	-d "{\"@timestamp\":\"$now\",\"event\":{\"ingested\":\"$now\"},\"message\":\"synthetic CI event\"}" >/dev/null
 
 curl_json -X POST "$es_url/_security/api_key" \
 	-d '{"name":"deadair-ci-capture","role_descriptors":{"deadair_ci_reader":{"cluster":["monitor"],"indices":[{"names":["deadair-ci-*","netflow-*"],"privileges":["monitor","view_index_metadata","read"]}]}}}' |

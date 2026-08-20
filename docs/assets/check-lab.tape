@@ -1,4 +1,4 @@
-# Real readiness check against the disposable Elastic screenshot lab.
+# Real readiness check against the disposable Elastic capture lab.
 # Regenerate from the repository root:
 #   make record-scan-lab
 

@@ -100,6 +100,10 @@ func TestResolveInputs(t *testing.T) {
 				"aliases":[{"name":"audit-all","indices":["audit-2025","audit-2026"]}],
 				"data_streams":[{"name":"logs-app-default","backing_indices":[".ds-logs-app-default-000001"]}]
 			}`)
+		case "audit-*":
+			fmt.Fprint(w, `{"indices":[{"name":"audit-2026"}]}`)
+		case "logs-app-*":
+			fmt.Fprint(w, `{}`)
 		case "none-*", "none-exact":
 			fmt.Fprint(w, `{}`)
 		case "denied-*":
@@ -131,7 +135,7 @@ func TestResolveInputs(t *testing.T) {
 		byRule[resolution.RuleID] = append(byRule[resolution.RuleID], resolution)
 	}
 	resolved := byRule["resolved"]
-	if len(resolved) != 2 || resolved[0].Expression != "audit-*,logs-app-*" || resolved[0].Status != backend.ResolutionResolved {
+	if len(resolved) != 4 || resolved[0].Expression != "audit-*,logs-app-*" || resolved[0].Status != backend.ResolutionResolved {
 		t.Fatalf("resolved evidence = %+v", resolved)
 	}
 	wantSources := []string{"audit-2025", "audit-2026", "logs-app-default"}
@@ -141,11 +145,17 @@ func TestResolveInputs(t *testing.T) {
 	if fmt.Sprint(resolved[0].Aliases) != fmt.Sprint([]string{"audit-all", "audit-live"}) {
 		t.Errorf("aliases = %v", resolved[0].Aliases)
 	}
-	if duplicate := byRule["resolved-duplicate"]; len(duplicate) != 1 || fmt.Sprint(duplicate[0].ResolvedSources) != fmt.Sprint(wantSources) {
+	if !resolved[1].Diagnostic || resolved[1].Selector != "audit-*" || resolved[1].Status != backend.ResolutionResolved {
+		t.Errorf("positive diagnostic = %+v", resolved[1])
+	}
+	if !resolved[2].Diagnostic || resolved[2].Selector != "logs-app-*" || resolved[2].Status != backend.ResolutionEmpty {
+		t.Errorf("missing diagnostic = %+v", resolved[2])
+	}
+	if duplicate := byRule["resolved-duplicate"]; len(duplicate) != 3 || fmt.Sprint(duplicate[0].ResolvedSources) != fmt.Sprint(wantSources) {
 		t.Errorf("duplicate expression did not reuse equivalent evidence: %+v", duplicate)
 	}
-	if resolved[1].Status != backend.ResolutionRemote || resolved[1].Selector != "cluster-b:audit-*" {
-		t.Errorf("remote evidence = %+v", resolved[1])
+	if resolved[3].Status != backend.ResolutionRemote || resolved[3].Selector != "cluster-b:audit-*" {
+		t.Errorf("remote evidence = %+v", resolved[3])
 	}
 	if byRule["empty"][0].Status != backend.ResolutionEmpty {
 		t.Errorf("positive empty status = %q", byRule["empty"][0].Status)
@@ -168,8 +178,20 @@ func TestResolveInputs(t *testing.T) {
 	for _, count := range paths {
 		requestCount += count
 	}
-	if requestCount != 5 || paths["/_resolve/index/audit-%2A%2Clogs-app-%2A"] != 1 {
+	if requestCount != 7 || paths["/_resolve/index/audit-%2A%2Clogs-app-%2A"] != 1 ||
+		paths["/_resolve/index/audit-%2A"] != 1 || paths["/_resolve/index/logs-app-%2A"] != 1 {
 		t.Errorf("resolve paths = %v, want escaped ordered local expression", paths)
+	}
+}
+
+func TestDiagnosticInputExpressionsRetainLocalExclusions(t *testing.T) {
+	got := diagnosticInputExpressions([]string{"logs-legacy-*", "-logs-old-*", "logs-current-*", "logs-legacy-*"})
+	want := []diagnosticInputExpression{
+		{selector: "logs-legacy-*", expression: "logs-legacy-*,-logs-old-*"},
+		{selector: "logs-current-*", expression: "logs-current-*,-logs-old-*"},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("diagnostic expressions = %+v, want %+v", got, want)
 	}
 }
 

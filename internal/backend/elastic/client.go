@@ -1,17 +1,18 @@
 // Package elastic implements the read-only backend for Elastic Security.
 // It talks to two APIs: Kibana (detection rule inventory via the Detections
-// API) and Elasticsearch (source stats). Every call is a read: GETs against
-// stats/cat endpoints and size-0 max-timestamp aggregations. Cheap stats APIs
-// are preferred over ad-hoc aggregations so a scan never becomes load on the
-// monitored cluster.
+// API) and Elasticsearch (source stats and bounded evidence reads). Every call
+// is read-only. Cheap stats APIs are preferred where they answer the question;
+// targeted field and lag checks stay scoped to sources used by eligible rules.
 package elastic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -38,11 +39,12 @@ type Client struct {
 	// Space scopes Kibana API calls to a non-default Kibana space; rules
 	// living outside the configured space are otherwise invisible.
 	Space string
-	// MeasureLag adds one size-0 aggregation per non-empty source to measure
-	// ingest lag (event.ingested vs @timestamp). Off by default; the CLI
-	// enables it with --state-file.
-	MeasureLag bool
 }
+
+const (
+	ingestLagWindow  = 24 * time.Hour
+	ingestLagSamples = 500
+)
 
 func (c *Client) Name() string { return "elastic" }
 
@@ -139,6 +141,7 @@ type ruleJSON struct {
 	Severity       string   `json:"severity"`
 	RiskScore      int      `json:"risk_score"`
 	Type           string   `json:"type"`
+	Query          string   `json:"query"`
 	Index          []string `json:"index"`
 	DataViewID     string   `json:"data_view_id"`
 	From           string   `json:"from"`
@@ -151,25 +154,39 @@ type ruleJSON struct {
 
 func (d ruleJSON) toRule() backend.Rule {
 	r := backend.Rule{
-		ID:         d.ID,
-		Name:       d.Name,
-		Enabled:    d.Enabled,
-		Severity:   strings.ToLower(d.Severity),
-		RiskScore:  d.RiskScore,
-		RuleType:   d.Type,
-		DataViewID: d.DataViewID,
-		Patterns:   d.Index,
-		Lookback:   backend.ParseLookback(d.From),
-		Interval:   backend.ParseInterval(d.Interval),
+		ID:              d.RuleID,
+		BackendObjectID: d.ID,
+		Name:            d.Name,
+		Enabled:         d.Enabled,
+		Severity:        strings.ToLower(d.Severity),
+		RiskScore:       d.RiskScore,
+		RuleType:        d.Type,
+		DataViewID:      d.DataViewID,
+		Patterns:        d.Index,
+		Lookback:        backend.ParseLookback(d.From),
+		Interval:        backend.ParseInterval(d.Interval),
 
 		TimestampOverride: d.TimestampOverride,
 	}
 	if r.ID == "" {
-		r.ID = d.RuleID
+		r.ID = d.ID
 	}
-	if len(d.Index) > 0 && d.DataViewID != "" {
+	isESQL := strings.EqualFold(d.Type, "esql")
+	hasExplicitSource := len(d.Index) > 0 || d.DataViewID != ""
+	if isESQL && hasExplicitSource {
+		r.InputStatus = backend.ResolutionAmbiguous
+		r.InputDetail = "ES|QL input cannot be inferred safely when explicit index or data view metadata is also present"
+	} else if len(d.Index) > 0 && d.DataViewID != "" {
 		r.InputStatus = backend.ResolutionAmbiguous
 		r.InputDetail = "rule defines both explicit index selectors and a data view"
+	} else if isESQL {
+		patterns, err := esqlSourcePatterns(d.Query)
+		if err != nil {
+			r.InputStatus = backend.ResolutionUnsupported
+			r.InputDetail = fmt.Sprintf("ES|QL source expression is unsupported: %v", err)
+		} else {
+			r.Patterns = patterns
+		}
 	} else if len(d.Index) == 0 && d.DataViewID == "" {
 		r.InputStatus = backend.ResolutionUnsupported
 		if d.Type == "" {
@@ -194,17 +211,25 @@ func ParseRuleFile(data []byte) ([]backend.Rule, error) {
 	if trimmed == "" {
 		return nil, fmt.Errorf("rule file is empty")
 	}
-	var raw []ruleJSON
+	type entry struct {
+		raw      json.RawMessage
+		location string
+	}
+	var entries []entry
 	if strings.HasPrefix(trimmed, "[") {
+		var raw []json.RawMessage
 		if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
 			return nil, fmt.Errorf("parsing rule array: %w", err)
+		}
+		for i, object := range raw {
+			entries = append(entries, entry{raw: object, location: fmt.Sprintf("array element %d", i+1)})
 		}
 	} else {
 		parsedSingle := false
 		if strings.HasPrefix(trimmed, "{") {
-			var d ruleJSON
-			if err := json.Unmarshal([]byte(trimmed), &d); err == nil {
-				raw = append(raw, d)
+			var object json.RawMessage
+			if err := json.Unmarshal([]byte(trimmed), &object); err == nil {
+				entries = append(entries, entry{raw: object, location: "object"})
 				parsedSingle = true
 			}
 		}
@@ -214,18 +239,29 @@ func ParseRuleFile(data []byte) ([]backend.Rule, error) {
 				if line == "" {
 					continue
 				}
-				var d ruleJSON
-				if err := json.Unmarshal([]byte(line), &d); err != nil {
+				var object json.RawMessage
+				if err := json.Unmarshal([]byte(line), &object); err != nil {
 					return nil, fmt.Errorf("parsing rule (line %d): %w", i+1, err)
 				}
-				raw = append(raw, d)
+				entries = append(entries, entry{raw: object, location: fmt.Sprintf("line %d", i+1)})
 			}
 		}
 	}
 	var rules []backend.Rule
-	for _, d := range raw {
-		if d.Name == "" && d.RuleID == "" && d.ID == "" {
-			continue // export metadata lines
+	for _, candidate := range entries {
+		exportDetails, err := isRuleExportDetails(candidate.raw)
+		if err != nil {
+			return nil, fmt.Errorf("parsing Elastic export details (%s): %w", candidate.location, err)
+		}
+		if exportDetails {
+			continue
+		}
+		var d ruleJSON
+		if err := json.Unmarshal(candidate.raw, &d); err != nil {
+			return nil, fmt.Errorf("parsing rule (%s): %w", candidate.location, err)
+		}
+		if strings.TrimSpace(d.Name) == "" && strings.TrimSpace(d.RuleID) == "" && strings.TrimSpace(d.ID) == "" {
+			return nil, fmt.Errorf("parsing rule (%s): object has no name, rule_id, or id", candidate.location)
 		}
 		r := d.toRule()
 		r.Enabled = true
@@ -237,7 +273,60 @@ func ParseRuleFile(data []byte) ([]backend.Rule, error) {
 	if len(rules) == 0 {
 		return nil, fmt.Errorf("no rules found in file")
 	}
+	if err := backend.ValidateRuleIDs(rules); err != nil {
+		return nil, err
+	}
 	return rules, nil
+}
+
+// isRuleExportDetails recognizes the one non-rule object Elastic appends to
+// rule exports. Requiring the documented discriminator and rejecting unknown
+// keys prevents an arbitrary malformed candidate from being mistaken for
+// harmless export metadata.
+func isRuleExportDetails(raw json.RawMessage) (bool, error) {
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &shape); err != nil || shape == nil {
+		return false, nil
+	}
+	if _, ok := shape["exported_count"]; !ok {
+		return false, nil
+	}
+	allowed := map[string]bool{
+		"exported_count":                     true,
+		"exported_rules_count":               true,
+		"missing_rules":                      true,
+		"missing_rules_count":                true,
+		"exported_exception_list_count":      true,
+		"exported_exception_list_item_count": true,
+		"missing_exception_list_item_count":  true,
+		"missing_exception_list_items":       true,
+		"missing_exception_lists":            true,
+		"missing_exception_lists_count":      true,
+	}
+	for key := range shape {
+		if !allowed[key] {
+			return false, nil
+		}
+	}
+	var details struct {
+		ExportedCount                  *int              `json:"exported_count"`
+		ExportedRulesCount             *int              `json:"exported_rules_count"`
+		MissingRules                   []json.RawMessage `json:"missing_rules"`
+		MissingRulesCount              *int              `json:"missing_rules_count"`
+		ExportedExceptionListCount     *int              `json:"exported_exception_list_count"`
+		ExportedExceptionListItemCount *int              `json:"exported_exception_list_item_count"`
+		MissingExceptionListItemCount  *int              `json:"missing_exception_list_item_count"`
+		MissingExceptionListItems      []json.RawMessage `json:"missing_exception_list_items"`
+		MissingExceptionLists          []json.RawMessage `json:"missing_exception_lists"`
+		MissingExceptionListsCount     *int              `json:"missing_exception_lists_count"`
+	}
+	if err := json.Unmarshal(raw, &details); err != nil {
+		return false, err
+	}
+	if details.ExportedCount == nil {
+		return false, fmt.Errorf("exported_count must be an integer")
+	}
+	return true, nil
 }
 
 // ParseCandidates implements backend.CandidateParser for Elastic rule
@@ -358,6 +447,14 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 	expressionIndex := make(map[string]int)
 	var expressions []string
 	var expressionObservedAt []time.Time
+	registerExpression := func(expression string, observedAt time.Time) {
+		if _, exists := expressionIndex[expression]; exists {
+			return
+		}
+		expressionIndex[expression] = len(expressions)
+		expressions = append(expressions, expression)
+		expressionObservedAt = append(expressionObservedAt, observedAt)
+	}
 	for _, rule := range rules {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -429,11 +526,7 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 				}})
 			}
 		} else {
-			if _, exists := expressionIndex[expression]; !exists {
-				expressionIndex[expression] = len(expressions)
-				expressions = append(expressions, expression)
-				expressionObservedAt = append(expressionObservedAt, observedAt)
-			}
+			registerExpression(expression, observedAt)
 			plans = append(plans, plannedResolution{
 				expression: expression,
 				resolution: backend.InputResolution{
@@ -443,6 +536,19 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 					ResolutionMethod: resolutionMethod,
 				},
 			})
+			for _, diagnostic := range diagnosticInputExpressions(local) {
+				registerExpression(diagnostic.expression, observedAt)
+				plans = append(plans, plannedResolution{
+					expression: diagnostic.expression,
+					resolution: backend.InputResolution{
+						RuleID:           rule.ID,
+						Selector:         diagnostic.selector,
+						Diagnostic:       true,
+						SelectorKind:     "index_selector",
+						ResolutionMethod: "resolve_index_diagnostic",
+					},
+				})
+			}
 		}
 
 		for _, selector := range remote {
@@ -473,11 +579,50 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 		resolution.Aliases = append([]string(nil), resolution.Aliases...)
 		resolution.RuleID = plan.resolution.RuleID
 		resolution.Selector = plan.resolution.Selector
+		resolution.Diagnostic = plan.resolution.Diagnostic
 		resolution.SelectorKind = plan.resolution.SelectorKind
 		resolution.ResolutionMethod = plan.resolution.ResolutionMethod
 		resolutions = append(resolutions, resolution)
 	}
 	return resolutions, nil
+}
+
+type diagnosticInputExpression struct {
+	selector   string
+	expression string
+}
+
+// diagnosticInputExpressions isolates each positive selector while retaining
+// every local exclusion. These reads explain migration fallbacks without
+// changing the authoritative combined expression used by the graph.
+func diagnosticInputExpressions(local []string) []diagnosticInputExpression {
+	var positives, exclusions []string
+	seenPositive := make(map[string]bool)
+	for _, selector := range local {
+		if strings.HasPrefix(selector, "-") {
+			exclusions = append(exclusions, selector)
+			continue
+		}
+		if !seenPositive[selector] {
+			seenPositive[selector] = true
+			positives = append(positives, selector)
+		}
+	}
+	if len(positives) < 2 {
+		return nil
+	}
+	out := make([]diagnosticInputExpression, 0, len(positives))
+	seenExpression := make(map[string]bool, len(positives))
+	for _, selector := range positives {
+		parts := append([]string{selector}, exclusions...)
+		expression := strings.Join(parts, ",")
+		if seenExpression[expression] {
+			continue
+		}
+		seenExpression[expression] = true
+		out = append(out, diagnosticInputExpression{selector: selector, expression: expression})
+	}
+	return out
 }
 
 func (c *Client) resolveInputExpressions(ctx context.Context, expressions []string, observedAt []time.Time) ([]backend.InputResolution, error) {
@@ -682,20 +827,21 @@ func (c *Client) Sources(ctx context.Context) ([]backend.Source, error) {
 	}
 
 	c.fillFreshness(ctx, sources)
-	if c.MeasureLag {
-		c.fillIngestLag(ctx, sources)
-	}
 	return sources, nil
 }
 
-// fillIngestLag measures max(event.ingested) - max(@timestamp) per non-empty
-// source, bounded concurrency. Sources without event.ingested stay nil and
-// are skipped by lag checks.
+// fillIngestLag calculates lag from paired timestamps on the same events.
+// The bounded recent sample avoids the false result produced by subtracting
+// independent maxima that may belong to different documents.
 func (c *Client) fillIngestLag(ctx context.Context, sources []backend.Source) {
 	sem := make(chan struct{}, c.concurrency())
 	var wg sync.WaitGroup
 	for i := range sources {
 		if sources[i].Docs == 0 {
+			sources[i].IngestLag = backend.IngestLagEvidence{
+				Status: backend.EvidenceDisabled,
+				Detail: "source has no documents",
+			}
 			continue
 		}
 		wg.Add(1)
@@ -703,32 +849,91 @@ func (c *Client) fillIngestLag(ctx context.Context, sources []backend.Source) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			body := strings.NewReader(`{"size":0,"track_total_hits":false,"aggs":{"latest":{"max":{"field":"@timestamp"}},"ingested":{"max":{"field":"event.ingested"}}}}`)
+			s.IngestLag = backend.IngestLagEvidence{
+				Status:     backend.EvidenceIncomplete,
+				Method:     "paired-recent-events",
+				ObservedAt: time.Now().UTC(),
+				Window:     ingestLagWindow,
+			}
+			body := strings.NewReader(fmt.Sprintf(`{"size":%d,"track_total_hits":false,"_source":false,"query":{"bool":{"filter":[{"range":{"event.ingested":{"gte":"now-%dh"}}},{"exists":{"field":"event.ingested"}},{"exists":{"field":"@timestamp"}}]}},"sort":[{"event.ingested":{"order":"desc","unmapped_type":"date"}}],"fields":[{"field":"event.ingested","format":"epoch_millis"},{"field":"@timestamp","format":"epoch_millis"}]}`,
+				ingestLagSamples, int(ingestLagWindow/time.Hour)))
 			var out struct {
-				Aggregations struct {
-					Latest struct {
-						Value *float64 `json:"value"`
-					} `json:"latest"`
-					Ingested struct {
-						Value *float64 `json:"value"`
-					} `json:"ingested"`
-				} `json:"aggregations"`
+				Hits struct {
+					Hits []struct {
+						Fields map[string][]json.RawMessage `json:"fields"`
+					} `json:"hits"`
+				} `json:"hits"`
 			}
 			path := "/" + url.PathEscape(s.Name) + "/_search"
 			if err := c.do(ctx, http.MethodPost, c.ESURL, path, body, &out); err != nil {
+				s.IngestLag.Detail = "paired timestamp sample could not be read"
 				return
 			}
-			if out.Aggregations.Latest.Value == nil || out.Aggregations.Ingested.Value == nil {
+			lags := make([]time.Duration, 0, len(out.Hits.Hits))
+			for _, hit := range out.Hits.Hits {
+				eventTime, eventOK := firstMillis(hit.Fields["@timestamp"])
+				ingestTime, ingestOK := firstMillis(hit.Fields["event.ingested"])
+				if !eventOK || !ingestOK {
+					continue
+				}
+				lag := time.Duration(ingestTime-eventTime) * time.Millisecond
+				if lag < 0 {
+					lag = 0
+				}
+				lags = append(lags, lag)
+			}
+			if len(lags) == 0 {
+				s.IngestLag.Detail = "no recent events exposed both event.ingested and @timestamp"
 				return
 			}
-			lag := time.Duration(*out.Aggregations.Ingested.Value-*out.Aggregations.Latest.Value) * time.Millisecond
-			if lag < 0 {
-				lag = 0
-			}
-			s.IngestLag = &lag
+			sort.Slice(lags, func(i, j int) bool { return lags[i] < lags[j] })
+			p95Index := int(math.Ceil(float64(len(lags))*0.95)) - 1
+			s.IngestLag.Status = backend.EvidenceAssessed
+			s.IngestLag.SampleCount = len(lags)
+			s.IngestLag.P95 = lags[p95Index]
+			s.IngestLag.Max = lags[len(lags)-1]
+			s.IngestLag.Detail = ""
 		}(&sources[i])
 	}
 	wg.Wait()
+}
+
+// IngestLagEvidence samples only the sources selected by the caller. Keeping
+// this separate from Sources prevents connection checks from issuing search
+// requests and lets the CLI limit reads to sources used by eligible rules.
+func (c *Client) IngestLagEvidence(ctx context.Context, sources []backend.Source) (map[string]backend.IngestLagEvidence, error) {
+	selected := append([]backend.Source(nil), sources...)
+	c.fillIngestLag(ctx, selected)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := make(map[string]backend.IngestLagEvidence, len(selected))
+	for _, source := range selected {
+		out[source.Name] = source.IngestLag
+	}
+	return out, nil
+}
+
+func firstMillis(values []json.RawMessage) (int64, bool) {
+	if len(values) == 0 {
+		return 0, false
+	}
+	var number float64
+	if err := json.Unmarshal(values[0], &number); err == nil {
+		return int64(number), true
+	}
+	var text string
+	if err := json.Unmarshal(values[0], &text); err != nil {
+		return 0, false
+	}
+	if millis, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return millis, true
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		return 0, false
+	}
+	return parsed.UnixMilli(), true
 }
 
 // fillFreshness resolves LastEvent for sources that lack it, with bounded
@@ -773,8 +978,13 @@ func (c *Client) maxTimestamp(ctx context.Context, index string) (time.Time, err
 	return time.UnixMilli(int64(*out.Aggregations.Latest.Value)), nil
 }
 
+type fieldCapability struct {
+	Searchable           bool     `json:"searchable"`
+	NonSearchableIndices []string `json:"non_searchable_indices"`
+}
+
 type fieldCapsResponse struct {
-	Fields map[string]map[string]json.RawMessage `json:"fields"`
+	Fields map[string]map[string]fieldCapability `json:"fields"`
 }
 
 // Schemas inventories field capabilities for the already-selected sources.
@@ -800,6 +1010,61 @@ func (c *Client) Schemas(ctx context.Context, sources []backend.Source) (map[str
 			}
 			mu.Lock()
 			out[src.Name] = schema
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RequiredFieldEvidence fetches only rule-declared fields. A missing source
+// result is retained as incomplete evidence rather than being treated as an
+// empty mapping.
+func (c *Client) RequiredFieldEvidence(ctx context.Context, sources []backend.Source, fields []string) (map[string]backend.FieldEvidence, error) {
+	out := make(map[string]backend.FieldEvidence, len(sources))
+	if len(fields) == 0 {
+		return out, nil
+	}
+	fields = append([]string(nil), fields...)
+	sort.Strings(fields)
+	body, err := json.Marshal(struct {
+		Fields []string `json:"fields"`
+	}{Fields: fields})
+	if err != nil {
+		return nil, fmt.Errorf("encoding required-field request: %w", err)
+	}
+	sem := make(chan struct{}, c.concurrency())
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, src := range sources {
+		src := src
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			evidence := backend.FieldEvidence{Status: backend.EvidenceIncomplete, Detail: "field capabilities could not be read"}
+			var fc fieldCapsResponse
+			query := url.Values{"include_unmapped": []string{"true"}}
+			path := "/" + url.PathEscape(src.Name) + "/_field_caps?" + query.Encode()
+			if err := c.do(ctx, http.MethodPost, c.ESURL, path, bytes.NewReader(body), &fc); err == nil {
+				evidence = backend.FieldEvidence{Status: backend.EvidenceAssessed, Fields: make(map[string]bool, len(fc.Fields))}
+				for name, byType := range fc.Fields {
+					available := len(byType) > 0
+					for typ, capability := range byType {
+						if typ == "unmapped" || !capability.Searchable || len(capability.NonSearchableIndices) > 0 {
+							available = false
+							break
+						}
+					}
+					evidence.Fields[name] = available
+				}
+			}
+			mu.Lock()
+			out[src.Name] = evidence
 			mu.Unlock()
 		}()
 	}

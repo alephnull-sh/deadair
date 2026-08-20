@@ -4,10 +4,8 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,6 +16,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +27,7 @@ import (
 	"github.com/alephnull-sh/deadair/internal/exporter"
 	"github.com/alephnull-sh/deadair/internal/graph"
 	"github.com/alephnull-sh/deadair/internal/health"
+	redactpkg "github.com/alephnull-sh/deadair/internal/redact"
 	"github.com/alephnull-sh/deadair/internal/report"
 	"github.com/alephnull-sh/deadair/internal/state"
 )
@@ -70,7 +70,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintf(w, "\n%s\n", h("COMMANDS"))
 	fmt.Fprintln(w, "  setup     print least-privilege credential setup for a backend")
 	fmt.Fprintln(w, "  check     verify readiness for a live scan")
-	fmt.Fprintln(w, "  scan      one-shot report; exit 0 healthy, 1 findings, 2 error")
+	fmt.Fprintln(w, "  scan      one-shot report; exit 0 passed, 1 gated findings, 2 error")
 	fmt.Fprintln(w, "  serve     Prometheus exporter with periodic scans")
 	fmt.Fprintln(w, "  diff      compare two reports; exit 1 on regressions")
 	fmt.Fprintln(w, "  tune      suggest baseline settings from accumulated state")
@@ -183,6 +183,8 @@ type connOpts struct {
 	kibanaSpace            string
 	fleetFile              string
 	instanceName           string
+	policyFile             string
+	policy                 *report.Policy
 }
 
 func addBackendFlags(fs *flag.FlagSet, o *connOpts) {
@@ -207,12 +209,13 @@ func addAssessmentFlags(fs *flag.FlagSet, o *connOpts) {
 	fs.Var(&o.include, "include", "source name pattern to include; repeatable, default includes all sources")
 	fs.Var(&o.exclude, "exclude", "source name pattern to exclude; repeatable, wins over --include")
 	fs.StringVar(&o.downtimeFile, "downtime-file", "", "JSON file describing expected per-source downtime windows")
-	fs.StringVar(&o.stateFile, "state-file", "", "state file for volume baselines, warmup, and hysteresis (created 0600)")
+	fs.StringVar(&o.stateFile, "state-file", "", "state file for volume baselines, warmup, and hysteresis (created 0600 on POSIX)")
 	fs.DurationVar(&o.volumeWarmup, "volume-warmup", 24*time.Hour, "time a source must be observed before volume-baseline findings can fire")
 	fs.IntVar(&o.volumeHysteresis, "volume-hysteresis", 2, "consecutive low-volume scans required before a volume finding fires")
 	fs.IntVar(&o.volumeMinSamples, "volume-min-samples", 4, "same weekday/hour samples required before volume baselines evaluate")
 	fs.Float64Var(&o.volumeZThreshold, "volume-z-threshold", 3, "negative z-score threshold for low-volume findings")
 	fs.BoolVar(&o.schemaTrack, "schema", false, "track field_caps schema drift; requires --state-file")
+	fs.StringVar(&o.policyFile, "policy", "", "local JSON policy for source freshness, accepted findings, and gate classes")
 }
 
 type patternList []string
@@ -294,7 +297,6 @@ func (o *connOpts) elasticClient(stderr io.Writer) (backendpkg.Backend, error) {
 		Space:       o.kibanaSpace,
 		HTTP:        hc,
 		Concurrency: o.concurrency,
-		MeasureLag:  o.stateFile != "",
 	}, nil
 }
 
@@ -376,7 +378,189 @@ type stateAssessments struct {
 	fields map[string]map[string]bool // source -> field set, when schemas fetched
 }
 
-func (o *connOpts) stateAssessments(ctx context.Context, c backendpkg.Backend, sources []backendpkg.Source, check health.Check) (stateAssessments, *state.Store, error) {
+func collectRequiredFieldEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source) (map[string]backendpkg.FieldEvidence, report.RuntimeAssessment, error) {
+	assessment := report.RuntimeAssessment{Name: report.AssessmentRequiredFields}
+	provider, ok := c.(backendpkg.RequiredFieldProvider)
+	if !ok {
+		assessment.Status = backendpkg.EvidenceUnavailable
+		assessment.Detail = "backend does not expose targeted required-field evidence"
+		return nil, assessment, nil
+	}
+	fieldSet := map[string]bool{}
+	sourceSet := map[string]bool{}
+	declared := false
+	for _, rule := range rules {
+		if !rule.Enabled || len(rule.RequiredFields) == 0 {
+			continue
+		}
+		declared = true
+		resolved := false
+		for _, source := range g.SourcesFor(rule.ID) {
+			sourceSet[source] = true
+			resolved = true
+		}
+		if resolved {
+			for _, field := range rule.RequiredFields {
+				fieldSet[field] = true
+			}
+		}
+	}
+	if !declared {
+		assessment.Status = backendpkg.EvidenceDisabled
+		assessment.Detail = "enabled rules did not declare required fields"
+		return nil, assessment, nil
+	}
+	if len(sourceSet) == 0 {
+		assessment.Status = backendpkg.EvidenceDisabled
+		assessment.Detail = "enabled rules with required fields did not resolve to a local source"
+		return map[string]backendpkg.FieldEvidence{}, assessment, nil
+	}
+	fields := make([]string, 0, len(fieldSet))
+	for field := range fieldSet {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	sources := make([]backendpkg.Source, 0, len(sourceSet))
+	for _, source := range inventory {
+		if sourceSet[source.Name] {
+			sources = append(sources, source)
+		}
+	}
+	evidence, err := provider.RequiredFieldEvidence(ctx, sources, fields)
+	if err != nil {
+		return nil, assessment, err
+	}
+	assessment.Status = backendpkg.EvidenceAssessed
+	for _, source := range sources {
+		item, found := evidence[source.Name]
+		if !found || item.Status != backendpkg.EvidenceAssessed {
+			assessment.Status = backendpkg.EvidenceIncomplete
+			assessment.Detail = "one or more concrete source mappings could not be read"
+			break
+		}
+	}
+	return evidence, assessment, nil
+}
+
+func collectIngestLagEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source) (map[string]backendpkg.IngestLagEvidence, report.RuntimeAssessment, error) {
+	assessment := report.RuntimeAssessment{Name: report.AssessmentIngestLag}
+	provider, ok := c.(backendpkg.IngestLagProvider)
+	if !ok {
+		assessment.Status = backendpkg.EvidenceUnavailable
+		assessment.Detail = "backend does not provide paired ingest-lag evidence"
+		return nil, assessment, nil
+	}
+	wanted := map[string]bool{}
+	for _, rule := range rules {
+		if !rule.Enabled || (rule.TimestampOverride != "" && rule.TimestampOverride != "@timestamp") ||
+			rule.Interval <= 0 || rule.Lookback < rule.Interval {
+			continue
+		}
+		for _, source := range g.SourcesFor(rule.ID) {
+			wanted[source] = true
+		}
+	}
+	if len(wanted) == 0 {
+		assessment.Status = backendpkg.EvidenceDisabled
+		assessment.Detail = "no resolved source is used by an event-time rule with a measurable window margin"
+		return map[string]backendpkg.IngestLagEvidence{}, assessment, nil
+	}
+	sources := make([]backendpkg.Source, 0, len(wanted))
+	for _, source := range inventory {
+		if wanted[source.Name] {
+			sources = append(sources, source)
+		}
+	}
+	evidence, err := provider.IngestLagEvidence(ctx, sources)
+	if err != nil {
+		return nil, assessment, err
+	}
+	assessment.Status = backendpkg.EvidenceAssessed
+	assessedSources := 0
+	for _, source := range sources {
+		item, found := evidence[source.Name]
+		if found && item.Status == backendpkg.EvidenceAssessed {
+			assessedSources++
+		}
+		if !found || (item.Status != backendpkg.EvidenceAssessed && item.Status != backendpkg.EvidenceDisabled) {
+			assessment.Status = backendpkg.EvidenceIncomplete
+			assessment.Detail = "one or more paired recent-event samples could not be collected"
+			break
+		}
+	}
+	if assessment.Status == backendpkg.EvidenceAssessed && assessedSources == 0 {
+		assessment.Status = backendpkg.EvidenceDisabled
+		assessment.Detail = "relevant sources had no documents to sample"
+	} else if assessment.Status == backendpkg.EvidenceAssessed {
+		assessment.Detail = fmt.Sprintf("paired recent-event samples requested for %d relevant source(s)", len(sources))
+	}
+	return evidence, assessment, nil
+}
+
+func runtimeAssessments(o connOpts, g *graph.Graph, scoped []backendpkg.Source, schemaEvidence map[string]state.SchemaAssessment, fields, lag report.RuntimeAssessment) []report.RuntimeAssessment {
+	resolution := report.RuntimeAssessment{Name: report.AssessmentSourceResolution, Status: backendpkg.EvidenceAssessed}
+	enabledRules := make(map[string]bool, len(g.Rules))
+	for _, rule := range g.Rules {
+		if rule.Enabled {
+			enabledRules[rule.ID] = true
+		}
+	}
+	if len(enabledRules) == 0 {
+		resolution.Status = backendpkg.EvidenceDisabled
+		resolution.Detail = "no enabled rules to resolve"
+	} else {
+		authoritative := make(map[string]bool, len(enabledRules))
+		for _, item := range g.Resolutions {
+			if !enabledRules[item.RuleID] {
+				continue
+			}
+			if !item.Diagnostic {
+				authoritative[item.RuleID] = true
+			}
+			switch item.Status {
+			case backendpkg.ResolutionResolved, backendpkg.ResolutionEmpty:
+			default:
+				resolution.Status = backendpkg.EvidenceIncomplete
+				resolution.Detail = "one or more rule inputs could not be assessed locally"
+			}
+		}
+		for ruleID := range enabledRules {
+			if !authoritative[ruleID] {
+				resolution.Status = backendpkg.EvidenceIncomplete
+				resolution.Detail = "one or more enabled rules have no authoritative input-resolution evidence"
+				break
+			}
+		}
+	}
+
+	schema := report.RuntimeAssessment{Name: report.AssessmentSchemaDrift, Status: backendpkg.EvidenceDisabled, Detail: "enable with --schema and --state-file"}
+	if o.ruleFile != "" && o.schemaTrack {
+		schema.Detail = "candidate scans do not update installed source schema history"
+	} else if o.schemaTrack {
+		if len(scoped) == 0 {
+			schema.Detail = "no sources are in scope"
+		} else {
+			schema.Status = backendpkg.EvidenceAssessed
+			schema.Detail = "compared with the saved schema snapshot"
+			for _, source := range scoped {
+				evidence, found := schemaEvidence[source.Name]
+				if !found || evidence.Status == state.SchemaUnknown {
+					schema.Status = backendpkg.EvidenceIncomplete
+					schema.Detail = "one or more scoped source schemas could not be read"
+					break
+				}
+			}
+		}
+	}
+	candidate := report.RuntimeAssessment{Name: report.AssessmentCandidateParsing, Status: backendpkg.EvidenceDisabled, Detail: "no candidate rule file was supplied"}
+	if o.ruleFile != "" {
+		candidate.Status = backendpkg.EvidenceAssessed
+		candidate.Detail = "candidate rule file parsed without installation"
+	}
+	return []report.RuntimeAssessment{resolution, fields, lag, schema, candidate}
+}
+
+func (o *connOpts) stateAssessments(ctx context.Context, c backendpkg.Backend, sources []backendpkg.Source, check health.Check, targetID string) (stateAssessments, *state.Store, error) {
 	if o.stateFile == "" {
 		if o.schemaTrack {
 			return stateAssessments{}, nil, fmt.Errorf("--schema requires --state-file")
@@ -386,6 +570,16 @@ func (o *connOpts) stateAssessments(ctx context.Context, c backendpkg.Backend, s
 	store, err := state.Load(o.stateFile)
 	if err != nil {
 		return stateAssessments{}, nil, err
+	}
+	if err := store.BindTarget(targetID); err != nil {
+		return stateAssessments{}, nil, err
+	}
+	// Candidate scans may retain finding lifecycle in their own scope, but
+	// source history belongs to the installed assessment. Updating volume or
+	// schema state here could consume a drift or alter the next installed
+	// baseline even though candidate exit status ignores source findings.
+	if o.ruleFile != "" {
+		return stateAssessments{}, store, nil
 	}
 	now := time.Now().UTC()
 	volume := store.AssessVolumes(sources, state.VolumeOptions{
@@ -421,19 +615,34 @@ func (o *connOpts) stateAssessments(ctx context.Context, c backendpkg.Backend, s
 // failed render can never consume a one-shot drift finding or a hysteresis
 // streak.
 type scanResult struct {
-	report *report.Report
-	store  *state.Store
-	path   string
+	report            *report.Report
+	store             *state.Store
+	path              string
+	findingsOnlyState bool
 }
 
 func (s scanResult) commitState() error {
 	if s.store == nil {
 		return nil
 	}
+	if s.findingsOnlyState {
+		return s.store.SaveFindingUpdates(s.path)
+	}
 	return s.store.Save(s.path)
 }
 
-func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts) (scanResult, error) {
+func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, targetID string) (scanResult, error) {
+	var err error
+	if o.policyFile != "" {
+		o.policy, err = report.LoadPolicy(o.policyFile, time.Now().UTC())
+		if err != nil {
+			return scanResult{}, err
+		}
+	}
+	configurationID, err := assessmentConfigurationID(o)
+	if err != nil {
+		return scanResult{}, err
+	}
 	observedVersion := ""
 	if provider, ok := c.(backendpkg.VersionProvider); ok {
 		// Product version is useful report evidence, but a restricted root API
@@ -446,7 +655,6 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts) (scanResult
 		}
 	}
 	var rules []backendpkg.Rule
-	var err error
 	if o.ruleFile != "" {
 		// Candidate mode: evaluate rules from a file against the live
 		// environment instead of the installed inventory.
@@ -464,6 +672,9 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts) (scanResult
 	}
 	if err != nil {
 		return scanResult{}, err
+	}
+	if err := backendpkg.ValidateRuleIDs(rules); err != nil {
+		return scanResult{}, fmt.Errorf("invalid rule inventory: %w", err)
 	}
 	all, err := c.Sources(ctx)
 	if err != nil {
@@ -484,7 +695,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts) (scanResult
 	if err != nil {
 		return scanResult{}, err
 	}
-	stateAssess, store, err := o.stateAssessments(ctx, c, scoped, check)
+	stateAssess, store, err := o.stateAssessments(ctx, c, scoped, check, targetID)
 	if err != nil {
 		return scanResult{}, err
 	}
@@ -497,17 +708,57 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts) (scanResult
 		return scanResult{}, fmt.Errorf("resolving rule inputs: %w", err)
 	}
 	g := graph.BuildResolved(rules, all, resolutions)
+	lagEvidence, lagAssessment, err := collectIngestLagEvidence(ctx, c, rules, g, all)
+	if err != nil {
+		return scanResult{}, fmt.Errorf("reading ingest-lag evidence: %w", err)
+	}
+	for i := range all {
+		if evidence, found := lagEvidence[all[i].Name]; found {
+			all[i].IngestLag = evidence
+		}
+	}
+	// Attach the measurements to the graph used by report impairment checks.
+	g = graph.BuildResolved(rules, all, resolutions)
+	fieldEvidence, fieldAssessment, err := collectRequiredFieldEvidence(ctx, c, rules, g, all)
+	if err != nil {
+		return scanResult{}, fmt.Errorf("reading required-field evidence: %w", err)
+	}
 	r := report.BuildWithOptions(c.Name(), g, report.BuildOptions{
 		Check:                  check,
 		Volume:                 stateAssess.volume,
 		Schema:                 stateAssess.schema,
 		Scope:                  scope,
-		SourceFields:           stateAssess.fields,
+		FieldEvidence:          fieldEvidence,
+		Assessments:            runtimeAssessments(o, g, scoped, stateAssess.schema, fieldAssessment, lagAssessment),
 		SkipUnused:             o.ruleFile != "",
 		ProducerVersion:        Version,
 		BackendObservedVersion: observedVersion,
+		ScanScope: report.ScanScope{
+			Mode: func() string {
+				if o.ruleFile != "" {
+					return "candidate"
+				}
+				return "installed"
+			}(),
+			Include: append([]string(nil), o.include...), Exclude: append([]string(nil), o.exclude...),
+			SchemaTracking: o.schemaTrack, Stateful: o.stateFile != "", ConfigurationID: configurationID,
+			CandidateRuleIDs: func() []string {
+				if o.ruleFile == "" {
+					return nil
+				}
+				ids := make([]string, 0, len(rules))
+				for _, rule := range rules {
+					ids = append(ids, rule.ID)
+				}
+				return ids
+			}(),
+		},
+		Policy: o.policy, Store: store, TargetID: targetID, Instance: instance,
 	})
-	return scanResult{report: r, store: store, path: o.stateFile}, nil
+	return scanResult{
+		report: r, store: store, path: o.stateFile,
+		findingsOnlyState: o.ruleFile != "" && store != nil,
+	}, nil
 }
 
 func runScan(args []string, stdout, stderr io.Writer) int {
@@ -518,11 +769,12 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	addBackendFlags(fs, &o)
 	addAssessmentFlags(fs, &o)
 	jsonOut := fs.Bool("json", false, "print the full JSON report to stdout")
-	jsonFile := fs.String("json-out", "", "write the JSON report to a file (created 0600)")
+	jsonFile := fs.String("json-out", "", "write the JSON report to a file (created 0600 on POSIX)")
 	legacyOutFile := fs.String("out", "", "deprecated alias for --json-out")
-	htmlFile := fs.String("html-out", "", "write a static HTML report to a file (created 0600)")
-	redactNames := fs.Bool("redact", false, "replace source/rule names with stable digests (shareable report)")
-	fs.StringVar(&o.ruleFile, "rule", "", "evaluate an Elastic candidate rule file (JSON/ndjson export)")
+	htmlFile := fs.String("html-out", "", "write a static HTML report to a file (created 0600 on POSIX)")
+	redactNames := fs.Bool("redact", false, "replace sensitive names with HMAC pseudonyms")
+	redactKeyFile := fs.String("redact-key-file", os.Getenv("DEADAIR_REDACT_KEY_FILE"), "read the HMAC redaction key from a file")
+	fs.StringVar(&o.ruleFile, "rule", "", "evaluate a backend-native candidate rule or detector file")
 	if parsed, code := parseFlags(fs, args); !parsed {
 		return code
 	}
@@ -542,16 +794,29 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
 	}
+	redactionEnabled := *redactNames || *redactKeyFile != ""
+	redactor, err := loadRedactor(redactionEnabled, *redactKeyFile)
+	if err != nil {
+		printProtectedError(stderr, redactionEnabled, "redaction setup failed; check key file access and use a random key of at least 32 bytes", err)
+		return report.ExitError
+	}
+	if o.policyFile != "" {
+		o.policy, err = report.LoadPolicy(o.policyFile, time.Now().UTC())
+		if err != nil {
+			printProtectedError(stderr, redactionEnabled, "policy could not be loaded or validated", err)
+			return report.ExitError
+		}
+	}
 
 	insts, err := o.resolveInstances(stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "deadair: %v\n", err)
+		printProtectedError(stderr, redactionEnabled, "scan target configuration could not be loaded", err)
 		return report.ExitError
 	}
 	if o.ruleFile != "" {
 		for _, inst := range insts {
 			if _, ok := inst.backend.(backendpkg.CandidateParser); !ok {
-				fmt.Fprintf(stderr, "deadair: --rule is unavailable for backend %q; candidate rules currently require Elastic\n", inst.backend.Name())
+				fmt.Fprintf(stderr, "deadair: --rule is unavailable for backend %q; it has no candidate parser\n", inst.backend.Name())
 				return report.ExitError
 			}
 		}
@@ -563,17 +828,17 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	run := func(inst fleetInstance, io connOpts) (scanResult, error) {
 		sctx, cancel := context.WithTimeout(ctx, io.timeout)
 		defer cancel()
-		return scanOnce(sctx, inst.backend, io)
+		return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
 	}
 
 	if o.fleetFile != "" {
 		f, commits := scanFleet(insts, o, run)
-		if *redactNames {
-			f.Redact()
+		if redactionEnabled {
+			f.RedactWith(redactor)
 		}
 		if outFile != "" {
 			if err := f.Write(outFile); err != nil {
-				fmt.Fprintf(stderr, "deadair: %v\n", err)
+				printProtectedError(stderr, redactionEnabled, "report output could not be written", err)
 				return report.ExitError
 			}
 		}
@@ -581,7 +846,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			enc := json.NewEncoder(stdout)
 			enc.SetIndent("", "  ")
 			if err := enc.Encode(f); err != nil {
-				fmt.Fprintf(stderr, "deadair: %v\n", err)
+				printProtectedError(stderr, redactionEnabled, "report output failed", err)
 				return report.ExitError
 			}
 		} else {
@@ -589,7 +854,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		}
 		for _, c := range commits {
 			if err := c.commitState(); err != nil {
-				fmt.Fprintf(stderr, "deadair: %v\n", err)
+				printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
 				return report.ExitError
 			}
 		}
@@ -601,7 +866,11 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 
 	res, err := run(insts[0], o)
 	if err != nil {
-		fmt.Fprintf(stderr, "deadair: scan failed: %v\n", err)
+		if redactionEnabled {
+			fmt.Fprintf(stderr, "deadair: scan failed: %s\n", report.SanitizeScanError(err.Error()))
+		} else {
+			fmt.Fprintf(stderr, "deadair: scan failed: %v\n", err)
+		}
 		if s := err.Error(); strings.Contains(s, "401") || strings.Contains(s, "403") {
 			fmt.Fprintln(stderr, "deadair: hint: the credential was rejected — check the key and its role (`deadair setup` shows the expected privileges)")
 		}
@@ -609,18 +878,18 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	}
 	res.report.Instance = insts[0].name
 	r := res.report
-	if *redactNames {
-		r.Redact()
+	if redactionEnabled {
+		r.RedactWith(redactor)
 	}
 	if outFile != "" {
 		if err := r.Write(outFile); err != nil {
-			fmt.Fprintf(stderr, "deadair: %v\n", err)
+			printProtectedError(stderr, redactionEnabled, "report output could not be written", err)
 			return report.ExitError
 		}
 	}
 	if *htmlFile != "" {
 		if err := r.WriteHTML(*htmlFile); err != nil {
-			fmt.Fprintf(stderr, "deadair: %v\n", err)
+			printProtectedError(stderr, redactionEnabled, "HTML output could not be written", err)
 			return report.ExitError
 		}
 	}
@@ -628,14 +897,14 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(r); err != nil {
-			fmt.Fprintf(stderr, "deadair: %v\n", err)
+			printProtectedError(stderr, redactionEnabled, "report output failed", err)
 			return report.ExitError
 		}
 	} else {
 		printSummary(stdout, r)
 	}
 	if err := res.commitState(); err != nil {
-		fmt.Fprintf(stderr, "deadair: %v\n", err)
+		printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
 		return report.ExitError
 	}
 	if o.ruleFile != "" {
@@ -654,11 +923,29 @@ func validateScanOptions(o connOpts, htmlFile string) error {
 	if o.fleetFile != "" && o.instanceName != "" {
 		return fmt.Errorf("--instance-name cannot be combined with --fleet; fleet instances already have names")
 	}
-	if o.ruleFile != "" && o.fleetFile == "" &&
-		strings.EqualFold(strings.TrimSpace(o.backendName), "opensearch") {
-		return fmt.Errorf("--rule currently requires Elastic")
-	}
 	return nil
+}
+
+func loadRedactor(enabled bool, keyFile string) (*redactpkg.Redactor, error) {
+	if !enabled {
+		return nil, nil
+	}
+	if keyFile == "" {
+		return redactpkg.Default(), nil
+	}
+	redactor, err := redactpkg.Load(keyFile)
+	if err != nil {
+		return nil, err
+	}
+	return redactor, nil
+}
+
+func printProtectedError(w io.Writer, protected bool, safeMessage string, err error) {
+	if protected {
+		fmt.Fprintf(w, "deadair: %s\n", safeMessage)
+		return
+	}
+	fmt.Fprintf(w, "deadair: %v\n", err)
 }
 
 func printSummary(w io.Writer, r *report.Report) {
@@ -685,11 +972,18 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 			resolution.Resolved, resolution.Empty, resolution.Unsupported, resolution.Unavailable,
 			resolution.Remote, resolution.Ambiguous)
 	}
+	if r.Policy != nil {
+		fmt.Fprintf(w, "policy:     %d finding(s) gate, %d accepted, %d expired acceptance(s)\n",
+			s.GatedFindings, r.Policy.AcceptedActive, r.Policy.AcceptedExpired)
+	}
 	if s.VolumeLowSources > 0 {
 		fmt.Fprintf(w, "volume:     %d source(s) below same weekday/hour baseline\n", s.VolumeLowSources)
 	}
 	if s.SchemaDriftSources > 0 {
 		fmt.Fprintf(w, "schema:     %d source(s) changed field_caps since previous snapshot\n", s.SchemaDriftSources)
+	}
+	if checks := unassessedChecks(r); len(checks) > 0 {
+		fmt.Fprintf(w, "checks:     %s\n", strings.Join(checks, ", "))
 	}
 	if len(r.DeadDetections) > 0 {
 		fmt.Fprintf(w, "\n%s\n", color(w, "31;1", fmt.Sprintf("DEAD: %d enabled detection(s) cannot fire right now", s.DeadDetections)))
@@ -714,6 +1008,21 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 				break
 			}
 			fmt.Fprintf(w, "  [%s] %s — %s%s\n", d.Severity, d.Name, strings.Join(d.Reasons, ", "), impairedDetail(d))
+		}
+	}
+	if len(r.PartialInputCoverage) > 0 {
+		fmt.Fprintf(w, "\npartial input coverage: %d selector(s) are missing while their combined rule input still resolves\n",
+			s.PartialInputs)
+		for i, coverage := range r.PartialInputCoverage {
+			if i >= 10 {
+				fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", s.PartialInputs-10)
+				break
+			}
+			dependency := coverage.Selector
+			if dependency == "" {
+				dependency = coverage.Expression
+			}
+			fmt.Fprintf(w, "  [%s] %s — missing selector: %s\n", coverage.Severity, coverage.RuleName, dependency)
 		}
 	}
 	if len(r.UnmappedRules) > 0 || len(r.RemoteRules) > 0 {
@@ -742,7 +1051,7 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 	if s.UnusedTelemetryAssessment == report.UnusedAssessmentUnavailable {
 		fmt.Fprintln(w, "\nunused telemetry: not assessed because one or more enabled local rule inputs could not be resolved safely")
 	} else if s.UnusedSources > 0 {
-		fmt.Fprintf(w, "\nunused telemetry: %d source(s), %s ingested with no enabled detection reading it\n",
+		fmt.Fprintf(w, "\nunused telemetry: %d source(s), %s stored with no enabled detection reading it\n",
 			s.UnusedSources, humanBytes(s.UnusedBytes))
 		for i, u := range r.UnusedTelemetry {
 			if i >= 5 {
@@ -791,8 +1100,8 @@ func impairedDetail(d report.ImpairedDetection) string {
 		parts = append(parts, "missing "+strings.Join(d.MissingFields, ", "))
 	}
 	if len(d.LagSources) > 0 {
-		parts = append(parts, fmt.Sprintf("ingest lag %s in %s exceeds window margin",
-			humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
+		parts = append(parts, fmt.Sprintf("ingest lag p95 %s (max %s) in %s exceeds window margin",
+			humanDuration(d.P95LagSeconds), humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
 	}
 	if len(parts) == 0 {
 		return ""
@@ -847,7 +1156,11 @@ func runDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
 	}
-	d := report.Diff(older, newer)
+	d, err := report.Diff(older, newer)
+	if err != nil {
+		fmt.Fprintf(stderr, "deadair: reports are not comparable: %v\n", err)
+		return report.ExitError
+	}
 	if *jsonOut {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
@@ -873,7 +1186,7 @@ func printDiff(w io.Writer, d *report.DiffResult) {
 }
 
 func printPlainDiff(w io.Writer, d *report.DiffResult) {
-	if d.Regressions() == 0 && len(d.RecoveredDead)+len(d.RecoveredImpaired)+len(d.RecoveredSources)+len(d.NewSources)+len(d.RemovedSources)+len(d.NewlyUnused) == 0 {
+	if len(d.NewFindings)+len(d.RecoveredFindings)+len(d.NewlyGatedFindings)+len(d.NoLongerGated)+len(d.NewSources)+len(d.RemovedSources) == 0 {
 		fmt.Fprintln(w, "no changes")
 		return
 	}
@@ -889,6 +1202,23 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 	for _, u := range d.NewlyUnused {
 		fmt.Fprintf(w, "UNUSED   %s (%s)\n", u.Name, humanBytes(u.SizeBytes))
 	}
+	for _, finding := range d.NewFindings {
+		switch finding.Class {
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
+			name := finding.Source
+			if name == "" {
+				name = finding.RuleName
+			}
+			fmt.Fprintf(w, "FINDING  %s — %s (%s)\n", name, finding.Reason, finding.Class)
+		}
+	}
+	for _, finding := range d.NewlyGatedFindings {
+		name := finding.Source
+		if name == "" {
+			name = finding.RuleName
+		}
+		fmt.Fprintf(w, "NEW GATE %s — %s (%s)\n", name, finding.Reason, finding.Class)
+	}
 	for _, x := range d.RecoveredDead {
 		fmt.Fprintf(w, "recovered detection: %s\n", x.Name)
 	}
@@ -897,6 +1227,23 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 	}
 	for _, s := range d.RecoveredSources {
 		fmt.Fprintf(w, "recovered source: %s\n", s.Name)
+	}
+	for _, finding := range d.RecoveredFindings {
+		switch finding.Class {
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
+			name := finding.Source
+			if name == "" {
+				name = finding.RuleName
+			}
+			fmt.Fprintf(w, "recovered finding: %s — %s (%s)\n", name, finding.Reason, finding.Class)
+		}
+	}
+	for _, finding := range d.NoLongerGated {
+		name := finding.Source
+		if name == "" {
+			name = finding.RuleName
+		}
+		fmt.Fprintf(w, "no longer gated: %s — %s (%s)\n", name, finding.Reason, finding.Class)
 	}
 	for _, n := range d.NewSources {
 		fmt.Fprintf(w, "new source: %s\n", n)
@@ -925,7 +1272,8 @@ func runTune(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { tuneUsage(stderr) }
 	stateFile := fs.String("state-file", "", "state file to summarize")
 	jsonOut := fs.Bool("json", false, "write tuning summary as JSON")
-	redactNames := fs.Bool("redact", false, "replace source names with stable digests")
+	redactNames := fs.Bool("redact", false, "replace source names with HMAC pseudonyms")
+	redactKeyFile := fs.String("redact-key-file", os.Getenv("DEADAIR_REDACT_KEY_FILE"), "read the HMAC redaction key from a file")
 	if parsed, code := parseFlags(fs, args); !parsed {
 		return code
 	}
@@ -937,15 +1285,21 @@ func runTune(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "deadair: --state-file is required")
 		return report.ExitError
 	}
+	redactionEnabled := *redactNames || *redactKeyFile != ""
 	store, err := state.Load(*stateFile)
 	if err != nil {
-		fmt.Fprintf(stderr, "deadair: %v\n", err)
+		printProtectedError(stderr, redactionEnabled, "state could not be loaded", err)
 		return report.ExitError
 	}
 	tune := store.Tune()
-	if *redactNames {
+	if redactionEnabled {
+		redactor, err := loadRedactor(true, *redactKeyFile)
+		if err != nil {
+			printProtectedError(stderr, true, "redaction setup failed; check key file access and use a random key of at least 32 bytes", err)
+			return report.ExitError
+		}
 		for i := range tune.SourceSummaries {
-			tune.SourceSummaries[i].Name = redactTune("src", tune.SourceSummaries[i].Name)
+			tune.SourceSummaries[i].Name = redactor.Value("src", tune.SourceSummaries[i].Name)
 		}
 	}
 	if *jsonOut {
@@ -972,11 +1326,6 @@ func runTune(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func redactTune(prefix, name string) string {
-	sum := sha256.Sum256([]byte(name))
-	return prefix + "-" + hex.EncodeToString(sum[:])[:12]
-}
-
 func runServe(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -986,7 +1335,8 @@ func runServe(args []string, stderr io.Writer) int {
 	addAssessmentFlags(fs, &o)
 	bind := fs.String("bind", "127.0.0.1:9317", "exporter listen address; keep loopback unless the scrape path is authenticated")
 	interval := fs.Duration("interval", 5*time.Minute, "time between scans")
-	redactNames := fs.Bool("redact", false, "replace source names in metric labels with stable digests")
+	redactNames := fs.Bool("redact", false, "replace source names in metric labels with HMAC pseudonyms")
+	redactKeyFile := fs.String("redact-key-file", os.Getenv("DEADAIR_REDACT_KEY_FILE"), "read the HMAC redaction key from a file")
 	if parsed, code := parseFlags(fs, args); !parsed {
 		return code
 	}
@@ -998,10 +1348,23 @@ func runServe(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
 	}
+	redactionEnabled := *redactNames || *redactKeyFile != ""
+	redactor, err := loadRedactor(redactionEnabled, *redactKeyFile)
+	if err != nil {
+		printProtectedError(stderr, redactionEnabled, "redaction setup failed; check key file access and use a random key of at least 32 bytes", err)
+		return report.ExitError
+	}
+	if o.policyFile != "" {
+		o.policy, err = report.LoadPolicy(o.policyFile, time.Now().UTC())
+		if err != nil {
+			printProtectedError(stderr, redactionEnabled, "policy could not be loaded or validated", err)
+			return report.ExitError
+		}
+	}
 
 	insts, err := o.resolveInstances(stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "deadair: %v\n", err)
+		printProtectedError(stderr, redactionEnabled, "scan target configuration could not be loaded", err)
 		return report.ExitError
 	}
 	if host, _, err := net.SplitHostPort(*bind); err == nil && host != "127.0.0.1" && host != "::1" && host != "localhost" {
@@ -1019,11 +1382,11 @@ func runServe(args []string, stderr io.Writer) int {
 			run := func(inst fleetInstance, io connOpts) (scanResult, error) {
 				sctx, cancel := context.WithTimeout(ctx, io.timeout)
 				defer cancel()
-				return scanOnce(sctx, inst.backend, io)
+				return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
 			}
 			f, commits := scanFleet(insts, o, run)
-			if *redactNames {
-				f.Redact()
+			if redactionEnabled {
+				f.RedactWith(redactor)
 			}
 			for _, e := range f.Errors {
 				fmt.Fprintf(stderr, "deadair: scan failed (%s): %s\n", e.Instance, e.Error)
@@ -1031,7 +1394,7 @@ func runServe(args []string, stderr io.Writer) int {
 			srv.Update(f)
 			for _, c := range commits {
 				if err := c.commitState(); err != nil {
-					fmt.Fprintf(stderr, "deadair: %v\n", err)
+					printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
 				}
 			}
 		}

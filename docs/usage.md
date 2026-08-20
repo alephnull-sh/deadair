@@ -36,8 +36,8 @@ Exit codes:
 
 | Code | Meaning |
 |---:|---|
-| `0` | scan completed and no findings were present |
-| `1` | scan completed and found dead or impaired detections, degraded sources, low volume, or schema drift |
+| `0` | scan completed with no findings that affect the configured gate |
+| `1` | scan completed with one or more findings selected by the configured gate |
 | `2` | scan failed or the fleet scan was incomplete |
 
 Useful connection flags:
@@ -64,11 +64,18 @@ Terms used in reports:
 | resolved source | concrete source returned by the backend's native input-resolution API |
 | dead detection | enabled rule with no matched source, or with only stale/empty matched sources |
 | impaired detection | enabled rule with live input but positive evidence of reduced field or timing coverage |
+| partial input coverage | the complete input resolves, but one positive selector inside a multi-selector expression resolves empty |
 
 The source inventory is credential-scoped. deadair records whether each input was `resolved`,
 `empty`, `unsupported`, `unavailable`, `remote`, or `ambiguous`. Only an `empty` result backed by a
 successful native resolution can support a no-match finding. Permission failures and unsupported
 query types stay visible as unassessed inputs; they are never silently treated as healthy or dead.
+
+For a rule with several positive selectors, deadair also resolves each selector with the rule's
+exclusions retained. If the complete expression resolves but one selector does not, the report
+records partial input coverage. This is useful during source migrations, but it is not a dead-rule
+verdict: selectors may be alternatives or fallbacks. It affects exit status only when a policy
+includes the `partial-input` finding class.
 
 ### No matching source
 
@@ -140,11 +147,13 @@ reduced.
 
 | Finding | Evidence | Example | First response |
 |---|---|---|---|
-| `missing-fields` | best-effort rule-declared fields are absent from every matched source mapping fetched with `field_caps` | a parser upgrade stops mapping `process.command_line` while a rule declares it as required | compare rule metadata, package version, pipeline, and mapping |
-| `lag-blind-window` | measured ingest lag exceeds the rule's lookback-minus-interval margin | cloud audit events arrive 12 minutes late while a five-minute rule looks back six minutes | reduce delivery lag, widen lookback, or use the appropriate ingest timestamp |
+| `missing-fields` | a best-effort rule-declared field is absent or non-searchable in at least one concrete matched source, with complete `field_caps` evidence for every matched source | a parser upgrade stops mapping `process.command_line` while a rule declares it as required | compare rule metadata, package version, pipeline, and mapping |
+| `lag-blind-window` | paired-event p95 ingest lag exceeds the rule's lookback-minus-interval margin | cloud audit events arrive 12 minutes late while a five-minute rule looks back six minutes | reduce delivery lag, widen lookback, or use the appropriate ingest timestamp |
 
 `required_fields` is informational metadata, and `field_caps` proves mapping/searchability rather
-than field population in recent events. Treat `missing-fields` as strong triage evidence, not proof
+than field population in recent events. deadair records present, missing, and incomplete evidence
+per concrete source and does not make a rule-level claim when any matched-source mapping read fails. Treat
+`missing-fields` as strong triage evidence, not proof
 that every event is missing the value. Lag findings are also a timing model; validate them against
 the source's real delivery behavior and the rule type.
 
@@ -182,10 +191,84 @@ Use `scan --rule` in detection-as-code pull requests:
 deadair scan --rule candidate-rule.json
 ```
 
-The candidate file can be a single JSON rule object or an ndjson export. deadair evaluates that
-rule against the live environment without installing it. Exit `1` means the candidate is dead or
-impaired; exit `2` means its inputs were unsupported, unavailable, ambiguous, remote, or otherwise
-not safely assessed. Existing source-health findings do not block the candidate gate.
+For Elastic, the candidate can be one rule object, an array, or an ndjson rule export. For
+OpenSearch, pass a Security Analytics detector create/update object, get response, search hit, or an
+array of those objects. deadair evaluates the candidate against the live environment without
+installing it. Exit `1` means the candidate is dead or impaired; exit `2` means its inputs were
+unsupported, unavailable, ambiguous, remote, or otherwise not safely assessed. Existing
+source-health findings do not block the candidate gate. A fleet candidate scan must use one backend
+because the two candidate formats are different.
+
+The official GitHub Action keeps the JSON evidence as a workflow artifact and writes the useful
+counts to the job summary. Pass the SIEM credential through repository or environment secrets:
+
+```yaml
+permissions:
+  contents: read
+
+steps:
+  - name: Check out detection rules
+    uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+    with:
+      persist-credentials: false
+  - name: Check candidate coverage
+    uses: alephnull-sh/deadair@v0.6.0
+    with:
+      backend: elastic
+      elasticsearch-url: ${{ secrets.DEADAIR_ES_URL }}
+      kibana-url: ${{ secrets.DEADAIR_KIBANA_URL }}
+      api-key: ${{ secrets.DEADAIR_API_KEY }}
+      candidate-rule: detections/new-rule.json
+      policy-file: deadair-policy.json
+```
+
+The Action always fails on a scan error. Findings also fail the step unless
+`fail-on-findings: "false"` is set, which is useful while establishing a baseline. Reports are
+redacted before upload by default. Set `redact-key-file` to a secret file when redacted names must
+remain stable across runs; setting `redact-report: "false"` can expose sensitive blind-spot evidence
+in the job log and artifact. Redaction covers terminal and JSON output, not a `--state-file`; state
+files remain raw and sensitive.
+
+If the Action runs more than once in a job or across a matrix, give each upload a unique
+`artifact-name`, such as `deadair-report-${{ strategy.job-index }}`.
+
+The policy is part of the gate. Do not let a pull request weaken the policy that evaluates it. Read
+the policy from a protected base branch or restricted runner path, or require CODEOWNERS review for
+policy changes.
+
+The Action does not emit SARIF because live operational findings do not map to source-file
+locations. It accepts one SIEM instance and rejects `--fleet`; use the CLI directly for fleet
+files.
+
+A local policy can set source-specific freshness, choose which finding classes gate, and accept a
+known finding until a fixed expiry:
+
+```json
+{
+  "version": 1,
+  "severity_threshold": "high",
+  "gate_classes": ["dead-detection", "impaired-detection", "source-degraded"],
+  "sources": [{"pattern": "logs-cloudtrail-*", "max_stale": "2h"}],
+  "accepted": [{
+    "finding_id": "finding-0123456789abcdef0123",
+    "reason": "source migration",
+    "expires_at": "2035-01-15T00:00:00Z"
+  }]
+}
+```
+
+The expiry in this example is illustrative; choose a short, reviewed exception window. Run it with
+`deadair scan --policy deadair-policy.json`. Copy acceptance IDs from a restricted, unredacted
+report. Policy matching happens before optional report redaction, which replaces finding
+IDs along with the other identifiers. An expired acceptance remains visible as `expired`, stops
+suppressing its finding, and gates normally. Source entries use the first matching pattern. The
+severity threshold applies to rule findings; source findings are controlled by their class.
+Malformed policy files fail the scan.
+
+A policy can name source patterns, accepted finding IDs, and the reason an exception exists. Check
+one in only when repository access matches the sensitivity of that information. For a public
+repository, keep sensitive entries in a restricted file created on the runner and pass that path to
+`policy-file`.
 
 Use `diff` for scheduled checks while the backlog is still being worked down:
 
@@ -194,8 +277,13 @@ deadair scan --json --json-out today.json
 deadair diff yesterday.json today.json
 ```
 
-`diff` exits `1` only for regressions: newly dead rules, newly impaired rules, or newly degraded
-sources. Recoveries are shown but do not fail the command.
+`diff` first checks schema, backend, instance, target, redaction key, source filters, candidate rule
+set, and assessment configuration. Incomparable reports exit `2`. Comparable reports diff stable
+reason-level finding IDs, so one newly missing field does not make every impairment on that rule
+look new. Recoveries are shown but do not fail the command.
+
+Reports created before v0.6.0 do not contain the comparison identity fields. Create a new baseline
+with v0.6.0 after upgrading.
 
 ## Add history-based checks
 
@@ -210,7 +298,10 @@ With a state file, deadair records source history for:
 - volume baselines by weekday and hour
 - warmup before low-volume findings can fire
 - hysteresis, so one low scan does not page by itself
-- ingest-lag measurements used by `lag-blind-window`
+- active and recovered finding history
+
+Ingest lag is sampled from paired timestamps during each eligible Elastic scan; it does not depend
+on the state file.
 
 Defaults are conservative:
 
@@ -239,8 +330,8 @@ The first scan records a snapshot. Later scans report fields added, removed, or 
 This is useful after agent upgrades, package upgrades, parser changes, and pipeline releases.
 
 Schema drift is source-level evidence. It does not automatically prove a rule is broken. Rule
-impairment is reported when required fields are missing from every matched source with fetched
-schema data.
+impairment is reported when a required field is absent or non-searchable in one or more matched
+sources and every needed source mapping was read successfully.
 
 ## Declare maintenance windows
 
@@ -287,8 +378,8 @@ partial `unused_bytes` total is not presented as a fleet-wide measurement.
 
 Use `check --fleet` after onboarding a tenant or rotating a tenant secret.
 
-For MSSP operating guidance, including secret layout, redaction, Alertmanager routing, retention,
-and fleet sizing, see [mssp.md](mssp.md).
+For MSSP operating guidance, including secret layout, redaction, Alertmanager routing, and fleet
+operations, see [mssp.md](mssp.md).
 
 ## Run the exporter
 
@@ -314,8 +405,21 @@ deadair serve --redact
 deadair tune --state-file deadair-state.json --redact
 ```
 
-Redaction replaces tenant, source, rule, pattern, and field names with stable digests. Redacted
-reports still diff across runs.
+Redaction replaces tenant, source, rule, pattern, and field names with HMAC pseudonyms. Values use
+a process-local key by default. For diffs and trend reporting across separate
+runs, generate a random key in a restricted directory and pass it by path:
+
+```sh
+umask 077
+mkdir -p ~/.config/deadair
+openssl rand -hex 32 > ~/.config/deadair/redaction.key
+export DEADAIR_REDACT_KEY_FILE="$HOME/.config/deadair/redaction.key"
+deadair scan --json-out redacted-report.json
+```
+
+The report records a non-secret key identifier so consumers can check whether two reports are
+correlatable. It never records the key. Redacted fleet reports also replace raw scan failures,
+which may contain hosts or response details, with fixed error categories.
 
 Unredacted reports map blind detections and unused telemetry. Treat them like sensitive SOC
 artifacts.

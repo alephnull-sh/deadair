@@ -75,6 +75,11 @@ func fixtureServerCapabilities(t *testing.T, version string, resolveStatus, data
 	mux.HandleFunc("/winlogbeat-2026.07/_search", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"aggregations":{"latest":{"value":%d}}}`, now.Add(-26*time.Hour).UnixMilli())
 	})
+	mux.HandleFunc("/logs-endpoint.events.process-default/_search", func(w http.ResponseWriter, r *http.Request) {
+		eventTime := now.Add(-2 * time.Minute).UnixMilli()
+		ingestTime := now.Add(-90 * time.Second).UnixMilli()
+		fmt.Fprintf(w, `{"hits":{"hits":[{"fields":{"@timestamp":[%d],"event.ingested":[%d]}}]}}`, eventTime, ingestTime)
+	})
 	mux.HandleFunc("/logs-endpoint.events.process-default/_field_caps", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"fields":{"@timestamp":{"date":{}},"event.action":{"keyword":{}}}}`)
 	})
@@ -156,6 +161,11 @@ func TestScanRedacted(t *testing.T) {
 	srv := fixtureServer(t)
 	defer srv.Close()
 	t.Setenv("DEADAIR_API_KEY", "testkey")
+	keyPath := filepath.Join(t.TempDir(), "redaction.key")
+	if err := os.WriteFile(keyPath, []byte(strings.Repeat("r", 32)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEADAIR_REDACT_KEY_FILE", keyPath)
 
 	var stdout, stderr bytes.Buffer
 	code := cli.Run([]string{"scan", "--es-url", srv.URL, "--kibana-url", srv.URL, "--json", "--redact"}, &stdout, &stderr)
@@ -166,6 +176,102 @@ func TestScanRedacted(t *testing.T) {
 		if strings.Contains(stdout.String(), leak) {
 			t.Errorf("redacted output leaks %q", leak)
 		}
+	}
+	var first report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Redaction == nil || first.Redaction.Algorithm != "hmac-sha256" || first.Redaction.KeyID == "" {
+		t.Fatalf("redaction metadata = %+v", first.Redaction)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	// A supplied key is itself an instruction to redact; silently ignoring it
+	// would leave a report unprotected.
+	code = cli.Run([]string{"scan", "--es-url", srv.URL, "--kibana-url", srv.URL, "--json"}, &stdout, &stderr)
+	if code != report.ExitFindings {
+		t.Fatalf("second exit = %d; stderr: %s", code, stderr.String())
+	}
+	var second report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.Redaction.KeyID != second.Redaction.KeyID || first.Sources[0].Name != second.Sources[0].Name {
+		t.Fatal("caller-held redaction key did not preserve cross-run pseudonyms")
+	}
+}
+
+func TestRedactedScanSanitizesFatalBackendError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/detection_engine/rules/_find" {
+			http.Error(w, "private-index-name from backend", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	t.Setenv("DEADAIR_API_KEY", "testkey")
+	keyPath := filepath.Join(t.TempDir(), "redaction.key")
+	if err := os.WriteFile(keyPath, []byte(strings.Repeat("r", 32)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEADAIR_REDACT_KEY_FILE", keyPath)
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run([]string{"scan", "--es-url", srv.URL, "--kibana-url", srv.URL, "--json"}, &stdout, &stderr)
+	if code != report.ExitError {
+		t.Fatalf("exit = %d, want %d", code, report.ExitError)
+	}
+	if got := stderr.String(); !strings.Contains(got, "scan failed: scan failed") ||
+		strings.Contains(got, "private-index-name") || strings.Contains(got, "/api/detection_engine/") {
+		t.Fatalf("redacted fatal error was not sanitized: %s", got)
+	}
+}
+
+func TestRedactedConfigurationErrorsDoNotLeakDetails(t *testing.T) {
+	tmp := t.TempDir()
+	duplicateFleet := filepath.Join(tmp, "duplicate.json")
+	if err := os.WriteFile(duplicateFleet, []byte(`{"instances":[
+		{"name":"private-client-alpha","backend":"elastic","es_url":"http://es.invalid","kibana_url":"http://kibana.invalid"},
+		{"name":"private-client-alpha","backend":"elastic","es_url":"http://es.invalid","kibana_url":"http://kibana.invalid"}
+	]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secretFleet := filepath.Join(tmp, "secret.json")
+	if err := os.WriteFile(secretFleet, []byte(`{"instances":[{
+		"name":"private-client-beta","backend":"elastic","es_url":"http://es.invalid","kibana_url":"http://kibana.invalid",
+		"api_key_file":"/restricted/private-client-beta.key"
+	}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(tmp, "policy.json")
+	if err := os.WriteFile(policyPath, []byte(`{"version":1,"gate_classes":["dead-detection"],"private_source":"secret-*"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		args  []string
+		leaks []string
+	}{
+		{name: "duplicate tenant", args: []string{"scan", "--redact", "--fleet", duplicateFleet}, leaks: []string{"private-client-alpha", "duplicate instance"}},
+		{name: "secret file", args: []string{"scan", "--redact", "--fleet", secretFleet}, leaks: []string{"private-client-beta", "/restricted/private-client-beta.key"}},
+		{name: "policy detail", args: []string{"scan", "--redact", "--policy", policyPath}, leaks: []string{"private_source", "secret-*", policyPath}},
+		{name: "redaction key path", args: []string{"scan", "--redact-key-file", "/restricted/private-client-gamma.key"}, leaks: []string{"/restricted/private-client-gamma.key"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := cli.Run(tt.args, &stdout, &stderr); code != report.ExitError {
+				t.Fatalf("exit = %d, want %d", code, report.ExitError)
+			}
+			for _, leak := range tt.leaks {
+				if strings.Contains(stderr.String(), leak) {
+					t.Fatalf("protected error leaked %q: %s", leak, stderr.String())
+				}
+			}
+		})
 	}
 }
 
@@ -605,37 +711,51 @@ func TestScanCandidateRule(t *testing.T) {
 		t.Fatalf("live candidate exit = %d, want 0; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
 	}
 
-	unsupported := filepath.Join(dir, "unsupported.json")
-	os.WriteFile(unsupported, []byte(`{"rule_id":"cand-3","name":"Candidate ES|QL","severity":"high","type":"esql","query":"FROM logs-*"}`), 0o600)
+	esql := filepath.Join(dir, "esql.json")
+	os.WriteFile(esql, []byte(`{"rule_id":"cand-3","name":"Candidate ES|QL","severity":"high","type":"esql","query":"FROM logs-*"}`), 0o600)
 	stdout.Reset()
 	stderr.Reset()
-	code = cli.Run([]string{"scan", "--es-url", srv.URL, "--kibana-url", srv.URL, "--json", "--rule", unsupported}, &stdout, &stderr)
-	if code != report.ExitError {
-		t.Fatalf("unassessed candidate exit = %d, want 2; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
+	code = cli.Run([]string{"scan", "--es-url", srv.URL, "--kibana-url", srv.URL, "--json", "--rule", esql}, &stdout, &stderr)
+	if code != report.ExitFindings {
+		t.Fatalf("ES|QL candidate exit = %d, want 1; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
 	}
-	var unassessed report.Report
-	if err := json.Unmarshal(stdout.Bytes(), &unassessed); err != nil || unassessed.Summary.UnmappedRules != 1 {
-		t.Fatalf("unassessed candidate report = %+v, %v", unassessed.Summary, err)
+	var esqlReport report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &esqlReport); err != nil || esqlReport.Summary.DeadDetections != 1 ||
+		len(esqlReport.DeadDetections) != 1 || esqlReport.DeadDetections[0].Patterns[0] != "logs-*" {
+		t.Fatalf("ES|QL candidate report = %+v / %+v, %v", esqlReport.Summary, esqlReport.DeadDetections, err)
 	}
 }
 
-func TestScanCandidateRuleRejectsOpenSearchBeforeBackendWork(t *testing.T) {
+func TestScanOpenSearchCandidateDetector(t *testing.T) {
 	srv := opensearchFixtureServer(t)
 	defer srv.Close()
 	t.Setenv("DEADAIR_OPENSEARCH_USERNAME", "admin")
 	t.Setenv("DEADAIR_OPENSEARCH_PASSWORD", "secret")
 
 	candidate := filepath.Join(t.TempDir(), "candidate.json")
-	if err := os.WriteFile(candidate, []byte(`{"name":"candidate","index":["logs-os-*"]}`), 0o600); err != nil {
+	if err := os.WriteFile(candidate, []byte(`{
+		"name":"OpenSearch candidate",
+		"detector_type":"windows",
+		"inputs":[{"detector_input":{"indices":["logs-os-*"]}}],
+		"triggers":[{"severity":"2"}]
+	}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
 	code := cli.Run([]string{
 		"scan", "--backend", "opensearch", "--opensearch-url", srv.URL,
-		"--rule", candidate,
+		"--json", "--rule", candidate,
 	}, &stdout, &stderr)
-	if code != report.ExitError || !strings.Contains(stderr.String(), "--rule currently requires Elastic") {
-		t.Fatalf("exit = %d; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	if code != report.ExitHealthy {
+		t.Fatalf("exit = %d, want 0; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var got report.Report
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Summary.Rules != 1 || got.Summary.DeadDetections != 0 || got.Summary.UnmappedRules != 0 ||
+		len(got.InputResolutions) != 1 || got.InputResolutions[0].Expression != "logs-os-*" {
+		t.Fatalf("candidate report = %+v / %+v", got.Summary, got.InputResolutions)
 	}
 }
 
@@ -648,11 +768,19 @@ func TestDiffCommand(t *testing.T) {
 		return p
 	}
 	older := write("old.json", report.Report{
+		SchemaVersion: report.ReportSchemaVersion, Backend: "elastic", Instance: "prod", TargetID: "target-1",
+		Scope:   report.ScanScope{Mode: "installed", ConfigurationID: "config-1"},
 		Sources: []report.SourceHealth{{Name: "a", Status: "ok"}},
 	})
 	newer := write("new.json", report.Report{
+		SchemaVersion: report.ReportSchemaVersion, Backend: "elastic", Instance: "prod", TargetID: "target-1",
+		Scope:          report.ScanScope{Mode: "installed", ConfigurationID: "config-1"},
 		Sources:        []report.SourceHealth{{Name: "a", Status: "stale"}},
 		DeadDetections: []report.DeadDetection{{ID: "d1", Name: "Now dead", Severity: "high", Reason: "starved"}},
+		Findings: []report.Finding{
+			{ID: "dead-1", Class: report.FindingDead, RuleID: "d1", RuleName: "Now dead", Severity: "high", Reason: report.ReasonStarved},
+			{ID: "source-1", Class: report.FindingSourceDegraded, Source: "a", Reason: "stale"},
+		},
 	})
 
 	var stdout, stderr bytes.Buffer
@@ -910,12 +1038,21 @@ func TestEmbeddedDemoCommandWasRemoved(t *testing.T) {
 
 func TestScanRejectsIncompatibleOptionsBeforeConfiguration(t *testing.T) {
 	fleetFile := filepath.Join(t.TempDir(), "fleet.json")
-	if err := os.WriteFile(fleetFile, []byte(`{"instances":[{
-		"name":"os-lab",
-		"backend":"opensearch",
-		"opensearch_url":"https://127.0.0.1:1",
-		"api_key_file":"missing-key"
-	}]}`), 0o600); err != nil {
+	if err := os.WriteFile(fleetFile, []byte(`{"instances":[
+		{
+			"name":"elastic-lab",
+			"backend":"elastic",
+			"es_url":"https://127.0.0.1:1",
+			"kibana_url":"https://127.0.0.1:2",
+			"api_key_file":"missing-key"
+		},
+		{
+			"name":"os-lab",
+			"backend":"opensearch",
+			"opensearch_url":"https://127.0.0.1:3",
+			"api_key_file":"missing-key"
+		}
+	]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -934,14 +1071,9 @@ func TestScanRejectsIncompatibleOptionsBeforeConfiguration(t *testing.T) {
 			want: "--html-out is available only for single-instance scans",
 		},
 		{
-			name: "candidate rule on OpenSearch",
-			args: []string{"scan", "--backend", "opensearch", "--rule", "candidate.json"},
-			want: "--rule currently requires Elastic",
-		},
-		{
-			name: "candidate fleet before credentials",
+			name: "mixed-backend candidate fleet before credentials",
 			args: []string{"scan", "--fleet", fleetFile, "--rule", "candidate.json"},
-			want: `--rule cannot scan fleet instance "os-lab"`,
+			want: "--rule cannot scan a mixed-backend fleet",
 		},
 	}
 	for _, tt := range tests {

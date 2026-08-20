@@ -67,6 +67,9 @@ func TestAssessVolumesWarmupSuppressesLow(t *testing.T) {
 
 func TestLoadSavePermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "deadair-state.json")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	store := New()
 	store.Sources["logs-app"] = SourceState{FirstSeen: time.Now(), LastDocs: 42}
 	if err := store.Save(path); err != nil {
@@ -85,6 +88,22 @@ func TestLoadSavePermissions(t *testing.T) {
 	}
 	if loaded.Sources["logs-app"].LastDocs != 42 {
 		t.Fatalf("loaded state = %+v", loaded.Sources["logs-app"])
+	}
+}
+
+func TestBindTargetRejectsStateReuse(t *testing.T) {
+	store := New()
+	if err := store.BindTarget("target-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindTarget("target-a"); err != nil {
+		t.Fatalf("same target was rejected: %v", err)
+	}
+	if err := store.BindTarget("target-b"); err == nil {
+		t.Fatal("state file accepted a different target")
+	}
+	if store.TargetID != "target-a" {
+		t.Fatalf("target binding changed to %q", store.TargetID)
 	}
 }
 

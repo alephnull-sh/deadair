@@ -118,6 +118,26 @@ func TestBuildResolvedUsesOnlyInventoriedResolvedSources(t *testing.T) {
 	}
 }
 
+func TestBuildResolvedDiagnosticEvidenceNeverCreatesEdges(t *testing.T) {
+	rules := []backend.Rule{{ID: "migration", Enabled: true}}
+	sources := []backend.Source{{Name: "logs-current"}, {Name: "logs-legacy"}}
+	resolutions := []backend.InputResolution{
+		{RuleID: "migration", Expression: "logs-current,logs-legacy", Status: backend.ResolutionResolved, ResolvedSources: []string{"logs-current"}},
+		{RuleID: "migration", Expression: "logs-legacy", Diagnostic: true, Status: backend.ResolutionResolved, ResolvedSources: []string{"logs-legacy"}},
+	}
+
+	g := BuildResolved(rules, sources, resolutions)
+	if got := g.SourcesFor("migration"); len(got) != 1 || got[0] != "logs-current" {
+		t.Fatalf("diagnostic evidence changed authoritative edges: %v", got)
+	}
+	if got := g.RulesFor("logs-legacy"); len(got) != 0 {
+		t.Fatalf("diagnostic evidence created a reverse edge: %v", got)
+	}
+	if got := g.ResolutionsFor("migration"); len(got) != 2 || !got[1].Diagnostic {
+		t.Fatalf("diagnostic evidence was not retained: %+v", got)
+	}
+}
+
 func TestFilterSources(t *testing.T) {
 	sources := []backend.Source{
 		{Name: "logs-a-default"},

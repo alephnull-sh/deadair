@@ -26,8 +26,8 @@ func parseFlags(fs *flag.FlagSet, args []string) (bool, int) {
 func scanUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage: deadair scan [options]
 
-Run a live, read-only assessment. Exit 0 is healthy, 1 means findings, and 2
-means the scan could not complete.
+Run a live, read-only assessment. Exit 0 passes the configured gate, 1 means
+gated findings, and 2 means the scan could not complete.
 
 Connection:
   --backend NAME              elastic or opensearch (default: elastic)
@@ -48,21 +48,24 @@ Output:
   --json                      print JSON instead of the terminal report
   --json-out FILE             write the JSON report to FILE
   --html-out FILE             write a static HTML report to FILE
-  --redact                    replace names with stable digests
+  --redact                    replace names with HMAC pseudonyms
+  --redact-key-file FILE      HMAC key for stable cross-run pseudonyms
+                              (DEADAIR_REDACT_KEY_FILE)
 
 Scope:
   --include PATTERN           include matching sources; repeatable
   --exclude PATTERN           exclude matching sources; repeatable
   --max-stale DURATION        source freshness window (default: 30m)
   --downtime-file FILE        expected source downtime windows
-  --rule FILE                 evaluate Elastic candidate rule JSON or ndjson
+  --policy FILE               local freshness, acceptance, and gate policy
+  --rule FILE                 evaluate an Elastic rule or OpenSearch detector
 
 Fleet:
   --fleet FILE                scan instances listed in a fleet JSON file
   --instance-name NAME        label a single instance in reports
 
 Stateful checks:
-  --state-file FILE           retain local volume, lag, and schema history
+  --state-file FILE           retain volume, schema, and finding history
   --schema                    track field mapping drift; requires --state-file
   --volume-warmup DURATION    baseline warmup (default: 24h)
   --volume-hysteresis N       low-volume scans before a finding (default: 2)
@@ -114,7 +117,9 @@ Suggest volume-baseline settings from accumulated local state.
 
   --state-file FILE  state file to summarize
   --json             print the tuning summary as JSON
-  --redact           replace source names with stable digests
+  --redact           replace source names with HMAC pseudonyms
+  --redact-key-file FILE
+                     HMAC key for stable cross-run pseudonyms
 
 Guide: `+usageGuideURL+`#add-history-based-checks`)
 }
@@ -127,7 +132,8 @@ Run periodic live scans and expose the latest result as Prometheus metrics.
 Exporter:
   --bind ADDRESS              listen address (default: 127.0.0.1:9317)
   --interval DURATION         time between scans (default: 5m)
-  --redact                    replace metric-label names with stable digests
+  --redact                    replace metric-label names with HMAC pseudonyms
+  --redact-key-file FILE      HMAC key for stable cross-run pseudonyms
 
 Connection and scan:
   --backend NAME              elastic or opensearch (default: elastic)
@@ -144,7 +150,8 @@ Connection and scan:
   --exclude PATTERN           exclude matching sources; repeatable
   --max-stale DURATION        source freshness window (default: 30m)
   --downtime-file FILE        expected source downtime windows
-  --state-file FILE           retain volume, lag, and schema history
+  --policy FILE               local freshness, acceptance, and gate policy
+  --state-file FILE           retain volume, schema, and finding history
   --schema                    track field mapping drift; requires --state-file
 
 Run `+"`deadair scan -h`"+` for the full connection and state option list.

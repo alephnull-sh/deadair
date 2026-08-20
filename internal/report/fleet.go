@@ -3,23 +3,27 @@ package report
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
+	"strings"
 	"time"
+
+	redactpkg "github.com/alephnull-sh/deadair/internal/redact"
+	"github.com/alephnull-sh/deadair/internal/securefile"
 )
 
 // FleetReport aggregates per-instance (per-tenant / per-SIEM) reports with
 // cross-instance rollups. Instance names can be client identities (MSSPs):
-// Redact digests them like everything else.
+// Redact pseudonymizes them like everything else.
 type FleetReport struct {
-	SchemaVersion string          `json:"schema_version"`
-	GeneratedAt   time.Time       `json:"generated_at"`
-	Producer      Producer        `json:"producer"`
-	Redacted      bool            `json:"redacted,omitempty"`
-	Summary       FleetSummary    `json:"summary"`
-	Rollups       []FleetRollup   `json:"rollups,omitempty"`
-	Errors        []InstanceError `json:"errors,omitempty"`
-	Instances     []*Report       `json:"instances"`
+	SchemaVersion string             `json:"schema_version"`
+	GeneratedAt   time.Time          `json:"generated_at"`
+	Producer      Producer           `json:"producer"`
+	Redacted      bool               `json:"redacted,omitempty"`
+	Redaction     *RedactionMetadata `json:"redaction,omitempty"`
+	Summary       FleetSummary       `json:"summary"`
+	Rollups       []FleetRollup      `json:"rollups,omitempty"`
+	Errors        []InstanceError    `json:"errors,omitempty"`
+	Instances     []*Report          `json:"instances"`
 }
 
 // InstanceError records a fleet member whose scan failed entirely.
@@ -34,6 +38,7 @@ type FleetSummary struct {
 	InstancesFailed           int                       `json:"instances_failed,omitempty"`
 	DeadDetections            int                       `json:"dead_detections"`
 	ImpairedDetections        int                       `json:"impaired_detections,omitempty"`
+	PartialInputs             int                       `json:"partial_inputs,omitempty"`
 	DegradedSources           int                       `json:"degraded_sources"`
 	UnusedBytes               int64                     `json:"unused_bytes"`
 	UnusedTelemetryAssessment UnusedTelemetryAssessment `json:"unused_telemetry_assessment"`
@@ -81,6 +86,7 @@ func BuildFleetWithVersion(instances []*Report, errs []InstanceError, producerVe
 	for _, r := range instances {
 		f.Summary.DeadDetections += r.Summary.DeadDetections
 		f.Summary.ImpairedDetections += r.Summary.ImpairedDetections
+		f.Summary.PartialInputs += r.Summary.PartialInputs
 		f.Summary.DegradedSources += r.Summary.DegradedSources
 		f.Summary.UnusedBytes += r.Summary.UnusedBytes
 		for _, d := range r.DeadDetections {
@@ -181,33 +187,60 @@ func (f *FleetReport) CandidateExitCode() int {
 	return result
 }
 
-// Write writes the JSON fleet report to path with 0600 permissions.
+// Write writes the JSON fleet report to path with 0600 permissions on POSIX.
 func (f *FleetReport) Write(path string) error {
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding fleet report: %w", err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	if err := securefile.Write(path, append(data, '\n')); err != nil {
 		return fmt.Errorf("writing fleet report: %w", err)
 	}
 	return nil
 }
 
-// Redact digests instance names (MSSP client identities) and everything the
+// Redact pseudonymizes instance names (MSSP client identities) and everything the
 // per-instance reports redact.
 func (f *FleetReport) Redact() {
+	f.RedactWith(redactpkg.Default())
+}
+
+// RedactWith applies caller-keyed HMAC pseudonyms to the fleet and removes
+// backend error details that may contain hosts, paths, or response bodies.
+func (f *FleetReport) RedactWith(redactor *redactpkg.Redactor) {
 	if f.Redacted {
 		return
 	}
 	f.Redacted = true
+	f.Redaction = &RedactionMetadata{Algorithm: redactpkg.Algorithm, KeyID: redactor.KeyID()}
 	for _, r := range f.Instances {
-		r.Instance = redact("ten", r.Instance)
-		r.Redact()
+		r.RedactWith(redactor)
 	}
 	for i := range f.Errors {
-		f.Errors[i].Instance = redact("ten", f.Errors[i].Instance)
+		f.Errors[i].Instance = redactor.Value("ten", f.Errors[i].Instance)
+		f.Errors[i].Error = SanitizeScanError(f.Errors[i].Error)
 	}
 	for i := range f.Rollups {
-		f.Rollups[i].Name = redact("rule", f.Rollups[i].Name)
+		f.Rollups[i].Name = redactor.Value("rule", f.Rollups[i].Name)
+	}
+}
+
+// SanitizeScanError reduces a backend or transport failure to a fixed category
+// that is safe to print with redacted output.
+func SanitizeScanError(detail string) string {
+	lower := strings.ToLower(detail)
+	switch {
+	case strings.Contains(lower, "deadline exceeded"), strings.Contains(lower, "timed out"), strings.Contains(lower, "timeout"):
+		return "scan timed out"
+	case strings.Contains(lower, "status 403"), strings.Contains(lower, "forbidden"), strings.Contains(lower, "permission"):
+		return "authorization failed"
+	case strings.Contains(lower, "status 401"), strings.Contains(lower, "unauthorized"), strings.Contains(lower, "authentication"), strings.Contains(lower, "api key"):
+		return "authentication failed"
+	case strings.Contains(lower, "x509"), strings.Contains(lower, "tls"), strings.Contains(lower, "certificate"):
+		return "TLS verification failed"
+	case strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"), strings.Contains(lower, "network is unreachable"), strings.Contains(lower, "dial tcp"):
+		return "connection failed"
+	default:
+		return "scan failed"
 	}
 }

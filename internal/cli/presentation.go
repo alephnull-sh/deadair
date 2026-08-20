@@ -82,6 +82,13 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 	if len(inputHealth) > 0 {
 		printMetricRow(w, inputHealth)
 	}
+	if checks := unassessedChecks(r); len(checks) > 0 {
+		fmt.Fprintf(w, "%s  %s\n", color(w, "33;1", "CHECK COVERAGE"), color(w, "2", strings.Join(checks, "  ·  ")))
+	}
+	if r.Policy != nil {
+		fmt.Fprintf(w, "%s  %d gate  ·  %d accepted  ·  %d expired\n",
+			color(w, "36;1", "POLICY"), r.Summary.GatedFindings, r.Policy.AcceptedActive, r.Policy.AcceptedExpired)
+	}
 
 	if len(r.DeadDetections) > 0 {
 		visualHeading(w, "31;1", "DEAD", len(r.DeadDetections))
@@ -104,6 +111,22 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 			}
 			fmt.Fprintf(w, "  %s\n", color(w, "1", d.Name))
 			printVisualFindingDetail(w, d.Severity, visualImpairmentEvidence(d)...)
+		}
+	}
+
+	if len(r.PartialInputCoverage) > 0 {
+		visualHeading(w, "33;1", "PARTIAL INPUT", len(r.PartialInputCoverage))
+		for i, coverage := range r.PartialInputCoverage {
+			if i >= 10 {
+				visualMore(w, len(r.PartialInputCoverage)-i)
+				break
+			}
+			fmt.Fprintf(w, "  %s\n", color(w, "1", coverage.RuleName))
+			dependency := coverage.Selector
+			if dependency == "" {
+				dependency = coverage.Expression
+			}
+			printVisualFindingDetail(w, coverage.Severity, "missing selector", dependency)
 		}
 	}
 
@@ -229,8 +252,8 @@ func visualImpairmentEvidence(d report.ImpairedDetection) []string {
 	}
 	if len(d.LagSources) > 0 {
 		parts = append(parts,
-			fmt.Sprintf("%s ingest lag exceeds window in %s",
-				humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
+			fmt.Sprintf("p95 %s (max %s) ingest lag exceeds window in %s",
+				humanDuration(d.P95LagSeconds), humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
 	}
 	if len(parts) == 0 {
 		for _, reason := range d.Reasons {
@@ -238,6 +261,18 @@ func visualImpairmentEvidence(d report.ImpairedDetection) []string {
 		}
 	}
 	return parts
+}
+
+func unassessedChecks(r *report.Report) []string {
+	var checks []string
+	for _, assessment := range r.Assessments {
+		if assessment.Status == "assessed" ||
+			(assessment.Name == report.AssessmentCandidateParsing && assessment.Status == "disabled") {
+			continue
+		}
+		checks = append(checks, strings.ReplaceAll(assessment.Name, "_", " ")+" "+string(assessment.Status))
+	}
+	return checks
 }
 
 func countLabel(n int, singular, plural string) string {
@@ -248,7 +283,7 @@ func countLabel(n int, singular, plural string) string {
 }
 
 func printVisualDiff(w io.Writer, d *report.DiffResult) {
-	if d.Regressions() == 0 && len(d.RecoveredDead)+len(d.RecoveredImpaired)+len(d.RecoveredSources)+len(d.NewSources)+len(d.RemovedSources)+len(d.NewlyUnused) == 0 {
+	if len(d.NewFindings)+len(d.RecoveredFindings)+len(d.NewlyGatedFindings)+len(d.NoLongerGated)+len(d.NewSources)+len(d.RemovedSources) == 0 {
 		fmt.Fprintln(w, color(w, "32;1", "NO CHANGE"))
 		return
 	}
@@ -281,6 +316,29 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 			fmt.Fprintf(w, "  %s\n", color(w, "2", humanBytes(u.SizeBytes)))
 		}
 	}
+	for _, finding := range d.NewFindings {
+		switch finding.Class {
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
+			name := finding.Source
+			if name == "" {
+				name = finding.RuleName
+			}
+			visualHeading(w, "33;1", strings.ToUpper(finding.Class), 1)
+			fmt.Fprintf(w, "  %s\n", color(w, "1", name))
+			fmt.Fprintf(w, "  %s\n", color(w, "2", finding.Reason))
+		}
+	}
+	if len(d.NewlyGatedFindings) > 0 {
+		visualHeading(w, "31;1", "NEWLY GATED", len(d.NewlyGatedFindings))
+		for _, finding := range d.NewlyGatedFindings {
+			name := finding.Source
+			if name == "" {
+				name = finding.RuleName
+			}
+			fmt.Fprintf(w, "  %s\n", color(w, "1", name))
+			fmt.Fprintf(w, "  %s\n", color(w, "2", finding.Reason+"  ·  "+finding.Class))
+		}
+	}
 
 	recovered := len(d.RecoveredDead) + len(d.RecoveredImpaired) + len(d.RecoveredSources)
 	if recovered > 0 {
@@ -294,6 +352,23 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 		for _, s := range d.RecoveredSources {
 			fmt.Fprintf(w, "  %s\n", s.Name)
 		}
+	}
+	for _, finding := range d.RecoveredFindings {
+		switch finding.Class {
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
+			name := finding.Source
+			if name == "" {
+				name = finding.RuleName
+			}
+			fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "RECOVERED"), name, finding.Reason)
+		}
+	}
+	for _, finding := range d.NoLongerGated {
+		name := finding.Source
+		if name == "" {
+			name = finding.RuleName
+		}
+		fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "NO LONGER GATED"), name, finding.Reason)
 	}
 	for _, n := range d.NewSources {
 		fmt.Fprintf(w, "\n%s  %s\n", color(w, "32;1", "SOURCE ADDED"), n)

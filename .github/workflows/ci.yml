@@ -33,6 +33,10 @@ jobs:
             echo "Building ${goos}/${goarch}"
             GOOS=${goos} GOARCH=${goarch} go build -trimpath -o /dev/null ./cmd/deadair
           done
+      - name: Test GitHub Action wrapper
+        run: bash .github/actions/deadair/test.sh
+      - name: Check release notes workflow
+        run: bash .github/release-notes/test.sh
 
   windows:
     runs-on: windows-latest

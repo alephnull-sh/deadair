@@ -20,8 +20,8 @@
 </head>
 <body>
   <h1>deadair report</h1>
-  <p class="muted">Elastic Security 9.4.4 (elastic) · 2026-07-30 04:38:55 UTC</p>
-  <p class="muted">deadair.report.v1 · producer deadair v0.4.0-8-g7d5ff25 · recognized versions 8.x, 9.x<br>Capabilities: rule_inventory=supported, source_resolution=partial, freshness=supported, docs_storage=supported, schema=supported, required_fields=supported, ingest_lag=supported, candidate_parsing=supported, remote=listed-only</p>
+  <p class="muted">Elastic Security 9.4.4 (elastic) · 2026-08-20 21:04:20 UTC</p>
+  <p class="muted">deadair.report.v1 · producer deadair v0.6.0 · recognized versions 8.x, 9.x<br>Capabilities: rule_inventory=supported, source_resolution=partial, freshness=supported, docs_storage=supported, schema=supported, required_fields=supported, ingest_lag=supported, candidate_parsing=supported, remote=listed-only</p>
 
   <div class="grid">
     <div class="metric"><span>Sources</span><strong>5</strong></div>
@@ -30,8 +30,17 @@
     <div class="metric"><span>Schema drift</span><strong>0</strong></div>
     <div class="metric"><span>Dead detections</span><strong>2</strong></div>
     <div class="metric"><span>Impaired detections</span><strong>2</strong></div>
-	    <div class="metric"><span>Unused telemetry</span><strong>4.1 KiB</strong></div>
+	<div class="metric"><span>Partial inputs</span><strong>0</strong></div>
+	    <div class="metric"><span>Stored unused telemetry</span><strong>4.1 KiB</strong></div>
   </div>
+
+
+  <h2>Checks performed</h2>
+  <table>
+    <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody><tr><td>source_resolution</td><td class="status-assessed">assessed</td><td></td></tr><tr><td>required_fields</td><td class="status-assessed">assessed</td><td></td></tr><tr><td>ingest_lag</td><td class="status-assessed">assessed</td><td>paired recent-event samples requested for 4 relevant source(s)</td></tr><tr><td>schema_drift</td><td class="status-assessed">assessed</td><td>compared with the saved schema snapshot</td></tr><tr><td>candidate_parsing</td><td class="status-disabled">disabled</td><td>no candidate rule file was supplied</td></tr></tbody>
+  </table>
+
 
 
   <h2>Input resolution</h2>
@@ -40,17 +49,7 @@
     <tbody>
 
       <tr>
-        <td>10c6e1b5-31bc-41a6-8806-dfedf27cb8e9</td>
-        <td>deadair-lab-schema</td>
-        <td>index_expression</td>
-        <td class="status-resolved">resolved</td>
-        <td>deadair-lab-schema</td>
-        <td>resolve_index</td>
-        <td></td>
-      </tr>
-
-      <tr>
-        <td>280d0ae1-8d7c-4232-ab6f-c9c0ea1275a2</td>
+        <td>aeea854a-c9c2-4f21-8073-4f59c24eeaa3</td>
         <td>deadair-lab-lag</td>
         <td>index_expression</td>
         <td class="status-resolved">resolved</td>
@@ -60,7 +59,17 @@
       </tr>
 
       <tr>
-        <td>3518c2b8-93bf-43b1-8d1d-d164bd846e86</td>
+        <td>7defab08-683b-4409-b632-28fccfb7d762</td>
+        <td>deadair-lab-live</td>
+        <td>index_expression</td>
+        <td class="status-resolved">resolved</td>
+        <td>deadair-lab-live</td>
+        <td>resolve_index</td>
+        <td></td>
+      </tr>
+
+      <tr>
+        <td>a2ee9634-504a-43ce-9fb4-ad7b1a05f0bb</td>
         <td>deadair-lab-registry-*</td>
         <td>index_expression</td>
         <td class="status-empty">empty</td>
@@ -70,17 +79,17 @@
       </tr>
 
       <tr>
-        <td>5d38ad7e-46eb-4656-b9e3-43587f25a6fd</td>
-        <td>deadair-lab-live</td>
+        <td>a704ce7d-558f-440e-9653-7c1ae29de55a</td>
+        <td>deadair-lab-schema</td>
         <td>index_expression</td>
         <td class="status-resolved">resolved</td>
-        <td>deadair-lab-live</td>
+        <td>deadair-lab-schema</td>
         <td>resolve_index</td>
         <td></td>
       </tr>
 
       <tr>
-        <td>bdee665c-093f-4985-b560-158e7db9dd5a</td>
+        <td>1117dbe7-be79-4868-9f5b-9a62b93de4b9</td>
         <td>deadair-lab-stale</td>
         <td>index_expression</td>
         <td class="status-resolved">resolved</td>
@@ -93,53 +102,59 @@
   </table>
 
 
+
+
   <h2>Sources</h2>
   <table>
-    <thead><tr><th>Name</th><th>Status</th><th>Docs</th><th>Size</th><th>Known consumers</th><th>Volume</th><th>Z-score</th><th>Schema</th></tr></thead>
+    <thead><tr><th>Name</th><th>Status</th><th>Docs</th><th>Size</th><th>Known consumers</th><th>Volume</th><th>Z-score</th><th>Schema</th><th>Ingest lag</th></tr></thead>
     <tbody>
 
       <tr>
         <td>deadair-lab-lag</td>
         <td class="status-ok">ok</td>
-        <td>1</td>
-        <td>4.2 KiB</td>
+        <td>2</td>
+        <td>8.2 KiB</td>
         <td>1</td>
         <td><span class="status-unknown">unknown</span></td>
         <td>-</td>
         <td><span class="status-warming">warming</span></td>
+        <td>p95 2699s; max 2699s; n=2; paired-recent-events</td>
       </tr>
 
       <tr>
         <td>deadair-lab-live</td>
         <td class="status-ok">ok</td>
         <td>1</td>
-        <td>5.1 KiB</td>
+        <td>5.4 KiB</td>
         <td>1</td>
         <td><span class="status-unknown">unknown</span></td>
         <td>-</td>
         <td><span class="status-warming">warming</span></td>
+        <td>p95 0s; max 0s; n=1; paired-recent-events</td>
       </tr>
 
       <tr>
         <td>deadair-lab-schema</td>
         <td class="status-ok">ok</td>
         <td>1</td>
-        <td>5.1 KiB</td>
+        <td>5.4 KiB</td>
         <td>1</td>
         <td><span class="status-unknown">unknown</span></td>
         <td>-</td>
         <td><span class="status-warming">warming</span></td>
+        <td>p95 0s; max 0s; n=1; paired-recent-events</td>
       </tr>
 
       <tr>
         <td>deadair-lab-stale</td>
         <td class="status-stale">stale</td>
         <td>1</td>
-        <td>5.1 KiB</td>
+        <td>5.4 KiB</td>
         <td>1</td>
         <td><span class="status-unknown">unknown</span></td>
         <td>-</td>
         <td><span class="status-warming">warming</span></td>
+        <td>p95 259200s; max 259200s; n=1; paired-recent-events</td>
       </tr>
 
       <tr>
@@ -151,6 +166,7 @@
         <td><span class="status-unknown">unknown</span></td>
         <td>-</td>
         <td><span class="status-warming">warming</span></td>
+        <td>not assessed</td>
       </tr>
 
     </tbody>
@@ -175,12 +191,24 @@
 
       <tr><td>high</td><td>Lab parser field coverage</td><td>missing-fields</td><td>process.command_line</td><td>-</td></tr>
 
-      <tr><td>medium</td><td>Lab delayed ingest</td><td>lag-blind-window</td><td></td><td>2700s lag; deadair-lab-lag</td></tr>
+      <tr><td>medium</td><td>Lab delayed ingest</td><td>lag-blind-window</td><td></td><td>p95 2699s; max 2699s; deadair-lab-lag</td></tr>
 
     </tbody>
   </table>
 
-	  <h2>Unused telemetry</h2>
+
+  <h2>Required-field evidence</h2>
+  <table>
+    <thead><tr><th>Rule</th><th>Source</th><th>Status</th><th>Present</th><th>Missing</th><th>Detail</th></tr></thead>
+    <tbody>
+
+      <tr><td>Lab parser field coverage</td><td>deadair-lab-schema</td><td class="status-assessed">assessed</td><td>process.name</td><td>process.command_line</td><td></td></tr>
+
+    </tbody>
+  </table>
+
+
+	  <h2>Stored unused telemetry</h2>
 
 	  <table>
     <thead><tr><th>Name</th><th>Docs</th><th>Size</th></tr></thead>

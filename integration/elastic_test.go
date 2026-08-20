@@ -225,7 +225,7 @@ func cleanupDrift(t *testing.T) {
 // process.command_line, and a rule that declares both as required_fields. The
 // tool must flag the rule for exactly the missing field, proven through real
 // field_caps rather than a mock. The control rule declares only a field that
-// exists and must not be flagged, which also pins the honest limit that only
+// exists and must not be flagged, which also pins the limit that only
 // declared required_fields are checked (the query body is never parsed).
 func TestElasticMissingFields(t *testing.T) {
 	waitForStack(t)

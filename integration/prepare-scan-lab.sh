@@ -16,7 +16,7 @@ rm -f \
 
 now=$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')
 old=$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc)-timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
-late=$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc)+timedelta(minutes=45)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+lagged=$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc)-timedelta(minutes=45)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
 
 elastic() {
 	curl --fail --silent --show-error \
@@ -51,17 +51,19 @@ create_index() {
 }
 
 create_index deadair-lab-live \
-	'{"mappings":{"properties":{"@timestamp":{"type":"date"},"host":{"properties":{"name":{"type":"keyword"}}}}}}' \
-	"{\"@timestamp\":\"$now\",\"host\":{\"name\":\"lab-endpoint\"}}"
+	'{"mappings":{"properties":{"@timestamp":{"type":"date"},"event":{"properties":{"ingested":{"type":"date"}}},"host":{"properties":{"name":{"type":"keyword"}}}}}}' \
+	"{\"@timestamp\":\"$now\",\"event\":{\"ingested\":\"$now\"},\"host\":{\"name\":\"lab-endpoint\"}}"
 create_index deadair-lab-stale \
-	'{"mappings":{"properties":{"@timestamp":{"type":"date"},"event":{"properties":{"category":{"type":"keyword"}}}}}}' \
-	"{\"@timestamp\":\"$old\",\"event\":{\"category\":\"authentication\"}}"
+	'{"mappings":{"properties":{"@timestamp":{"type":"date"},"event":{"properties":{"category":{"type":"keyword"},"ingested":{"type":"date"}}}}}}' \
+	"{\"@timestamp\":\"$old\",\"event\":{\"category\":\"authentication\",\"ingested\":\"$now\"}}"
 create_index deadair-lab-schema \
-	'{"mappings":{"properties":{"@timestamp":{"type":"date"},"process":{"properties":{"name":{"type":"keyword"}}}}}}' \
-	"{\"@timestamp\":\"$now\",\"process\":{\"name\":\"powershell.exe\"}}"
+	'{"mappings":{"properties":{"@timestamp":{"type":"date"},"event":{"properties":{"ingested":{"type":"date"}}},"process":{"properties":{"name":{"type":"keyword"}}}}}}' \
+	"{\"@timestamp\":\"$now\",\"event\":{\"ingested\":\"$now\"},\"process\":{\"name\":\"powershell.exe\"}}"
 create_index deadair-lab-lag \
 	'{"mappings":{"properties":{"@timestamp":{"type":"date"},"event":{"properties":{"ingested":{"type":"date"}}}}}}' \
-	"{\"@timestamp\":\"$now\",\"event\":{\"ingested\":\"$late\"}}"
+	"{\"@timestamp\":\"$lagged\",\"event\":{\"ingested\":\"$now\"}}"
+elastic -X POST "$es_url/deadair-lab-lag/_doc?refresh=true" \
+	-d "{\"@timestamp\":\"$now\",\"event\":{\"ingested\":\"$now\"}}" >/dev/null
 create_index deadair-lab-unused \
 	'{"mappings":{"properties":{"@timestamp":{"type":"date"},"metric":{"properties":{"value":{"type":"long"}}}}}}' \
 	"{\"@timestamp\":\"$now\",\"metric\":{\"value\":42}}"
@@ -70,11 +72,11 @@ create_rule() {
 	kibana -X POST "$kibana_url/api/detection_engine/rules" -d "$1" >/dev/null
 }
 
-create_rule '{"rule_id":"deadair-lab-live","name":"Lab process telemetry","description":"Disposable deadair screenshot lab","risk_score":21,"severity":"low","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-live"],"from":"now-6m","interval":"5m","enabled":true}'
-create_rule '{"rule_id":"deadair-lab-missing","name":"Lab registry persistence","description":"Disposable deadair screenshot lab","risk_score":73,"severity":"high","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-registry-*"],"from":"now-6m","interval":"5m","enabled":true}'
-create_rule '{"rule_id":"deadair-lab-stale","name":"Lab authentication source","description":"Disposable deadair screenshot lab","risk_score":47,"severity":"medium","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-stale"],"from":"now-6m","interval":"5m","enabled":true}'
-create_rule '{"rule_id":"deadair-lab-schema","name":"Lab parser field coverage","description":"Disposable deadair screenshot lab","risk_score":73,"severity":"high","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-schema"],"from":"now-6m","interval":"5m","enabled":true,"required_fields":[{"name":"process.name","type":"keyword"},{"name":"process.command_line","type":"keyword"}]}'
-create_rule '{"rule_id":"deadair-lab-lag","name":"Lab delayed ingest","description":"Disposable deadair screenshot lab","risk_score":47,"severity":"medium","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-lag"],"from":"now-6m","interval":"5m","enabled":true}'
+create_rule '{"rule_id":"deadair-lab-live","name":"Lab process telemetry","description":"Disposable deadair capture lab","risk_score":21,"severity":"low","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-live"],"from":"now-6m","interval":"5m","enabled":true}'
+create_rule '{"rule_id":"deadair-lab-missing","name":"Lab registry persistence","description":"Disposable deadair capture lab","risk_score":73,"severity":"high","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-registry-*"],"from":"now-6m","interval":"5m","enabled":true}'
+create_rule '{"rule_id":"deadair-lab-stale","name":"Lab authentication source","description":"Disposable deadair capture lab","risk_score":47,"severity":"medium","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-stale"],"from":"now-6m","interval":"5m","enabled":true}'
+create_rule '{"rule_id":"deadair-lab-schema","name":"Lab parser field coverage","description":"Disposable deadair capture lab","risk_score":73,"severity":"high","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-schema"],"from":"now-6m","interval":"5m","enabled":true,"required_fields":[{"name":"process.name","type":"keyword"},{"name":"process.command_line","type":"keyword"}]}'
+create_rule '{"rule_id":"deadair-lab-lag","name":"Lab delayed ingest","description":"Disposable deadair capture lab","risk_score":47,"severity":"medium","type":"query","query":"*:*","language":"kuery","index":["deadair-lab-lag"],"from":"now-6m","interval":"5m","enabled":true}'
 
 elastic -X POST "$es_url/_security/api_key" -d '{
   "name":"deadair-scan-lab",
@@ -103,3 +105,13 @@ if [ "$status" -ne 1 ]; then
 	echo "lab scan returned $status, expected findings exit 1" >&2
 	exit 1
 fi
+python3 -c '
+import json, sys
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+summary = report["summary"]
+expected = {"dead_detections": 2, "impaired_detections": 2, "degraded_sources": 1, "unused_sources": 1}
+actual = {key: summary.get(key) for key in expected}
+lag_assessed = any(item.get("name") == "ingest_lag" and item.get("status") == "assessed" for item in report.get("assessments", []))
+if actual != expected or not lag_assessed:
+    raise SystemExit(f"unexpected lab report: counts={actual}, ingest_lag_assessed={lag_assessed}")
+' "$examples_dir/sample-report.json"

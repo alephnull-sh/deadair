@@ -1,0 +1,181 @@
+name: deadair scan
+description: Run a read-only single-instance deadair scan and retain the JSON evidence
+
+inputs:
+  backend:
+    description: Backend to scan (elastic or opensearch)
+    required: false
+    default: elastic
+  elasticsearch-url:
+    description: Elasticsearch base URL
+    required: false
+  kibana-url:
+    description: Kibana base URL
+    required: false
+  api-key:
+    description: Elastic API key, or OpenSearch API key when opensearch-api-key is empty
+    required: false
+  api-key-file:
+    description: Path to a file containing the Elastic or OpenSearch API key
+    required: false
+  opensearch-url:
+    description: OpenSearch base URL
+    required: false
+  opensearch-username:
+    description: OpenSearch basic-auth username
+    required: false
+  opensearch-password:
+    description: OpenSearch basic-auth password
+    required: false
+  opensearch-password-file:
+    description: Path to a file containing the OpenSearch basic-auth password
+    required: false
+  opensearch-api-key:
+    description: OpenSearch API key
+    required: false
+  candidate-rule:
+    description: Optional Elastic rule JSON/ndjson or OpenSearch detector JSON to assess without installing it
+    required: false
+  policy-file:
+    description: Optional deadair policy file controlling which findings gate the scan
+    required: false
+  scan-args:
+    description: Additional space-separated assessment, TLS, and namespace flags; backend, endpoint, credential, output, redaction, policy, and candidate options use dedicated inputs
+    required: false
+  redact-report:
+    description: Redact names in terminal output and the JSON artifact; disabling this may expose sensitive blind-spot evidence
+    required: false
+    default: "true"
+  redact-key-file:
+    description: Optional path to an HMAC key file for stable redacted names; pass the key through a secret file, never as an argument
+    required: false
+  fail-on-findings:
+    description: Fail the job when deadair exits 1 with findings
+    required: false
+    default: "true"
+  artifact-name:
+    description: Name of the uploaded JSON report artifact; use a unique value for each matrix job or repeated invocation
+    required: false
+    default: deadair-report
+
+outputs:
+  report-path:
+    description: Absolute path to the JSON report on the runner
+    value: ${{ steps.scan.outputs.report-path }}
+  exit-code:
+    description: deadair exit code (0 passed the configured gate, 1 gated findings, 2 error)
+    value: ${{ steps.scan.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      env:
+        DEADAIR_BACKEND: ""
+        DEADAIR_ES_URL: ""
+        DEADAIR_KIBANA_URL: ""
+        DEADAIR_API_KEY: ""
+        DEADAIR_OPENSEARCH_URL: ""
+        DEADAIR_OPENSEARCH_USERNAME: ""
+        DEADAIR_OPENSEARCH_PASSWORD: ""
+        DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_REDACT_KEY_FILE: ""
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache-dependency-path: ${{ github.action_path }}/go.mod
+
+    - name: Build deadair
+      shell: bash
+      env:
+        DEADAIR_ACTION_VERSION: ${{ github.action_ref }}
+        DEADAIR_BACKEND: ""
+        DEADAIR_ES_URL: ""
+        DEADAIR_KIBANA_URL: ""
+        DEADAIR_API_KEY: ""
+        DEADAIR_OPENSEARCH_URL: ""
+        DEADAIR_OPENSEARCH_USERNAME: ""
+        DEADAIR_OPENSEARCH_PASSWORD: ""
+        DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_REDACT_KEY_FILE: ""
+      run: bash "${{ github.action_path }}/.github/actions/deadair/build.sh"
+
+    - name: Scan
+      id: scan
+      shell: bash
+      env:
+        DEADAIR_BACKEND: ${{ inputs.backend }}
+        DEADAIR_ES_URL: ${{ inputs.elasticsearch-url }}
+        DEADAIR_KIBANA_URL: ${{ inputs.kibana-url }}
+        DEADAIR_API_KEY: ${{ inputs.api-key }}
+        DEADAIR_OPENSEARCH_URL: ${{ inputs.opensearch-url }}
+        DEADAIR_OPENSEARCH_USERNAME: ${{ inputs.opensearch-username }}
+        DEADAIR_OPENSEARCH_PASSWORD: ${{ inputs.opensearch-password }}
+        DEADAIR_OPENSEARCH_API_KEY: ${{ inputs.opensearch-api-key }}
+        DEADAIR_REDACT_KEY_FILE: ""
+        DEADAIR_ACTION_API_KEY_FILE: ${{ inputs.api-key-file }}
+        DEADAIR_ACTION_OPENSEARCH_PASSWORD_FILE: ${{ inputs.opensearch-password-file }}
+        DEADAIR_ACTION_CANDIDATE_RULE: ${{ inputs.candidate-rule }}
+        DEADAIR_ACTION_POLICY_FILE: ${{ inputs.policy-file }}
+        DEADAIR_ACTION_SCAN_ARGS: ${{ inputs.scan-args }}
+        DEADAIR_ACTION_REDACT_REPORT: ${{ inputs.redact-report }}
+        DEADAIR_ACTION_REDACT_KEY_FILE: ${{ inputs.redact-key-file }}
+      run: bash "${{ github.action_path }}/.github/actions/deadair/scan.sh"
+
+    - name: Write job summary
+      if: always()
+      shell: bash
+      env:
+        DEADAIR_ACTION_REPORT_PATH: ${{ steps.scan.outputs.report-path }}
+        DEADAIR_ACTION_EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
+        DEADAIR_BACKEND: ""
+        DEADAIR_ES_URL: ""
+        DEADAIR_KIBANA_URL: ""
+        DEADAIR_API_KEY: ""
+        DEADAIR_OPENSEARCH_URL: ""
+        DEADAIR_OPENSEARCH_USERNAME: ""
+        DEADAIR_OPENSEARCH_PASSWORD: ""
+        DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_REDACT_KEY_FILE: ""
+      run: bash "${{ github.action_path }}/.github/actions/deadair/summary.sh"
+
+    - name: Upload JSON evidence
+      if: steps.scan.outputs.report-created == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      env:
+        DEADAIR_BACKEND: ""
+        DEADAIR_ES_URL: ""
+        DEADAIR_KIBANA_URL: ""
+        DEADAIR_API_KEY: ""
+        DEADAIR_OPENSEARCH_URL: ""
+        DEADAIR_OPENSEARCH_USERNAME: ""
+        DEADAIR_OPENSEARCH_PASSWORD: ""
+        DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_REDACT_KEY_FILE: ""
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.scan.outputs.report-path }}
+        if-no-files-found: error
+        retention-days: 14
+
+    - name: Apply gate policy
+      if: always()
+      shell: bash
+      env:
+        DEADAIR_ACTION_EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
+        DEADAIR_ACTION_REPORT_CREATED: ${{ steps.scan.outputs.report-created }}
+        DEADAIR_ACTION_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+        DEADAIR_BACKEND: ""
+        DEADAIR_ES_URL: ""
+        DEADAIR_KIBANA_URL: ""
+        DEADAIR_API_KEY: ""
+        DEADAIR_OPENSEARCH_URL: ""
+        DEADAIR_OPENSEARCH_USERNAME: ""
+        DEADAIR_OPENSEARCH_PASSWORD: ""
+        DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_REDACT_KEY_FILE: ""
+      run: bash "${{ github.action_path }}/.github/actions/deadair/gate.sh"
+
+branding:
+  icon: activity
+  color: blue

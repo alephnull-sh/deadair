@@ -12,6 +12,7 @@ import (
 	"github.com/alephnull-sh/deadair/internal/backend"
 	"github.com/alephnull-sh/deadair/internal/graph"
 	"github.com/alephnull-sh/deadair/internal/health"
+	redactpkg "github.com/alephnull-sh/deadair/internal/redact"
 	"github.com/alephnull-sh/deadair/internal/state"
 )
 
@@ -104,7 +105,9 @@ func TestImpairments(t *testing.T) {
 	}
 	sources := []backend.Source{
 		{Name: "healthy-1", Docs: 10, LastEvent: now},
-		{Name: "laggy-1", Docs: 10, LastEvent: now, IngestLag: &lag},
+		{Name: "laggy-1", Docs: 10, LastEvent: now, IngestLag: backend.IngestLagEvidence{
+			Status: backend.EvidenceAssessed, Method: "paired-recent-events", SampleCount: 100, P95: lag, Max: lag,
+		}},
 	}
 	g := graph.Build(rules, sources)
 	r := BuildWithOptions("elastic", g, BuildOptions{
@@ -169,7 +172,9 @@ func TestLagCheckSkipsIngestTimeRules(t *testing.T) {
 		{ID: "ing", Name: "IngestTime", Enabled: true, Severity: "low", Patterns: []string{"laggy-*"}, Lookback: 10 * time.Minute, Interval: 5 * time.Minute, TimestampOverride: "event.ingested"},
 		{ID: "oth", Name: "OtherField", Enabled: true, Severity: "low", Patterns: []string{"laggy-*"}, Lookback: 10 * time.Minute, Interval: 5 * time.Minute, TimestampOverride: "custom.time"},
 	}
-	sources := []backend.Source{{Name: "laggy-1", Docs: 10, LastEvent: now, IngestLag: &lag}}
+	sources := []backend.Source{{Name: "laggy-1", Docs: 10, LastEvent: now, IngestLag: backend.IngestLagEvidence{
+		Status: backend.EvidenceAssessed, Method: "paired-recent-events", SampleCount: 100, P95: lag, Max: lag,
+	}}}
 	g := graph.Build(rules, sources)
 	r := BuildWithOptions("elastic", g, BuildOptions{Check: health.Check{MaxStale: time.Hour}})
 
@@ -189,6 +194,52 @@ func TestLagCheckSkipsIngestTimeRules(t *testing.T) {
 	// stay quiet rather than guess.
 	if d, ok := byID["oth"]; ok {
 		t.Errorf("non-@timestamp override rule must not be impaired, got %+v", d)
+	}
+}
+
+func TestLagFindingRequiresAssessedPairedEvidence(t *testing.T) {
+	now := time.Now()
+	rule := backend.Rule{
+		ID: "lag", Name: "Lag", Enabled: true, Severity: "medium", Patterns: []string{"logs-*"},
+		Lookback: 10 * time.Minute, Interval: 5 * time.Minute,
+	}
+	source := backend.Source{
+		Name: "logs-a", Docs: 10, LastEvent: now,
+		IngestLag: backend.IngestLagEvidence{
+			Status: backend.EvidenceIncomplete, Method: "paired-recent-events",
+			P95: 30 * time.Minute, Max: 30 * time.Minute, Detail: "no paired sample",
+		},
+	}
+	r := BuildWithOptions("elastic", graph.Build([]backend.Rule{rule}, []backend.Source{source}), BuildOptions{
+		Check: health.Check{MaxStale: time.Hour},
+	})
+	if len(r.ImpairedDetections) != 0 {
+		t.Fatalf("incomplete lag evidence must never emit a finding: %+v", r.ImpairedDetections)
+	}
+	if len(r.Sources) != 1 || r.Sources[0].IngestLag == nil || r.Sources[0].IngestLag.Status != backend.EvidenceIncomplete {
+		t.Fatalf("incomplete lag evidence must remain visible: %+v", r.Sources)
+	}
+}
+
+func TestLagFindingAtZeroWindowMargin(t *testing.T) {
+	now := time.Now()
+	rule := backend.Rule{
+		ID: "zero-margin", Name: "Zero margin", Enabled: true, Severity: "medium", Patterns: []string{"logs-*"},
+		Lookback: 5 * time.Minute, Interval: 5 * time.Minute,
+	}
+	source := backend.Source{
+		Name: "logs-a", Docs: 10, LastEvent: now,
+		IngestLag: backend.IngestLagEvidence{
+			Status: backend.EvidenceAssessed, Method: "paired-recent-events", SampleCount: 25,
+			P95: time.Second, Max: 2 * time.Second,
+		},
+	}
+	r := BuildWithOptions("elastic", graph.Build([]backend.Rule{rule}, []backend.Source{source}), BuildOptions{
+		Check: health.Check{MaxStale: time.Hour},
+	})
+	if len(r.ImpairedDetections) != 1 || len(r.ImpairedDetections[0].Reasons) != 1 ||
+		r.ImpairedDetections[0].Reasons[0] != ReasonLagBlindWindow {
+		t.Fatalf("zero-margin rule = %+v, want lag-blind-window", r.ImpairedDetections)
 	}
 }
 
@@ -238,6 +289,61 @@ func TestMissingFieldsLimits(t *testing.T) {
 	}
 }
 
+func TestRequiredFieldsAreAssessedPerConcreteSource(t *testing.T) {
+	now := time.Now()
+	rule := backend.Rule{
+		ID: "field-rule", Name: "Field rule", Enabled: true, Severity: "medium",
+		Patterns: []string{"logs-*"}, RequiredFields: []string{"process.name"},
+	}
+	sources := []backend.Source{
+		{Name: "logs-a", Docs: 10, LastEvent: now},
+		{Name: "logs-b", Docs: 10, LastEvent: now},
+	}
+	g := graph.Build([]backend.Rule{rule}, sources)
+	complete := map[string]backend.FieldEvidence{
+		"logs-a": {Status: backend.EvidenceAssessed, Fields: map[string]bool{"process.name": true}},
+		"logs-b": {Status: backend.EvidenceAssessed, Fields: map[string]bool{}},
+	}
+	r := BuildWithOptions("elastic", g, BuildOptions{
+		Check: health.Check{MaxStale: time.Hour}, FieldEvidence: complete,
+	})
+	if len(r.ImpairedDetections) != 1 || len(r.ImpairedDetections[0].MissingFields) != 1 {
+		t.Fatalf("complete per-source evidence should report the known gap: %+v", r.ImpairedDetections)
+	}
+	if len(r.RequiredFieldEvidence) != 1 || len(r.RequiredFieldEvidence[0].Sources) != 2 ||
+		len(r.RequiredFieldEvidence[0].Sources[1].Missing) != 1 {
+		t.Fatalf("required-field evidence = %+v, want present/missing by source", r.RequiredFieldEvidence)
+	}
+
+	incomplete := map[string]backend.FieldEvidence{
+		"logs-a": complete["logs-a"],
+		"logs-b": {Status: backend.EvidenceIncomplete, Detail: "forbidden"},
+	}
+	r = BuildWithOptions("elastic", g, BuildOptions{
+		Check: health.Check{MaxStale: time.Hour}, FieldEvidence: incomplete,
+	})
+	if len(r.ImpairedDetections) != 0 {
+		t.Fatalf("an incomplete concrete-source read must suppress the conclusion: %+v", r.ImpairedDetections)
+	}
+	if got := r.RequiredFieldEvidence[0].Sources[1].Status; got != backend.EvidenceIncomplete {
+		t.Fatalf("unreadable source status = %q, want incomplete", got)
+	}
+
+	r = BuildWithOptions("elastic", g, BuildOptions{
+		Check: health.Check{MaxStale: time.Hour}, FieldEvidence: complete,
+		Scope: map[string]bool{"logs-a": true},
+	})
+	if len(r.Sources) != 1 || r.Sources[0].Name != "logs-a" {
+		t.Fatalf("partial scan scope did not limit source listing: %+v", r.Sources)
+	}
+	if len(r.ImpairedDetections) != 1 {
+		t.Fatalf("listing scope hid an excluded source field gap: %+v", r.ImpairedDetections)
+	}
+	if got := r.RequiredFieldEvidence[0].Sources[1]; got.Status != backend.EvidenceAssessed || len(got.Missing) != 1 {
+		t.Fatalf("excluded source evidence = %+v, want assessed missing field", got)
+	}
+}
+
 func TestSkipUnused(t *testing.T) {
 	g := graph.Build(nil, []backend.Source{{Name: "orphan", Docs: 1, LastEvent: time.Now()}})
 	r := BuildWithOptions("elastic", g, BuildOptions{Check: health.Check{MaxStale: time.Hour}, SkipUnused: true})
@@ -253,8 +359,11 @@ func TestUnusedTelemetryExcludesEmptySources(t *testing.T) {
 	now := time.Now()
 	sources := []backend.Source{
 		{Name: "empty", Docs: 0, SizeBytes: 0},
+		{Name: "empty-with-storage-overhead", Docs: 0, SizeBytes: 25},
 		{Name: "ingested", Docs: 10, SizeBytes: 100, LastEvent: now},
 		{Name: "docs-unknown", Docs: -1, SizeBytes: 50, LastEvent: now},
+		{Name: "all-unknown", Docs: -1},
+		{Name: "docs-unknown-with-storage-overhead", Docs: -1, SizeBytes: 75},
 	}
 	g := graph.BuildResolved(nil, sources, nil)
 	r := BuildWithOptions("elastic", g, BuildOptions{Check: health.Check{MaxStale: time.Hour}})
@@ -267,23 +376,44 @@ func TestUnusedTelemetryExcludesEmptySources(t *testing.T) {
 			r.Summary.UnusedSources, r.Summary.UnusedBytes, r.UnusedTelemetry)
 	}
 	for _, source := range r.UnusedTelemetry {
-		if source.Name == "empty" {
-			t.Fatal("zero-document source was reported as ingested unused telemetry")
+		if source.Name == "empty" || source.Name == "empty-with-storage-overhead" ||
+			source.Name == "all-unknown" || source.Name == "docs-unknown-with-storage-overhead" {
+			t.Fatalf("source without positive telemetry evidence was reported unused: %s", source.Name)
 		}
 	}
 }
 
 func TestDiff(t *testing.T) {
 	older := &Report{
+		SchemaVersion: ReportSchemaVersion, Backend: "elastic", Instance: "prod", TargetID: "target-1",
+		Scope:          ScanScope{Mode: "installed", ConfigurationID: "config-1"},
 		Sources:        []SourceHealth{{Name: "a", Status: "ok"}, {Name: "b", Status: "stale"}},
 		DeadDetections: []DeadDetection{{ID: "d1", Name: "Old dead", Reason: "disconnected"}},
+		Findings: []Finding{
+			{ID: "old-dead", Class: FindingDead, RuleID: "d1", RuleName: "Old dead", Reason: ReasonDisconnected},
+			{ID: "old-source", Class: FindingSourceDegraded, Source: "b", Reason: "stale"},
+		},
 	}
 	newer := &Report{
+		SchemaVersion: ReportSchemaVersion, Backend: "elastic", Instance: "prod", TargetID: "target-1",
+		Scope:              ScanScope{Mode: "installed", ConfigurationID: "config-1"},
+		Assessments:        []RuntimeAssessment{{Name: AssessmentSourceResolution, Status: backend.EvidenceAssessed}},
 		Sources:            []SourceHealth{{Name: "a", Status: "stale"}, {Name: "b", Status: "ok"}},
 		DeadDetections:     []DeadDetection{{ID: "d2", Name: "New dead", Reason: "starved"}},
-		ImpairedDetections: []ImpairedDetection{{ID: "i1", Name: "New impaired", Reasons: []string{ReasonMissingFields}}},
+		ImpairedDetections: []ImpairedDetection{{ID: "i1", Name: "New impaired", Reasons: []string{ReasonMissingFields}, MissingFields: []string{"host.name"}}},
+		InputResolutions: []backend.InputResolution{{
+			RuleID: "d1", Status: backend.ResolutionResolved, ResolvedSources: []string{"b"},
+		}},
+		Findings: []Finding{
+			{ID: "new-dead", Class: FindingDead, RuleID: "d2", RuleName: "New dead", Reason: ReasonStarved},
+			{ID: "new-impaired", Class: FindingImpaired, RuleID: "i1", RuleName: "New impaired", Reason: ReasonMissingFields, Dependency: "host.name"},
+			{ID: "new-source", Class: FindingSourceDegraded, Source: "a", Reason: "stale"},
+		},
 	}
-	d := Diff(older, newer)
+	d, err := Diff(older, newer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(d.NewlyDead) != 1 || d.NewlyDead[0].ID != "d2" {
 		t.Errorf("newly dead = %+v", d.NewlyDead)
 	}
@@ -415,6 +545,9 @@ func TestRedact(t *testing.T) {
 	if !a.Redacted {
 		t.Error("Redacted flag not set")
 	}
+	if a.Redaction == nil || a.Redaction.Algorithm != redactpkg.Algorithm || a.Redaction.KeyID == "" {
+		t.Fatalf("redaction metadata = %+v", a.Redaction)
+	}
 	data, err := json.Marshal(a)
 	if err != nil {
 		t.Fatal(err)
@@ -426,12 +559,180 @@ func TestRedact(t *testing.T) {
 	}
 }
 
+func TestRedactWithUsesCallerKeyAndHidesInstance(t *testing.T) {
+	one, err := redactpkg.New([]byte(strings.Repeat("a", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := redactpkg.New([]byte(strings.Repeat("b", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := fixtureReport(t), fixtureReport(t)
+	a.Instance, b.Instance = "customer-prod", "customer-prod"
+	a.Scope.ConfigurationID, b.Scope.ConfigurationID = "config-sensitive", "config-sensitive"
+	a.RedactWith(one)
+	b.RedactWith(two)
+	if a.Redaction.KeyID != one.KeyID() || b.Redaction.KeyID != two.KeyID() {
+		t.Fatalf("report key IDs = %q and %q", a.Redaction.KeyID, b.Redaction.KeyID)
+	}
+	if a.Sources[0].Name == b.Sources[0].Name || a.Instance == b.Instance || a.Scope.ConfigurationID == b.Scope.ConfigurationID {
+		t.Fatal("different keys produced correlatable identifiers")
+	}
+	data, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "customer-prod") {
+		t.Fatal("redacted report leaks instance name")
+	}
+}
+
+func TestRedactFindingDependenciesUseEvidenceNamespaces(t *testing.T) {
+	redactor, err := redactpkg.New([]byte(strings.Repeat("a", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &Report{
+		RequiredFieldEvidence: []RequiredFieldAssessment{{
+			RuleID: "rule-1", RuleName: "Rule one",
+			Sources: []RequiredFieldSourceEvidence{{Source: "logs-one", Missing: []string{"host.name"}}},
+		}},
+		PartialInputCoverage: []PartialInputCoverage{{
+			RuleID: "rule-2", RuleName: "Rule two", Expression: "auditbeat-*",
+		}},
+		Findings: []Finding{
+			{ID: "finding-field", Class: FindingImpaired, Reason: ReasonMissingFields, Dependency: "host.name"},
+			{ID: "finding-input", Class: FindingPartialInput, Reason: "selector-empty", Dependency: "auditbeat-*"},
+		},
+	}
+	r.RedactWith(redactor)
+	if got, want := r.Findings[0].Dependency, r.RequiredFieldEvidence[0].Sources[0].Missing[0]; got != want {
+		t.Fatalf("missing-field dependency = %q, evidence field = %q", got, want)
+	}
+	if got, want := r.Findings[1].Dependency, r.PartialInputCoverage[0].Expression; got != want {
+		t.Fatalf("partial-input dependency = %q, evidence expression = %q", got, want)
+	}
+}
+
+func TestRedactWithRemovesEverySensitiveReportField(t *testing.T) {
+	redactor, err := redactpkg.New([]byte(strings.Repeat("r", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []string
+	secret := func(name string) string {
+		value := "raw-sensitive-" + name
+		raw = append(raw, value)
+		return value
+	}
+	r := &Report{
+		TargetID: secret("target"),
+		Instance: secret("instance"),
+		Scope: ScanScope{
+			Include:          []string{secret("scope-include")},
+			Exclude:          []string{secret("scope-exclude")},
+			ConfigurationID:  secret("scope-config"),
+			CandidateRuleIDs: []string{secret("scope-candidate")},
+		},
+		Sources: []SourceHealth{{
+			Name: secret("source"),
+			Schema: &SchemaHealth{
+				Added:   []string{secret("schema-added")},
+				Removed: []string{secret("schema-removed")},
+				TypeChanged: []FieldTypeChange{{
+					Name: secret("schema-type-changed"), Before: []string{"keyword"}, After: []string{"long"},
+				}},
+			},
+			IngestLag: &IngestLagHealth{Detail: secret("lag-detail")},
+		}},
+		DeadDetections: []DeadDetection{{
+			ID: secret("dead-id"), RuleID: secret("dead-rule-id"), BackendObjectID: secret("dead-object"),
+			Name: secret("dead-name"), Patterns: []string{secret("dead-pattern")}, Sources: []string{secret("dead-source")},
+		}},
+		ImpairedDetections: []ImpairedDetection{{
+			ID: secret("impaired-id"), RuleID: secret("impaired-rule-id"), BackendObjectID: secret("impaired-object"),
+			Name: secret("impaired-name"), MissingFields: []string{secret("impaired-field")},
+			LagSources: []string{secret("impaired-lag-source")}, Sources: []string{secret("impaired-source")},
+		}},
+		UnmappedRules: []RuleRef{{
+			ID: secret("unmapped-id"), RuleID: secret("unmapped-rule-id"), BackendObjectID: secret("unmapped-object"),
+			FindingID: secret("unmapped-finding"), Dependency: secret("unmapped-dependency"),
+			Name: secret("unmapped-name"), Detail: secret("unmapped-detail"),
+		}},
+		RemoteRules: []RuleRef{{
+			ID: secret("remote-id"), RuleID: secret("remote-rule-id"), BackendObjectID: secret("remote-object"),
+			FindingID: secret("remote-finding"), Dependency: secret("remote-dependency"),
+			Name: secret("remote-name"), Detail: secret("remote-detail"),
+		}},
+		InputResolutions: []backend.InputResolution{{
+			RuleID: secret("resolution-rule"), Selector: secret("resolution-selector"),
+			Expression: secret("resolution-expression"), ResolvedSources: []string{secret("resolution-source")},
+			Aliases: []string{secret("resolution-alias")}, Detail: secret("resolution-detail"),
+		}},
+		PartialInputCoverage: []PartialInputCoverage{{
+			RuleID: secret("partial-rule"), BackendObjectID: secret("partial-object"), RuleName: secret("partial-name"),
+			Selector: secret("partial-selector"), Expression: secret("partial-expression"),
+		}},
+		UnusedTelemetry: []UnusedSource{{Name: secret("unused-source")}},
+		Findings: []Finding{{
+			ID: secret("finding-id"), RuleID: secret("finding-rule"), BackendObjectID: secret("finding-object"),
+			RuleName: secret("finding-name"), Source: secret("finding-source"),
+			Reason: ReasonMissingFields, Dependency: secret("finding-field"),
+			Accepted: &FindingAcceptance{Reason: secret("acceptance-reason")},
+		}},
+		RecoveredFindings: []Finding{{
+			ID: secret("recovered-id"), RuleID: secret("recovered-rule"), BackendObjectID: secret("recovered-object"),
+			RuleName: secret("recovered-name"), Source: secret("recovered-source"), Dependency: secret("recovered-dependency"),
+		}},
+		RequiredFieldEvidence: []RequiredFieldAssessment{{
+			RuleID: secret("field-rule"), RuleName: secret("field-rule-name"),
+			Sources: []RequiredFieldSourceEvidence{{
+				Source: secret("field-source"), Present: []string{secret("field-present")},
+				Missing: []string{secret("field-missing")}, Detail: secret("field-detail"),
+			}},
+		}},
+	}
+	r.RedactWith(redactor)
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range raw {
+		if strings.Contains(string(data), value) {
+			t.Errorf("redacted report leaks %q", value)
+		}
+	}
+}
+
+func TestCandidateExitCodeFailsClosedOnIncompleteResolution(t *testing.T) {
+	for _, name := range []string{AssessmentSourceResolution, AssessmentRequiredFields, AssessmentIngestLag} {
+		t.Run(name, func(t *testing.T) {
+			r := &Report{Assessments: []RuntimeAssessment{{Name: name, Status: backend.EvidenceIncomplete}}}
+			if got := r.CandidateExitCode(); got != ExitError {
+				t.Fatalf("candidate exit = %d, want error", got)
+			}
+		})
+	}
+	for _, name := range []string{AssessmentRequiredFields, AssessmentIngestLag} {
+		t.Run(name+"-unavailable", func(t *testing.T) {
+			r := &Report{Assessments: []RuntimeAssessment{{Name: name, Status: backend.EvidenceUnavailable}}}
+			if got := r.CandidateExitCode(); got != ExitHealthy {
+				t.Fatalf("candidate exit = %d, want healthy when backend capability is unavailable", got)
+			}
+		})
+	}
+}
+
 func TestWritePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits are not enforced on Windows")
 	}
 	r := fixtureReport(t)
 	path := filepath.Join(t.TempDir(), "report.json")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.Write(path); err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +750,15 @@ func TestWriteHTML(t *testing.T) {
 	r.Producer = producer("1.2.3")
 	r.BackendMetadata = backendMetadata("elastic", "8.17.4")
 	r.Sources[0].Name = `<script>alert(1)</script>`
+	r.Summary.PartialInputs = 1
+	r.PartialInputCoverage = []PartialInputCoverage{{
+		RuleID: "migration", RuleName: "Migrating input", Severity: "medium",
+		Selector: "logs-legacy-*", Expression: "logs-legacy-*", ObservedAt: time.Now().UTC(),
+	}}
 	path := filepath.Join(t.TempDir(), "report.html")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.WriteHTML(path); err != nil {
 		t.Fatal(err)
 	}
@@ -474,6 +783,9 @@ func TestWriteHTML(t *testing.T) {
 		"recognized versions 8.x",
 		"rule_inventory=supported",
 		"remote=listed-only",
+		"Partial input coverage",
+		"Migrating input",
+		"logs-legacy-*",
 	} {
 		if !strings.Contains(string(data), metadata) {
 			t.Errorf("html report missing metadata %q", metadata)
@@ -575,5 +887,115 @@ func TestNativeResolutionOnlyEmptyCanDisconnect(t *testing.T) {
 		if strings.Contains(string(encoded), leak) {
 			t.Errorf("redacted resolution evidence leaks %q", leak)
 		}
+	}
+}
+
+func TestPartialInputCoverageUsesOnlyDiagnosticEmptyEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	rule := backend.Rule{
+		ID: "migration", BackendObjectID: "saved-migration", Name: "Migrating input",
+		Enabled: true, Severity: "high", Patterns: []string{"logs-legacy-*", "logs-current-*", "-logs-old-*"},
+	}
+	sources := []backend.Source{{Name: "logs-current-default", Docs: 10, LastEvent: now}}
+	authoritative := backend.InputResolution{
+		RuleID: rule.ID, Expression: "logs-legacy-*,logs-current-*,-logs-old-*",
+		SelectorKind: "index_expression", ResolutionMethod: "resolve_index",
+		ObservedAt: now, Status: backend.ResolutionResolved, ResolvedSources: []string{"logs-current-default"},
+	}
+	build := func(diagnostic backend.InputResolution) *Report {
+		diagnostic.RuleID = rule.ID
+		diagnostic.Diagnostic = true
+		diagnostic.SelectorKind = "index_selector"
+		diagnostic.ResolutionMethod = "resolve_index_diagnostic"
+		diagnostic.ObservedAt = now
+		return BuildWithOptions("elastic", graph.BuildResolved(
+			[]backend.Rule{rule}, sources, []backend.InputResolution{authoritative, diagnostic}),
+			BuildOptions{Check: health.Check{MaxStale: time.Hour, Now: func() time.Time { return now }}},
+		)
+	}
+
+	partial := build(backend.InputResolution{
+		Selector: "logs-legacy-*", Expression: "logs-legacy-*,-logs-old-*", Status: backend.ResolutionEmpty,
+	})
+	if len(partial.PartialInputCoverage) != 1 || partial.Summary.PartialInputs != 1 {
+		t.Fatalf("partial coverage = %+v / %+v", partial.PartialInputCoverage, partial.Summary)
+	}
+	if got := partial.PartialInputCoverage[0]; got.RuleID != rule.ID || got.Expression != "logs-legacy-*,-logs-old-*" {
+		t.Fatalf("partial evidence = %+v", got)
+	}
+	if partial.Summary.InputResolution != (InputResolutionSummary{Resolved: 1}) {
+		t.Fatalf("diagnostic outcome leaked into primary summary: %+v", partial.Summary.InputResolution)
+	}
+	if len(partial.DeadDetections) != 0 || partial.ExitCode() != ExitHealthy {
+		t.Fatalf("partial coverage changed default verdict: %+v / exit %d", partial.DeadDetections, partial.ExitCode())
+	}
+	if len(partial.Findings) != 1 || partial.Findings[0].Class != FindingPartialInput ||
+		partial.Findings[0].Dependency != "logs-legacy-*,-logs-old-*" || partial.Findings[0].Gates {
+		t.Fatalf("partial finding = %+v", partial.Findings)
+	}
+
+	incomplete := build(backend.InputResolution{
+		Selector: "logs-legacy-*", Expression: "logs-legacy-*,-logs-old-*",
+		Status: backend.ResolutionUnavailable, Detail: "resolver unavailable",
+	})
+	if len(incomplete.PartialInputCoverage) != 0 || len(incomplete.Findings) != 0 || len(incomplete.UnmappedRules) != 0 {
+		t.Fatalf("unavailable diagnostic became a finding: %+v", incomplete)
+	}
+	if incomplete.Summary.InputResolution != (InputResolutionSummary{Resolved: 1}) {
+		t.Fatalf("unavailable diagnostic changed primary summary: %+v", incomplete.Summary.InputResolution)
+	}
+
+	redacted := partial
+	redacted.Redact()
+	encoded, err := json.Marshal(redacted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"logs-legacy-*", "logs-current-default", "Migrating input"} {
+		if strings.Contains(string(encoded), leak) {
+			t.Errorf("redacted partial evidence leaks %q", leak)
+		}
+	}
+}
+
+func TestAuthoritativeEmptyIsDeadAndNeverPartial(t *testing.T) {
+	now := time.Now().UTC()
+	rule := backend.Rule{ID: "all-empty", Name: "All inputs missing", Enabled: true, Severity: "high"}
+	resolutions := []backend.InputResolution{
+		{RuleID: rule.ID, Expression: "legacy-*,current-*", Status: backend.ResolutionEmpty, ObservedAt: now},
+		{RuleID: rule.ID, Selector: "legacy-*", Expression: "legacy-*", Diagnostic: true, Status: backend.ResolutionEmpty, ObservedAt: now},
+		{RuleID: rule.ID, Selector: "current-*", Expression: "current-*", Diagnostic: true, Status: backend.ResolutionEmpty, ObservedAt: now},
+	}
+	r := BuildWithOptions("elastic", graph.BuildResolved([]backend.Rule{rule}, nil, resolutions), BuildOptions{
+		Check: health.Check{MaxStale: time.Hour, Now: func() time.Time { return now }},
+	})
+	if len(r.DeadDetections) != 1 || len(r.PartialInputCoverage) != 0 || r.Summary.PartialInputs != 0 {
+		t.Fatalf("authoritative empty result = dead %+v, partial %+v", r.DeadDetections, r.PartialInputCoverage)
+	}
+	if r.Summary.InputResolution != (InputResolutionSummary{Empty: 1}) {
+		t.Fatalf("diagnostics changed authoritative summary: %+v", r.Summary.InputResolution)
+	}
+}
+
+func TestPartialInputFindingGatesOnlyWhenPolicyRequestsIt(t *testing.T) {
+	now := time.Now().UTC()
+	rule := backend.Rule{ID: "migration", Name: "Migrating input", Enabled: true, Severity: "medium"}
+	sources := []backend.Source{{Name: "logs-current", Docs: 1, LastEvent: now}}
+	resolutions := []backend.InputResolution{
+		{RuleID: rule.ID, Expression: "logs-legacy,logs-current", Status: backend.ResolutionResolved, ResolvedSources: []string{"logs-current"}, ObservedAt: now},
+		{RuleID: rule.ID, Selector: "logs-legacy", Expression: "logs-legacy", Diagnostic: true, Status: backend.ResolutionEmpty, ObservedAt: now},
+	}
+	build := func(policy *Policy) *Report {
+		return BuildWithOptions("elastic", graph.BuildResolved([]backend.Rule{rule}, sources, resolutions), BuildOptions{
+			Check: health.Check{MaxStale: time.Hour, Now: func() time.Time { return now }}, Policy: policy,
+		})
+	}
+	if got := build(nil).ExitCode(); got != ExitHealthy {
+		t.Fatalf("default exit = %d, want healthy", got)
+	}
+	policy := &Policy{Version: PolicyVersion, GateClasses: []string{FindingPartialInput}}
+	withPolicy := build(policy)
+	if withPolicy.ExitCode() != ExitFindings || withPolicy.Summary.GatedFindings != 1 || !withPolicy.Findings[0].Gates {
+		t.Fatalf("policy did not gate partial input: %+v / exit %d", withPolicy, withPolicy.ExitCode())
 	}
 }

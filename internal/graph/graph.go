@@ -67,6 +67,9 @@ func BuildResolved(rules []backend.Rule, sources []backend.Source, resolutions [
 			continue
 		}
 		g.ruleResolution[resolution.RuleID] = append(g.ruleResolution[resolution.RuleID], resolution)
+		if resolution.Diagnostic {
+			continue
+		}
 		if resolution.Status != backend.ResolutionResolved {
 			continue
 		}

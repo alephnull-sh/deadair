@@ -87,7 +87,7 @@ Elastic's `required_fields` metadata is informational and does not affect rule e
 available when a rule populates it, and custom rules may omit it. `field_caps` shows whether a field is
 mapped and searchable, but not whether recent events contain values. Broad patterns also need to be
 checked per index because one backing index may expose the field while another does not. The report
-records the declared dependency and the concrete sources that do not expose it.
+records the declared dependency and the concrete sources where it is not searchable throughout.
 
 ## Ingest lag
 
@@ -159,7 +159,7 @@ reads.
 
 deadair runs outside the SIEM with a read-only credential. It does not read event bodies. It reads
 counts, timestamps, mappings, `field_caps`, and size-0 `max(@timestamp)` and
-`max(event.ingested)` aggregations.
+paired `event.ingested` and `@timestamp` values from a bounded recent sample.
 
 It currently supports Elastic Security and OpenSearch Security Analytics. Some checks depend on rule
 metadata and are limited by what each SIEM exposes. deadair checks whether a rule can see the data it

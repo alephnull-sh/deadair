@@ -24,7 +24,7 @@ The generated files show the operator surfaces you will use in a real deployment
 |---|---|
 | `check.txt` | fleet preflight, including bad credentials and an unreachable tenant |
 | `fleet-summary.txt` | terminal fleet scan output |
-| `fleet-redacted.json` | shareable redacted fleet report |
+| `fleet-redacted.json` | pseudonymized fleet report; review its findings and counts before sharing |
 | `metrics.txt` | Prometheus metrics with per-instance health |
 | `downtime.json` | expected downtime config |
 | `state.json.*` | per-instance state files |
@@ -87,7 +87,7 @@ Recommended permissions:
 ]}
 ```
 
-Keep `name` stable. It keys metrics, per-instance state files, redacted digests, and historical
+Keep `name` stable. It keys metrics, per-instance state files, redacted pseudonyms, and historical
 baselines. Renaming a tenant starts a new baseline unless you deliberately migrate the state file.
 
 ## Preflight
@@ -103,7 +103,7 @@ deadair check --fleet /etc/deadair/fleet.json --timeout 90s
 
 ## One-shot reports
 
-Use a redacted JSON report for client-facing or shared reporting:
+Use a pseudonymized JSON report when exact identifiers are unnecessary:
 
 ```sh
 deadair scan \
@@ -153,7 +153,7 @@ For each actionable finding, keep enough context for the receiving team to start
 | disposition and owner | records accepted scope, remediation, or false positive |
 
 The terminal fleet view is a summary. Keep the internal JSON report for exact patterns and sources;
-use the redacted report for cross-team or client trend reporting.
+use the redacted report for authorized cross-team or client trend reporting.
 
 ## Continuous monitoring
 
@@ -173,16 +173,23 @@ Prometheus scrapes the cached last scan. Scrape volume does not hit customer SIE
 
 ## Redaction
 
-Use `--redact` for:
+Use `--redact` before authorized sharing through:
 
 - client-facing reports
 - shared Prometheus
 - screenshots
 - shared issue reports
-- any artifact that leaves the restricted SOC workspace
 
-Redaction covers tenant, source, rule, pattern, and field names with stable digests. Stable
-digests preserve trends and diffs without exposing customer identities or blind spots.
+Redaction covers tenant, source, rule, pattern, and field names with keyed HMAC pseudonyms. Generate
+a separate random key file for each correlation boundary and set `DEADAIR_REDACT_KEY_FILE` to its
+path. Supplying the key file also enables redaction. Reports record the non-secret key identifier,
+so a reporting job can reject inputs created with different keys. Without a key file, pseudonyms
+are stable only for the life of one process.
+Redacted fleet reports expose a fixed failure category rather than raw backend errors.
+
+Redaction is not declassification. Backend versions, counts, severities, timing, lag, storage
+volume, and the kinds of blind spots remain visible. Review the result and share it only with an
+authorized recipient.
 
 Keep unredacted reports restricted to analysts who need exact names for remediation.
 
@@ -221,21 +228,7 @@ route:
 Start with tickets or chat notifications. Page only after the first manual scan has been reviewed
 and noisy findings have been fixed or suppressed correctly.
 
-## Retention
-
-Starting policy:
-
-| Artifact | Suggested retention | Notes |
-|---|---:|---|
-| unredacted reports | 14-30 days | restricted SOC storage |
-| redacted reports | 90-180 days | useful for client trend reporting |
-| state files | long-lived | needed for baselines, hysteresis, lag history, and schema drift |
-| exporter metrics | match normal monitoring retention | prefer `serve --redact` in shared Prometheus |
-
-Back up state files if baseline continuity matters. Losing state is safe, but it restarts warmup
-and schema history.
-
-## Fleet sizing
+## Schedule fleet scans
 
 Fleet scans are sequential. Cycle time is roughly:
 
@@ -249,17 +242,12 @@ Measure your own p95:
 time deadair scan --fleet /etc/deadair/fleet.json --json --json-out /tmp/deadair.json
 ```
 
-Starting intervals:
-
-| Tenants | If p95 tenant scan is 15s | Starting interval |
-|---:|---:|---:|
-| 10 | about 2.5m | 15m |
-| 50 | about 12.5m | 45-60m |
-| 100 | about 25m | 90-120m |
-
 Keep `serve --interval` comfortably above observed fleet scan time. If a fleet grows too large,
 split it by customer segment, region, or backend. Raise `--concurrency` only after checking SIEM
 API behavior in your environment.
+
+Back up state files if baseline continuity matters. Losing state does not affect the backend, but
+it restarts warmup and schema history.
 
 ## Failure modes
 
@@ -275,10 +263,3 @@ an error entry for each failed instance. The process exits `2` to mark the scan 
 | API throttling or timeouts | instance fails or sources become unknown | increase interval, lower concurrency, or split the fleet |
 | planned maintenance | stale or empty findings may appear after the window | declare downtime windows instead of excluding sources |
 | tenant rename | baselines restart | keep names stable or migrate the matching state file |
-
-## Production readiness note
-
-This repo has live Docker integration proof for Elastic, OpenSearch, mixed-backend fleet scans,
-least-privilege credentials, rejected writes, and the MSSP lab. Before calling a deployment
-production-proven for an MSSP, run it against real tenant SIEMs long enough to tune cadence,
-downtime windows, and baseline settings from actual source behavior.

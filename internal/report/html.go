@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
-	"os"
 	"strings"
+
+	"github.com/alephnull-sh/deadair/internal/securefile"
 )
 
 var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
@@ -49,7 +50,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 </head>
 <body>
   <h1>deadair report</h1>
-  <p class="muted">{{.BackendMetadata.Product}}{{with .BackendMetadata.ObservedVersion}} {{.}}{{end}} ({{.Backend}}) · {{.GeneratedAt.Format "2006-01-02 15:04:05 UTC"}}{{if .Redacted}} · redacted{{end}}</p>
+  <p class="muted">{{.BackendMetadata.Product}}{{with .BackendMetadata.ObservedVersion}} {{.}}{{end}} ({{.Backend}}) · {{.GeneratedAt.Format "2006-01-02 15:04:05 UTC"}}{{if .Redacted}} · redacted{{with .Redaction}} (key {{.KeyID}}){{end}}{{end}}</p>
   <p class="muted">{{.SchemaVersion}} · producer {{.Producer.Name}} {{.Producer.Version}}{{with .BackendMetadata.SupportedVersionLines}} · recognized versions {{versions .}}{{end}}<br>Capabilities: {{capabilities .BackendMetadata.Capabilities}}</p>
 
   <div class="grid">
@@ -59,8 +60,17 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     <div class="metric"><span>Schema drift</span><strong>{{.Summary.SchemaDriftSources}}</strong></div>
     <div class="metric"><span>Dead detections</span><strong>{{.Summary.DeadDetections}}</strong></div>
     <div class="metric"><span>Impaired detections</span><strong>{{.Summary.ImpairedDetections}}</strong></div>
-	    <div class="metric"><span>Unused telemetry</span><strong>{{if eq .Summary.UnusedTelemetryAssessment "unavailable"}}not assessed{{else if eq .Summary.UnusedTelemetryAssessment "not-applicable"}}not applicable{{else}}{{bytes .Summary.UnusedBytes}}{{end}}</strong></div>
+	<div class="metric"><span>Partial inputs</span><strong>{{.Summary.PartialInputs}}</strong></div>
+	    <div class="metric"><span>Stored unused telemetry</span><strong>{{if eq .Summary.UnusedTelemetryAssessment "unavailable"}}not assessed{{else if eq .Summary.UnusedTelemetryAssessment "not-applicable"}}not applicable{{else}}{{bytes .Summary.UnusedBytes}}{{end}}</strong></div>
   </div>
+
+  {{if .Assessments}}
+  <h2>Checks performed</h2>
+  <table>
+    <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>{{range .Assessments}}<tr><td>{{.Name}}</td><td class="status-{{.Status}}">{{.Status}}</td><td>{{.Detail}}</td></tr>{{end}}</tbody>
+  </table>
+  {{end}}
 
   {{if .InputResolutions}}
   <h2>Input resolution</h2>
@@ -82,9 +92,20 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
   </table>
   {{end}}
 
+  {{if .PartialInputCoverage}}
+  <h2>Partial input coverage</h2>
+  <p class="muted">The combined rule input resolves, but these individual selectors do not. Policy decides whether this gates.</p>
+  <table>
+    <thead><tr><th>Severity</th><th>Rule</th><th>Missing selector</th></tr></thead>
+    <tbody>{{range .PartialInputCoverage}}
+      <tr><td>{{.Severity}}</td><td>{{.RuleName}}</td><td>{{if .Selector}}{{.Selector}}{{else}}{{.Expression}}{{end}}</td></tr>
+    {{end}}</tbody>
+  </table>
+  {{end}}
+
   <h2>Sources</h2>
   <table>
-    <thead><tr><th>Name</th><th>Status</th><th>Docs</th><th>Size</th><th>Known consumers</th><th>Volume</th><th>Z-score</th><th>Schema</th></tr></thead>
+    <thead><tr><th>Name</th><th>Status</th><th>Docs</th><th>Size</th><th>Known consumers</th><th>Volume</th><th>Z-score</th><th>Schema</th><th>Ingest lag</th></tr></thead>
     <tbody>
     {{range .Sources}}
       <tr>
@@ -96,6 +117,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
         <td>{{if .Volume}}<span class="status-{{.Volume.Status}}">{{.Volume.Status}}</span>{{else}}-{{end}}</td>
         <td>{{if .Volume}}{{zscore .Volume.ZScore}}{{else}}-{{end}}</td>
         <td>{{if .Schema}}<span class="status-{{.Schema.Status}}">{{.Schema.Status}}</span>{{else}}-{{end}}</td>
+        <td>{{if .IngestLag}}{{if eq .IngestLag.Status "assessed"}}p95 {{.IngestLag.P95Seconds}}s; max {{.IngestLag.MaxSeconds}}s; n={{.IngestLag.SampleCount}}; {{.IngestLag.Method}}{{else}}<span class="status-{{.IngestLag.Status}}">{{.IngestLag.Status}}</span>{{with .IngestLag.Detail}}: {{.}}{{end}}{{end}}{{else}}not assessed{{end}}</td>
       </tr>
     {{end}}
     </tbody>
@@ -118,14 +140,26 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     <thead><tr><th>Severity</th><th>Name</th><th>Reasons</th><th>Missing fields</th><th>Lag evidence</th></tr></thead>
     <tbody>
     {{range .ImpairedDetections}}
-      <tr><td>{{.Severity}}</td><td>{{.Name}}</td><td>{{range $i, $r := .Reasons}}{{if $i}}, {{end}}{{$r}}{{end}}</td><td>{{range $i, $f := .MissingFields}}{{if $i}}, {{end}}{{$f}}{{end}}</td><td>{{if .LagSources}}{{.MaxLagSeconds}}s lag; {{range $i, $s := .LagSources}}{{if $i}}, {{end}}{{$s}}{{end}}{{else}}-{{end}}</td></tr>
+      <tr><td>{{.Severity}}</td><td>{{.Name}}</td><td>{{range $i, $r := .Reasons}}{{if $i}}, {{end}}{{$r}}{{end}}</td><td>{{range $i, $f := .MissingFields}}{{if $i}}, {{end}}{{$f}}{{end}}</td><td>{{if .LagSources}}p95 {{.P95LagSeconds}}s; max {{.MaxLagSeconds}}s; {{range $i, $s := .LagSources}}{{if $i}}, {{end}}{{$s}}{{end}}{{else}}-{{end}}</td></tr>
     {{else}}
       <tr><td colspan="5">None</td></tr>
     {{end}}
     </tbody>
   </table>
 
-	  <h2>Unused telemetry</h2>
+  {{if .RequiredFieldEvidence}}
+  <h2>Required-field evidence</h2>
+  <table>
+    <thead><tr><th>Rule</th><th>Source</th><th>Status</th><th>Present</th><th>Missing</th><th>Detail</th></tr></thead>
+    <tbody>
+    {{range .RequiredFieldEvidence}}{{ $rule := .RuleName }}{{range .Sources}}
+      <tr><td>{{$rule}}</td><td>{{.Source}}</td><td class="status-{{.Status}}">{{.Status}}</td><td>{{range $i, $f := .Present}}{{if $i}}, {{end}}{{$f}}{{end}}</td><td>{{range $i, $f := .Missing}}{{if $i}}, {{end}}{{$f}}{{end}}</td><td>{{.Detail}}</td></tr>
+    {{end}}{{end}}
+    </tbody>
+  </table>
+  {{end}}
+
+	  <h2>Stored unused telemetry</h2>
 	  {{if eq .Summary.UnusedTelemetryAssessment "unavailable"}}
 	  <p>Not assessed because one or more enabled local rule inputs could not be resolved safely.</p>
 	  {{else if eq .Summary.UnusedTelemetryAssessment "not-applicable"}}
@@ -146,7 +180,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 </html>
 `))
 
-// WriteHTML writes a static HTML report to path with 0600 permissions.
+// WriteHTML writes a static HTML report to path with 0600 permissions on POSIX.
 func (r *Report) WriteHTML(path string) error {
 	var b bytes.Buffer
 	if err := htmlReport.Execute(&b, r); err != nil {
@@ -156,7 +190,7 @@ func (r *Report) WriteHTML(path string) error {
 	for i := range lines {
 		lines[i] = strings.TrimRight(lines[i], " \t")
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+	if err := securefile.Write(path, []byte(strings.Join(lines, "\n"))); err != nil {
 		return fmt.Errorf("writing html report: %w", err)
 	}
 	return nil

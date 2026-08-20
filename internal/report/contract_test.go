@@ -38,7 +38,7 @@ func TestBuildInitializesReportContract(t *testing.T) {
 			statuses: []CapabilityStatus{
 				CapabilitySupported, CapabilitySupported, CapabilitySupported,
 				CapabilitySupported, CapabilitySupported, CapabilityUnavailable,
-				CapabilityUnavailable, CapabilityUnavailable, CapabilityListedOnly,
+				CapabilityUnavailable, CapabilitySupported, CapabilityListedOnly,
 			},
 		},
 	}
@@ -153,7 +153,27 @@ func TestReportContractSchemas(t *testing.T) {
 	if got, want := stringsAt(t, status, "enum"), []string{"supported", "partial", "unavailable", "listed-only"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("capability status enum = %v, want %v", got, want)
 	}
+	evidenceStatus := objectAt(t, defs, "evidenceStatus")
+	if got, want := stringsAt(t, evidenceStatus, "enum"), []string{"assessed", "disabled", "incomplete", "unavailable"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtime evidence status enum = %v, want %v", got, want)
+	}
+	assertRequired(t, objectAt(t, defs, "runtimeAssessment"), "name", "status")
+	assertRequired(t, objectAt(t, defs, "ingestLagHealth"), "status")
+	assertRequired(t, objectAt(t, defs, "requiredFieldAssessment"), "rule_id", "rule_name", "sources")
 	assertRequired(t, summary, "input_resolution", "unused_telemetry_assessment")
+	if _, ok := objectAt(t, summary, "properties")["partial_inputs"]; !ok {
+		t.Fatal("report summary schema is missing partial_inputs")
+	}
+	inputResolution := objectAt(t, defs, "inputResolution")
+	if _, ok := objectAt(t, inputResolution, "properties")["diagnostic"]; !ok {
+		t.Fatal("input resolution schema is missing diagnostic marker")
+	}
+	for _, field := range []string{"logical_rule_id", "backend_object_id"} {
+		if _, ok := objectAt(t, inputResolution, "properties")[field]; !ok {
+			t.Fatalf("input resolution schema is missing %s", field)
+		}
+	}
+	assertRequired(t, objectAt(t, defs, "partialInputCoverage"), "rule_id", "rule_name", "severity", "expression", "observed_at")
 	unusedAssessment := objectAt(t, objectAt(t, summary, "properties"), "unused_telemetry_assessment")
 	if got, want := stringsAt(t, unusedAssessment, "enum"), []string{"complete", "legacy", "unavailable", "not-applicable"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unused telemetry assessment enum = %v, want %v", got, want)

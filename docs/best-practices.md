@@ -109,7 +109,8 @@ same incident, but they often belong to different queues.
 - Keep instance names stable. They key metrics, state files, baseline history, and redacted
   digests.
 - Run `deadair check --fleet fleet.json` after onboarding or rotating any tenant.
-- Use `--redact` for client-facing reports, shared Prometheus, public screenshots, and shared issue reports.
+- Use `--redact` before authorized cross-team reporting. Review the result because counts, timing,
+  volumes, and finding classes remain visible.
 - Size the interval from observed scan time. Fleet scans are sequential, so wall time is roughly
   the sum of tenant scan times.
 - Route `deadair_instance_up == 0` to the person who owns that tenant's credential and network
@@ -124,7 +125,8 @@ For a full MSSP deployment shape, see [mssp.md](mssp.md).
 - POSIX builds write reports and state `0600`. On Windows, protect output directories with ACLs.
 - Keep the exporter on loopback or behind authenticated scraping. Metric labels can reveal source
   and tenant names.
-- Use `--redact` before sharing a report outside the restricted SOC workspace.
+- Redaction pseudonymizes identifiers; it does not declassify a report. Share only with an
+  authorized recipient after reviewing the remaining evidence.
 - Use `--ca-cert` for private CAs. Reserve `--insecure-skip-verify` for labs.
 
 ## Know the limits

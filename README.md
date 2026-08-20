@@ -29,7 +29,7 @@
 </p>
 
 <p align="center">
-  <img alt="deadair scan of a disposable Elastic lab showing dead and impaired detections" src="docs/assets/scan-lab.png" width="860">
+  <img alt="deadair check and scan of a disposable Elastic lab showing dead and impaired detections" src="docs/assets/scan-lab.gif" width="860">
 </p>
 
 <p align="center">
@@ -45,11 +45,14 @@ concrete sources behind them.
 It catches:
 
 - rules whose index, alias, or data-stream selectors resolve to nothing;
+- mixed-selector rules where one declared input has disappeared while another still resolves;
 - rules whose matching sources are all stale or empty;
-- rules running with missing fields or an ingest-lag blind window;
+- on Elastic, rules running with missing declared fields or an ingest-lag blind window;
 - healthy telemetry that no enabled detection reads.
 
 deadair currently works with Elastic Security and OpenSearch Security Analytics.
+OpenSearch does not expose the rule metadata needed for the required-field or ingest-lag checks, so
+reports mark those checks unavailable instead of guessing.
 
 ## Quick start
 
@@ -68,15 +71,15 @@ deadair check           # verify the credential can scan
 deadair scan            # assess live rules and telemetry
 ```
 
-Exit codes are stable: `0` is healthy, `1` means findings, and `2` means the scan failed.
+Exit codes are stable: `0` passes the configured gate, `1` means gated findings, and `2` means the scan failed.
 
 ## How it works
 
 | Stage | What deadair does |
 |---|---|
 | Inventory | reads enabled detections and the inputs they declare |
-| Resolve | asks Elastic or OpenSearch to resolve index patterns, aliases, data streams, selectors, and remote inputs |
-| Measure | checks document count, freshest event, storage, field mappings, schema history, and ingest lag |
+| Resolve | asks Elastic or OpenSearch to resolve index patterns, aliases, data streams, selectors, and remote inputs; direct ES\|QL `FROM` is supported |
+| Measure | checks document count, freshest event, storage, and schema history; Elastic also checks declared fields and paired recent-event ingest lag |
 | Report | emits terminal, JSON, HTML, fleet rollups, and Prometheus metrics with the evidence behind each verdict |
 
 deadair proves whether a detection's observable telemetry prerequisites are present and healthy. It
@@ -89,8 +92,9 @@ it with static rule validation and end-to-end detection testing for those layers
 |---|---|---|
 | no matching source | none of the rule's inputs resolve to a visible index or data stream | pattern changes, missing integrations, and credential scope |
 | all sources stale or empty | every resolved source is unusable right now | source cadence and the ingest path |
-| missing fields | declared fields are absent from every matched source mapping | parser, package, and mapping changes |
-| lag blind window | measured ingest lag exceeds the rule's lookback margin | rule interval, lookback, timestamp override, and pipeline delay |
+| missing fields | a declared field is absent or non-searchable in one or more resolved sources after every source mapping was read | parser, package, and mapping changes |
+| lag blind window | paired-event p95 ingest lag exceeds the rule's lookback margin | rule interval, lookback, timestamp override, and pipeline delay |
+| partial input coverage | the complete expression resolves, but one positive selector within it resolves empty | migrations, fallback selectors, and expected alternatives; informational unless policy gates it |
 | source degradation | a source is stale, empty, low-volume, or schema-drifted | source history and expected maintenance |
 | unused telemetry | data is being stored but no enabled local detection resolves to it | disabled rules and intentional collection |
 
@@ -143,9 +147,12 @@ deadair scan --fleet fleet.json
 deadair serve --interval 5m
 ```
 
-`scan --rule` isolates the candidate rule from unrelated backlog. `diff` works with deterministically
-redacted reports. Fleet configuration references secrets through environment variables rather than
-storing secret values.
+`scan --rule` isolates a backend-native candidate rule or detector from unrelated backlog. `diff`
+works with redacted reports created with the same caller-held key. Fleet configuration references
+secrets through environment variables rather than storing secret values.
+
+The [official GitHub Action](docs/usage.md#gate-detection-changes) writes a job summary, uploads a
+redacted JSON report, and can apply a deadair policy without installing a rule.
 
 <p align="center">
   <img alt="deadair candidate-rule gate followed by a report diff" src="docs/assets/ci.gif" width="860">
@@ -156,8 +163,8 @@ storing secret values.
 </p>
 
 See [CI gate behavior](docs/usage.md#gate-detection-changes),
-[fleet and MSSP deployment](docs/mssp.md), and the [Prometheus examples](contrib/) for production
-patterns.
+[fleet and MSSP deployment](docs/mssp.md), and the [Prometheus examples](contrib/) for configurations
+to test in your own environment.
 
 ## Tested backends
 
@@ -175,7 +182,9 @@ Other versions may work but are not covered by the current CI matrix.
 - All backend access is read-only; trusted integration tests prove the documented credentials cannot write.
 - Reports, HTML, state files, and fleet output are written `0600` on POSIX systems.
 - Credentials can come from environment variables or files, avoiding secrets in process arguments.
-- `--redact` replaces tenant, rule, source, pattern, and field names with stable digests.
+- `--redact` replaces tenant, rule, source, pattern, and field names with keyed HMAC pseudonyms. A
+  `--redact-key-file` generated from random bytes also enables redaction and keeps names stable
+  across separate runs.
 - The exporter binds to loopback by default.
 - deadair has no phone-home behavior or usage telemetry.
 
@@ -185,10 +194,10 @@ and unused collection.
 ## Documentation
 
 - [Usage guide](docs/usage.md) — first scans, report evidence, findings, CI gates, state, and fleets
-- [Validation and dogfooding](docs/validation.md) — what is proven and what still needs field evidence
+- [Validation status](docs/validation.md) — tested paths and current limits
 - [Architecture](docs/architecture.md) — backend contract, data model, safety properties, and limits
 - [Best practices](docs/best-practices.md) — rollout order, alert context, and routing
-- [MSSP guide](docs/mssp.md) — secrets, redaction, retention, sizing, and tenant failure handling
+- [MSSP guide](docs/mssp.md) — secrets, redaction, scheduling, and tenant failure handling
 - [Detections that run but can't see](https://alephnull-sh.github.io/deadair/) — the problem and a reproducible simulation
 
 ## Contributing

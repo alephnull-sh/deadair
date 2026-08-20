@@ -2,10 +2,13 @@ package elastic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -80,6 +83,33 @@ func TestRuleMetadataParsing(t *testing.T) {
 	}
 }
 
+func TestRulesParsesDirectESQLSources(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/detection_engine/rules/_find", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"page":1,"perPage":100,"total":1,"data":[{
+			"id":"saved-esql","rule_id":"logical-esql","name":"ESQL rule","enabled":true,
+			"type":"esql","query":"FROM logs-endpoint.events.*, archive:audit-* | WHERE true"
+		}]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	rules, err := (&Client{ESURL: srv.URL, KibanaURL: srv.URL}).Rules(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("rules = %+v, want one", rules)
+	}
+	rule := rules[0]
+	if got := fmt.Sprint(rule.Patterns); got != "[logs-endpoint.events.* archive:audit-*]" {
+		t.Fatalf("ES|QL patterns = %s", got)
+	}
+	if rule.InputStatus != "" || rule.ID != "logical-esql" || rule.BackendObjectID != "saved-esql" {
+		t.Fatalf("ES|QL rule = %+v", rule)
+	}
+}
+
 func TestParseRuleFile(t *testing.T) {
 	// ndjson export with a metadata line, enabled:false forced to true
 	rules, err := ParseRuleFile([]byte(`
@@ -116,6 +146,87 @@ func TestParseRuleFile(t *testing.T) {
 	if _, err := ParseRuleFile([]byte("  ")); err == nil {
 		t.Fatal("empty file must error")
 	}
+	if _, err := ParseRuleFile([]byte(`[
+		{"rule_id":"duplicate","name":"First","index":["logs-a-*"]},
+		{"rule_id":"duplicate","name":"Second","index":["logs-b-*"]}
+	]`)); err == nil || !strings.Contains(err.Error(), "duplicate rule ID") {
+		t.Fatalf("duplicate candidate IDs error = %v", err)
+	}
+}
+
+func TestParseRuleFileRejectsMalformedObjectsInMixedBatches(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			name: "array",
+			data: `[
+				{"rule_id":"valid","name":"Valid","index":["logs-*"]},
+				{"severity":"high","index":["audit-*"]}
+			]`,
+			want: "array element 2",
+		},
+		{
+			name: "ndjson after valid export details",
+			data: `{"rule_id":"valid","name":"Valid","index":["logs-*"]}
+{"exported_count":1,"exported_rules_count":1,"missing_rules":[],"missing_rules_count":0,"exported_exception_list_count":0,"exported_exception_list_item_count":0,"missing_exception_list_item_count":0,"missing_exception_list_items":[],"missing_exception_lists":[],"missing_exception_lists_count":0}
+{"severity":"low","index":["audit-*"]}`,
+			want: "line 3",
+		},
+		{
+			name: "export-like object with unknown key",
+			data: `{"rule_id":"valid","name":"Valid","index":["logs-*"]}
+{"exported_count":1,"unexpected":true}`,
+			want: "line 2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseRuleFile([]byte(tt.data))
+			if err == nil || !strings.Contains(err.Error(), tt.want) ||
+				!strings.Contains(err.Error(), "no name, rule_id, or id") {
+				t.Fatalf("ParseRuleFile() error = %v, want malformed candidate at %s", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseRuleFileESQLSources(t *testing.T) {
+	rules, err := ParseRuleFile([]byte(`{
+		"rule_id":"candidate-esql",
+		"name":"Candidate ES|QL",
+		"type":"esql",
+		"query":"FROM logs-*, auditbeat-*, archive:logs-* METADATA _id | LIMIT 10"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || fmt.Sprint(rules[0].Patterns) != "[logs-* auditbeat-* archive:logs-*]" || rules[0].InputStatus != "" {
+		t.Fatalf("candidate ES|QL rule = %+v", rules)
+	}
+}
+
+func TestESQLUnsupportedSourceProvenance(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "row", query: "ROW value = 1"},
+		{name: "subquery", query: "FROM (FROM logs-* | LIMIT 1) | LIMIT 10"},
+		{name: "dynamic", query: "FROM ?source | LIMIT 10"},
+		{name: "invalid", query: "FROM logs-*, | LIMIT 10"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule := (ruleJSON{ID: tt.name, Type: "esql", Query: tt.query}).toRule()
+			if len(rule.Patterns) != 0 || rule.InputStatus != backend.ResolutionUnsupported || !strings.Contains(rule.InputDetail, "ES|QL") {
+				t.Fatalf("rule = %+v, want unsupported ES|QL provenance", rule)
+			}
+		})
+	}
 }
 
 func TestIngestLagMeasurement(t *testing.T) {
@@ -128,19 +239,62 @@ func TestIngestLagMeasurement(t *testing.T) {
 		fmt.Fprint(w, `[{"index":".ds-logs-app-default-2026.07.01-000001","docs.count":"5","store.size":"10"}]`)
 	})
 	mux.HandleFunc("/logs-app-default/_search", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"aggregations":{"latest":{"value":%d},"ingested":{"value":%d}}}`,
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), `"aggs"`) || !strings.Contains(string(body), `"size":500`) {
+			t.Errorf("lag request must use paired hits, not independent aggregations: %s", body)
+		}
+		fmt.Fprintf(w, `{"hits":{"hits":[
+			{"fields":{"@timestamp":[%d],"event.ingested":[%d]}},
+			{"fields":{"@timestamp":[%d],"event.ingested":[%d]}}
+		]}}`, now.UnixMilli(), now.Add(10*time.Minute).UnixMilli(),
 			now.UnixMilli(), now.Add(30*time.Minute).UnixMilli())
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c := &Client{ESURL: srv.URL, KibanaURL: srv.URL, MeasureLag: true}
+	c := &Client{ESURL: srv.URL, KibanaURL: srv.URL}
 	sources, err := c.Sources(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sources[0].IngestLag == nil || *sources[0].IngestLag != 30*time.Minute {
-		t.Fatalf("ingest lag = %v, want 30m", sources[0].IngestLag)
+	evidenceBySource, err := c.IngestLagEvidence(context.Background(), sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := evidenceBySource[sources[0].Name]
+	if evidence.Status != backend.EvidenceAssessed || evidence.SampleCount != 2 ||
+		evidence.P95 != 30*time.Minute || evidence.Max != 30*time.Minute ||
+		evidence.Method != "paired-recent-events" {
+		t.Fatalf("ingest lag = %+v, want assessed paired sample with p95/max 30m", evidence)
+	}
+}
+
+func TestSourcesDoesNotSampleLagByDefault(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	var searches atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_data_stream/_stats", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"data_streams":[{"data_stream":"logs-app-default","store_size_bytes":10,"maximum_timestamp":%d}]}`, now.UnixMilli())
+	})
+	mux.HandleFunc("/_cat/indices", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"index":".ds-logs-app-default-2026.07.01-000001","docs.count":"5","store.size":"10"}]`)
+	})
+	mux.HandleFunc("/logs-app-default/_search", func(w http.ResponseWriter, r *http.Request) {
+		searches.Add(1)
+		fmt.Fprint(w, `{"hits":{"hits":[]}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := &Client{ESURL: srv.URL, KibanaURL: srv.URL}
+	if _, err := c.Sources(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := searches.Load(); got != 0 {
+		t.Fatalf("Sources issued %d lag search(es); readiness inventory must stay cheap", got)
 	}
 }
 
@@ -190,6 +344,11 @@ func TestRulesDataViewResolution(t *testing.T) {
 }
 
 func TestRuleInputProvenance(t *testing.T) {
+	identity := (ruleJSON{ID: "saved-object-1", RuleID: "logical-rule-1", Name: "Identity"}).toRule()
+	if identity.ID != "logical-rule-1" || identity.BackendObjectID != "saved-object-1" {
+		t.Fatalf("rule identity = %q/%q, want logical-rule-1/saved-object-1", identity.ID, identity.BackendObjectID)
+	}
+
 	unsupported := (ruleJSON{ID: "esql", Type: "esql"}).toRule()
 	if unsupported.RuleType != "esql" || unsupported.InputStatus != backend.ResolutionUnsupported || unsupported.InputDetail == "" {
 		t.Fatalf("query-derived rule provenance = %+v", unsupported)
@@ -198,6 +357,16 @@ func TestRuleInputProvenance(t *testing.T) {
 	ambiguous := (ruleJSON{ID: "both", Type: "query", Index: []string{"logs-*"}, DataViewID: "dv"}).toRule()
 	if ambiguous.InputStatus != backend.ResolutionAmbiguous || len(ambiguous.Patterns) != 1 {
 		t.Fatalf("ambiguous rule provenance = %+v", ambiguous)
+	}
+
+	for _, rule := range []ruleJSON{
+		{ID: "esql-index", Type: "esql", Query: "FROM audit-* | LIMIT 10", Index: []string{"logs-*"}},
+		{ID: "esql-data-view", Type: "esql", Query: "FROM audit-* | LIMIT 10", DataViewID: "dv"},
+	} {
+		got := rule.toRule()
+		if got.InputStatus != backend.ResolutionAmbiguous || got.InputDetail == "" {
+			t.Fatalf("ES|QL dual source provenance = %+v, want ambiguous", got)
+		}
 	}
 }
 
@@ -302,6 +471,63 @@ func TestResolveInputs(t *testing.T) {
 	}
 	if requestCount != 5 || paths["/_resolve/index/logs-%2A%2C-logs-old-%2A"] != 1 {
 		t.Errorf("resolve paths = %v, want escaped ordered local expression and no metadata request", paths)
+	}
+}
+
+func TestResolveInputsAddsPerSelectorDiagnosticsWithExclusions(t *testing.T) {
+	var mu sync.Mutex
+	requests := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expression := r.URL.Path[len("/_resolve/index/"):]
+		mu.Lock()
+		requests[expression]++
+		mu.Unlock()
+		switch expression {
+		case "logs-legacy-*,logs-current-*,-logs-old-*":
+			fmt.Fprint(w, `{"indices":[{"name":"logs-current-default"}]}`)
+		case "logs-legacy-*,-logs-old-*":
+			fmt.Fprint(w, `{}`)
+		case "logs-current-*,-logs-old-*":
+			fmt.Fprint(w, `{"indices":[{"name":"logs-current-default"}]}`)
+		default:
+			http.Error(w, "unexpected expression "+expression, http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	rules := []backend.Rule{
+		{ID: "migration", Patterns: []string{"logs-legacy-*", "logs-current-*", "-logs-old-*"}},
+		{ID: "duplicate", Patterns: []string{"logs-legacy-*", "logs-current-*", "-logs-old-*"}},
+	}
+	got, err := (&Client{ESURL: srv.URL, KibanaURL: srv.URL}).ResolveInputs(context.Background(), rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 6 {
+		t.Fatalf("resolutions = %d, want authoritative plus two diagnostics per rule: %+v", len(got), got)
+	}
+	for offset := 0; offset < len(got); offset += 3 {
+		if got[offset].Diagnostic || got[offset].Status != backend.ResolutionResolved {
+			t.Errorf("authoritative resolution = %+v", got[offset])
+		}
+		if !got[offset+1].Diagnostic || got[offset+1].Selector != "logs-legacy-*" ||
+			got[offset+1].Expression != "logs-legacy-*,-logs-old-*" || got[offset+1].Status != backend.ResolutionEmpty {
+			t.Errorf("legacy diagnostic = %+v", got[offset+1])
+		}
+		if !got[offset+2].Diagnostic || got[offset+2].Selector != "logs-current-*" ||
+			got[offset+2].Expression != "logs-current-*,-logs-old-*" || got[offset+2].Status != backend.ResolutionResolved {
+			t.Errorf("current diagnostic = %+v", got[offset+2])
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 3 {
+		t.Fatalf("native expressions were not deduplicated: %v", requests)
+	}
+	for expression, count := range requests {
+		if count != 1 {
+			t.Errorf("expression %q requested %d times, want once", expression, count)
+		}
 	}
 }
 
@@ -616,6 +842,139 @@ func TestSchemasToleratesPerSourceFailure(t *testing.T) {
 	}
 	if _, ok := schemas["logs-broken"]; ok {
 		t.Fatal("broken source must be absent from the result (reports unknown)")
+	}
+}
+
+func TestRequiredFieldEvidenceIsTargetedAndPerSource(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/logs-good/_field_caps", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if got := r.URL.Query().Get("fields"); got != "" {
+			t.Errorf("URL fields = %q, want request body", got)
+		}
+		if got := r.URL.Query().Get("include_unmapped"); got != "true" {
+			t.Errorf("include_unmapped = %q, want true", got)
+		}
+		var request struct {
+			Fields []string `json:"fields"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decoding field_caps body: %v", err)
+		}
+		if got := strings.Join(request.Fields, ","); got != "host.name,process.name" {
+			t.Errorf("body fields = %q, want only declared fields", got)
+		}
+		fmt.Fprint(w, `{"fields":{"process.name":{"keyword":{"searchable":true}}}}`)
+	})
+	mux.HandleFunc("/logs-broken/_field_caps", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := &Client{ESURL: srv.URL, KibanaURL: srv.URL}
+	evidence, err := c.RequiredFieldEvidence(context.Background(), []backend.Source{{Name: "logs-good"}, {Name: "logs-broken"}}, []string{"process.name", "host.name"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence["logs-good"].Status != backend.EvidenceAssessed || !evidence["logs-good"].Fields["process.name"] || evidence["logs-good"].Fields["host.name"] {
+		t.Fatalf("good evidence = %+v", evidence["logs-good"])
+	}
+	if evidence["logs-broken"].Status != backend.EvidenceIncomplete {
+		t.Fatalf("broken evidence = %+v, want incomplete", evidence["logs-broken"])
+	}
+}
+
+func TestRequiredFieldEvidenceKeepsLargeFieldListOutOfURL(t *testing.T) {
+	fields := make([]string, 600)
+	for i := range fields {
+		fields[i] = fmt.Sprintf("very.long.required.field.%04d", i)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/logs-large/_field_caps", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if got := r.URL.Query().Get("fields"); got != "" {
+			t.Errorf("large field list leaked into URL: %d bytes", len(got))
+		}
+		if got := r.URL.Query().Get("include_unmapped"); got != "true" {
+			t.Errorf("include_unmapped = %q, want true", got)
+		}
+		var request struct {
+			Fields []string `json:"fields"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decoding field_caps body: %v", err)
+		}
+		if len(request.Fields) != len(fields) {
+			t.Errorf("body field count = %d, want %d", len(request.Fields), len(fields))
+		} else {
+			for i := range fields {
+				if request.Fields[i] != fields[i] {
+					t.Errorf("body field %d = %q, want %q", i, request.Fields[i], fields[i])
+					break
+				}
+			}
+		}
+		fmt.Fprint(w, `{"fields":{}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := &Client{ESURL: srv.URL, KibanaURL: srv.URL}
+	evidence, err := c.RequiredFieldEvidence(context.Background(), []backend.Source{{Name: "logs-large"}}, fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := evidence["logs-large"].Status; got != backend.EvidenceAssessed {
+		t.Fatalf("evidence status = %q, want assessed", got)
+	}
+}
+
+func TestRequiredFieldEvidenceRejectsBackingIndexGaps(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/logs-mixed/_field_caps", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("include_unmapped"); got != "true" {
+			t.Errorf("include_unmapped = %q, want true", got)
+		}
+		fmt.Fprint(w, `{
+			"fields": {
+				"event.code": {"keyword": {"searchable": true}},
+				"host.name": {"keyword": {
+					"searchable": false,
+					"non_searchable_indices": [".ds-logs-mixed-000002"]
+				}},
+				"process.name": {
+					"keyword": {"searchable": true},
+					"unmapped": {"searchable": false, "indices": [".ds-logs-mixed-000003"]}
+				}
+			}
+		}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := &Client{ESURL: srv.URL, KibanaURL: srv.URL}
+	evidence, err := c.RequiredFieldEvidence(context.Background(), []backend.Source{{Name: "logs-mixed"}}, []string{"process.name", "host.name", "event.code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := evidence["logs-mixed"]
+	if got.Status != backend.EvidenceAssessed {
+		t.Fatalf("evidence status = %q, want assessed", got.Status)
+	}
+	if !got.Fields["event.code"] {
+		t.Fatalf("fully searchable field was marked unavailable: %+v", got.Fields)
+	}
+	if got.Fields["host.name"] {
+		t.Fatalf("non-searchable backing index was hidden: %+v", got.Fields)
+	}
+	if got.Fields["process.name"] {
+		t.Fatalf("unmapped backing index was hidden: %+v", got.Fields)
 	}
 }
 

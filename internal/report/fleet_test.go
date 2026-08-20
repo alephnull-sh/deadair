@@ -2,7 +2,10 @@ package report
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,6 +20,7 @@ func fleetFixture() *FleetReport {
 	}
 	a.DeadDetections = []DeadDetection{{ID: "1", Name: "Shared dead rule", Severity: "high", Reason: "disconnected"}}
 	a.Summary.DeadDetections = 1
+	a.Summary.PartialInputs = 1
 	a.Summary.UnusedTelemetryAssessment = UnusedAssessmentComplete
 	b := &Report{
 		SchemaVersion:   ReportSchemaVersion,
@@ -41,7 +45,7 @@ func TestBuildFleetRollups(t *testing.T) {
 	if f.Instances[0].BackendMetadata.ObservedVersion != "8.17.4" || f.Instances[1].BackendMetadata.ObservedVersion != "2.19.3" {
 		t.Fatalf("fleet changed nested backend metadata: %+v", f.Instances)
 	}
-	if f.Summary.Instances != 2 || f.Summary.DeadDetections != 2 || f.Summary.ImpairedDetections != 1 ||
+	if f.Summary.Instances != 2 || f.Summary.DeadDetections != 2 || f.Summary.ImpairedDetections != 1 || f.Summary.PartialInputs != 1 ||
 		f.Summary.UnusedTelemetryAssessment != UnusedAssessmentComplete {
 		t.Fatalf("summary = %+v", f.Summary)
 	}
@@ -120,7 +124,7 @@ func TestFleetCandidateExitCodeIgnoresUnrelatedSourceFindings(t *testing.T) {
 
 func TestFleetRedactHidesInstanceNames(t *testing.T) {
 	f := fleetFixture()
-	f.Errors = []InstanceError{{Instance: "client-charlie", Error: "refused"}}
+	f.Errors = []InstanceError{{Instance: "client-charlie", Error: "dial tcp 10.20.30.40:9200: connection refused"}}
 	wantProducer := f.Producer
 	wantMetadata := []BackendMetadata{f.Instances[0].BackendMetadata, f.Instances[1].BackendMetadata}
 	f.Redact()
@@ -131,9 +135,39 @@ func TestFleetRedactHidesInstanceNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, leak := range []string{"tenant-a", "tenant-b", "client-charlie", "Shared dead rule"} {
+	for _, leak := range []string{"tenant-a", "tenant-b", "client-charlie", "Shared dead rule", "10.20.30.40", "9200"} {
 		if strings.Contains(string(data), leak) {
 			t.Errorf("redacted fleet report leaks %q", leak)
 		}
+	}
+	if f.Redaction == nil || f.Redaction.KeyID == "" || f.Errors[0].Error != "connection failed" {
+		t.Fatalf("redacted fleet metadata/errors = %+v / %+v", f.Redaction, f.Errors)
+	}
+}
+
+func TestSanitizeScanErrorPrefersAuthorizationFor403APIKeyFailures(t *testing.T) {
+	detail := `status 403: action [indices:data/read/search] is unauthorized for API key id [secret]`
+	if got := SanitizeScanError(detail); got != "authorization failed" {
+		t.Fatalf("sanitized 403 = %q, want authorization failed", got)
+	}
+}
+
+func TestFleetWriteReplacesPermissiveFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not enforced on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "fleet.json")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fleetFixture().Write(path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("fleet report mode = %o, want 0600", got)
 	}
 }

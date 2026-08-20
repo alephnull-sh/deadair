@@ -154,7 +154,7 @@ func backendMetadata(name, observedVersion string) BackendMetadata {
 			statuses[capability] = CapabilitySupported
 		}
 		statuses[CapabilitySourceResolution] = CapabilityPartial
-		details[CapabilitySourceResolution] = "index selectors, aliases, data streams, and data views; query-derived and ML inputs are reported unsupported"
+		details[CapabilitySourceResolution] = "index selectors, aliases, data streams, data views, and direct ES|QL FROM; dynamic ES|QL and ML inputs are reported unsupported"
 		statuses[CapabilityRemote] = CapabilityListedOnly
 		details[CapabilityRemote] = "remote inputs are listed but not evaluated"
 	case "opensearch":
@@ -169,16 +169,16 @@ func backendMetadata(name, observedVersion string) BackendMetadata {
 		} {
 			statuses[capability] = CapabilitySupported
 		}
+		statuses[CapabilityCandidateParsing] = CapabilitySupported
 		for _, capability := range []string{
 			CapabilityRequiredFields,
 			CapabilityIngestLag,
-			CapabilityCandidateParsing,
 		} {
 			statuses[capability] = CapabilityUnavailable
 		}
 		details[CapabilityRequiredFields] = "detector metadata does not expose required fields"
 		details[CapabilityIngestLag] = "ingest lag is not measured by this backend"
-		details[CapabilityCandidateParsing] = "candidate rule files are not parsed by this backend"
+		details[CapabilityCandidateParsing] = "Security Analytics detector API objects can be assessed without installation"
 		statuses[CapabilityRemote] = CapabilityListedOnly
 		details[CapabilityRemote] = "remote inputs are listed but not evaluated"
 	default:

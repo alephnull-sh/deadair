@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
@@ -37,8 +39,56 @@ type instanceSpec struct {
 
 // fleetInstance is one resolved scan target.
 type fleetInstance struct {
-	name    string
-	backend backendpkg.Backend
+	name     string
+	targetID string
+	backend  backendpkg.Backend
+}
+
+func backendTargetID(backendName string, parts ...string) string {
+	h := sha256.New()
+	h.Write([]byte(strings.ToLower(strings.TrimSpace(backendName))))
+	for _, part := range parts {
+		h.Write([]byte{0})
+		h.Write([]byte(canonicalTargetPart(part)))
+	}
+	return fmt.Sprintf("target-%x", h.Sum(nil)[:10])
+}
+
+func canonicalTargetPart(part string) string {
+	part = strings.TrimRight(strings.TrimSpace(part), "/")
+	parsed, err := url.Parse(part)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return part
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	return strings.TrimRight(parsed.String(), "/")
+}
+
+func assessmentConfigurationID(o connOpts) (string, error) {
+	h := sha256.New()
+	fmt.Fprintf(h, "max-stale=%s\nstateful=%t\nschema=%t\nvolume-warmup=%s\nvolume-hysteresis=%d\nvolume-min-samples=%d\nvolume-z-threshold=%g\n",
+		o.maxStale, o.stateFile != "", o.schemaTrack, o.volumeWarmup, o.volumeHysteresis, o.volumeMinSamples, o.volumeZThreshold)
+	for _, item := range []struct {
+		name string
+		path string
+	}{{"downtime", o.downtimeFile}, {"policy", o.policyFile}} {
+		fmt.Fprintf(h, "%s=", item.name)
+		if item.path == "" {
+			h.Write([]byte("none\n"))
+			continue
+		}
+		data, err := os.ReadFile(item.path)
+		if err != nil {
+			return "", fmt.Errorf("reading %s file for scan identity: %w", item.name, err)
+		}
+		digest := sha256.Sum256(data)
+		fmt.Fprintf(h, "%x\n", digest[:])
+	}
+	return fmt.Sprintf("config-%x", h.Sum(nil)[:10]), nil
 }
 
 func (s instanceSpec) secret(env, file, label string) (string, error) {
@@ -70,10 +120,9 @@ func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
 		if err != nil {
 			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
 		}
-		return fleetInstance{name: s.Name, backend: &elastic.Client{
+		return fleetInstance{name: s.Name, targetID: backendTargetID("elastic", s.ESURL, s.KibanaURL, s.Space), backend: &elastic.Client{
 			ESURL: s.ESURL, KibanaURL: s.KibanaURL, APIKey: key, Space: s.Space,
 			HTTP: hc, Concurrency: o.concurrency,
-			MeasureLag: o.stateFile != "",
 		}}, nil
 	case "opensearch":
 		if s.OpenSearchURL == "" {
@@ -87,7 +136,7 @@ func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
 		if err != nil {
 			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
 		}
-		return fleetInstance{name: s.Name, backend: &opensearch.Client{
+		return fleetInstance{name: s.Name, targetID: backendTargetID("opensearch", s.OpenSearchURL), backend: &opensearch.Client{
 			URL: s.OpenSearchURL, Username: s.Username, Password: password, APIKey: key,
 			HTTP: hc, Concurrency: o.concurrency,
 		}}, nil
@@ -108,7 +157,14 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 		if name == "" {
 			name = c.Name()
 		}
-		return []fleetInstance{{name: name, backend: c}}, nil
+		targetID := ""
+		switch c.Name() {
+		case "elastic":
+			targetID = backendTargetID(c.Name(), o.esURL, o.kibanaURL, o.kibanaSpace)
+		case "opensearch":
+			targetID = backendTargetID(c.Name(), o.opensearchURL)
+		}
+		return []fleetInstance{{name: name, targetID: targetID, backend: c}}, nil
 	}
 	data, err := os.ReadFile(o.fleetFile)
 	if err != nil {
@@ -122,10 +178,16 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 		return nil, fmt.Errorf("fleet file lists no instances")
 	}
 	if o.ruleFile != "" {
+		backends := map[string]bool{}
 		for _, s := range cfg.Instances {
-			if strings.EqualFold(strings.TrimSpace(s.Backend), "opensearch") {
-				return nil, fmt.Errorf("--rule cannot scan fleet instance %q: candidate rules currently require Elastic", s.Name)
+			name := strings.ToLower(strings.TrimSpace(s.Backend))
+			if name == "" {
+				name = "elastic"
 			}
+			backends[name] = true
+		}
+		if len(backends) > 1 {
+			return nil, fmt.Errorf("--rule cannot scan a mixed-backend fleet because candidate file formats are backend-specific")
 		}
 	}
 	out := make([]fleetInstance, 0, len(cfg.Instances))
