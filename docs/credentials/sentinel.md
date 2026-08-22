@@ -25,15 +25,10 @@ and Content Hub enrichment.
 
 ## What has been tested
 
-A recorded UK South lab pass used a workspace-scoped custom role limited to the read and query
-operations listed below. It covered local and mapped-remote tables, literal watchlists, bounded
-native-ASIM `PartialError` handling, saved functions, predicate-qualified freshness, summary
-lineage, a successful `LASummaryLogs` execution, and the matching Basic-source to Analytics-output
-bin. Positive native-ASIM resolution remains fixture-tested. Rule deletion, table deletion, and
-shared-key retrieval all returned `403`.
-
-The test did not prove a positive installed Content Hub package association. It is opt-in and does
-not run in scheduled CI.
+The disposable UK South lab used a workspace-scoped custom role limited to the read and query
+operations below. Rule deletion, table deletion, and shared-key retrieval all returned `403`. The
+[validation record](../validation.md#sentinel-live-conformance) lists the exact live and contract
+coverage.
 
 ## Assign the roles
 

@@ -50,7 +50,7 @@ const (
 	sentinelWatchlistAlias      = "PrivilegedAccounts"
 	sentinelRemoteTable         = "RegionalRemoteAccess_CL"
 	sentinelSummaryRule         = "firewall-deny-summary"
-	sentinelSummaryDisplay      = "[lab] Summarize denied firewall connections"
+	sentinelSummaryDisplay      = "Summarize denied firewall connections"
 	sentinelSummaryTable        = "FirewallDenySummary_CL"
 	sentinelWatchlistRuleID     = "79911111-1111-4111-8111-111111111111"
 	sentinelASIMRuleID          = "79922222-2222-4222-8222-222222222222"
@@ -842,7 +842,7 @@ func containsSentinelString(values []string, expected string) bool {
 func assertSentinelRuleInventory(t *testing.T, rules map[string]backend.Rule, remoteWorkspace string) {
 	t.Helper()
 	scheduled := requireSentinelRule(t, rules, sentinelFreshRuleID)
-	if scheduled.RuleType != "scheduled" || scheduled.Name != "[lab] Suspicious interactive sign-in" ||
+	if scheduled.RuleType != "scheduled" || scheduled.Name != "Suspicious interactive sign-in" ||
 		fmt.Sprint(scheduled.Patterns) != "["+sentinelFreshTable+"]" {
 		t.Errorf("scheduled rule = %+v", scheduled)
 	}
@@ -850,13 +850,13 @@ func assertSentinelRuleInventory(t *testing.T, rules map[string]backend.Rule, re
 		id   string
 		name string
 	}{
-		{sentinelStaleRuleID, "[lab] VPN password spray"},
-		{sentinelLagRuleID, "[lab] Cloud sign-in impossible travel"},
-		{sentinelMissingRuleID, "[lab] Partner SSO telemetry missing"},
-		{sentinelPartialRuleID, "[lab] Sign-ins across primary and partner IdPs"},
-		{sentinelLetJoinRuleID, "[lab] Interactive sign-in followed by cloud app access"},
-		{sentinelAuxiliaryRuleID, "[lab] Privileged identity operations in archive"},
-		{sentinelEmptyAnalyticsID, "[lab] Cloud audit activity stopped"},
+		{sentinelStaleRuleID, "VPN password spray"},
+		{sentinelLagRuleID, "Cloud sign-in impossible travel"},
+		{sentinelMissingRuleID, "Partner SSO telemetry missing"},
+		{sentinelPartialRuleID, "Sign-ins across primary and partner IdPs"},
+		{sentinelLetJoinRuleID, "Interactive sign-in followed by cloud app access"},
+		{sentinelAuxiliaryRuleID, "Privileged identity operations in archive"},
+		{sentinelEmptyAnalyticsID, "Cloud audit activity stopped"},
 	} {
 		if rule := requireSentinelRule(t, rules, expected.id); rule.Name != expected.name {
 			t.Errorf("rule %s name = %q, want %q", expected.id, rule.Name, expected.name)
@@ -865,15 +865,15 @@ func assertSentinelRuleInventory(t *testing.T, rules map[string]backend.Rule, re
 	nrt := requireSentinelRule(t, rules, sentinelNRTRuleID)
 	if nrt.RuleType != "nrt" || nrt.Interval != time.Minute || nrt.Lookback != time.Minute ||
 		nrt.TimestampOverride != "ingestion_time()" || nrt.Enabled ||
-		nrt.Name != "[lab] Suspicious interactive sign-in (NRT)" || nrt.Severity != "low" {
+		nrt.Name != "Suspicious interactive sign-in (NRT)" || nrt.Severity != "low" {
 		t.Errorf("NRT rule = %+v", nrt)
 	}
 	for _, expected := range []struct {
 		id   string
 		name string
 	}{
-		{sentinelFunctionBareID, "[lab] Recent identity sign-ins via saved function"},
-		{sentinelFunctionCallID, "[lab] Recent identity sign-ins via function call"},
+		{sentinelFunctionBareID, "Recent identity sign-ins via saved function"},
+		{sentinelFunctionCallID, "Recent identity sign-ins via function call"},
 	} {
 		function := requireSentinelRule(t, rules, expected.id)
 		if function.Name != expected.name || fmt.Sprint(function.Patterns) != "["+sentinelFreshTable+"]" || function.InputStatus != "" {
@@ -881,12 +881,12 @@ func assertSentinelRuleInventory(t *testing.T, rules map[string]backend.Rule, re
 		}
 	}
 	parameterized := requireSentinelRule(t, rules, sentinelParameterizedID)
-	if parameterized.Name != "[lab] High-risk account sign-in" ||
+	if parameterized.Name != "High-risk account sign-in" ||
 		fmt.Sprint(parameterized.Patterns) != "["+sentinelFreshTable+"]" || parameterized.InputStatus != "" {
 		t.Errorf("parameterized function rule = %+v, want resolved %s input", parameterized, sentinelFreshTable)
 	}
 	predicate := requireSentinelRule(t, rules, sentinelPredicateRuleID)
-	if predicate.RuleType != "scheduled" || !predicate.Enabled || predicate.Name != "[lab] Palo Alto firewall telemetry stopped" ||
+	if predicate.RuleType != "scheduled" || !predicate.Enabled || predicate.Name != "Palo Alto firewall telemetry stopped" ||
 		predicate.Interval != 5*time.Minute || predicate.Lookback != 3*time.Hour ||
 		fmt.Sprint(predicate.Patterns) != "["+sentinelNetworkTable+"]" || len(predicate.PredicateFreshness) != 1 {
 		t.Errorf("predicate freshness rule = %+v", predicate)
@@ -911,27 +911,27 @@ func assertSentinelRuleInventory(t *testing.T, rules map[string]backend.Rule, re
 		}
 		return rule
 	}
-	watchlist := assertExpansion(sentinelWatchlistRuleID, "[lab] Privileged account activity")
+	watchlist := assertExpansion(sentinelWatchlistRuleID, "Privileged account activity")
 	if len(watchlist.Dependencies) != 1 || watchlist.InputStatus != "" ||
 		watchlist.Dependencies[0].Kind != "sentinel_watchlist" ||
 		watchlist.Dependencies[0].Name != sentinelWatchlistAlias || !watchlist.Dependencies[0].Required {
 		t.Errorf("watchlist expansion inventory = %+v", watchlist)
 	}
-	asim := assertExpansion(sentinelASIMRuleID, "[lab] ASIM authentication activity")
+	asim := assertExpansion(sentinelASIMRuleID, "ASIM authentication activity")
 	if len(asim.Dependencies) != 1 || asim.InputStatus != "" ||
 		asim.Dependencies[0].Kind != "sentinel_asim_parser" || asim.Dependencies[0].Name != "_Im_Authentication" ||
 		asim.Dependencies[0].Expression != `_Im_Authentication(starttime=ago(1d),endtime=now())` ||
 		!asim.Dependencies[0].Required {
 		t.Errorf("ASIM expansion inventory = %+v", asim)
 	}
-	remote := assertExpansion(sentinelRemoteRuleID, "[lab] Regional VPN authentication")
+	remote := assertExpansion(sentinelRemoteRuleID, "Regional VPN authentication")
 	if len(remote.Dependencies) != 1 || remote.InputStatus != "" ||
 		remote.Dependencies[0].Kind != "sentinel_workspace_table" || remote.Dependencies[0].Name != sentinelRemoteTable ||
 		remote.Dependencies[0].Scope != remoteWorkspace || !remote.Dependencies[0].Monitorable ||
 		!remote.Dependencies[0].Required {
 		t.Errorf("remote expansion inventory = %+v", remote)
 	}
-	summaryConsumer := assertExpansion(sentinelSummaryRuleID, "[lab] Firewall deny volume from summary data")
+	summaryConsumer := assertExpansion(sentinelSummaryRuleID, "Firewall deny volume from summary data")
 	if summaryConsumer.InputStatus != "" || fmt.Sprint(summaryConsumer.Patterns) != "["+sentinelSummaryTable+"]" {
 		t.Errorf("summary-consumer expansion inventory = %+v", summaryConsumer)
 	}

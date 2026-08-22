@@ -201,7 +201,6 @@ only an exact, successful `SentinelHealth` record matching that rule identity, r
 latest rule change and within the rule's expected run cadence plus Microsoft's scheduling delay.
 It does not generalize that evidence to another rule or workspace. Candidate rules and absent,
 old, ambiguous, mismatched, or non-successful health records remain unassessed.
-This corroboration path is fixture-tested and has not yet been observed in the live Sentinel lab.
 deadair does not separately identify tenant boundaries; Azure Lighthouse and other cross-tenant
 topologies have not been live-validated. See Microsoft's
 [analytics-rule access model](https://learn.microsoft.com/en-us/azure/sentinel/threat-detection#access-permissions-for-analytics-rules)
@@ -211,8 +210,8 @@ These runtime tables are opt-in. `_SentinelHealth()` requires Sentinel auditing 
 monitoring to be enabled. `LASummaryLogs` requires the summary-rule diagnostic setting and does not
 contain rows until summary events have been emitted. The live lab produced a successful
 `LASummaryLogs` run and matched its 20-minute Analytics output to the Basic source rows from the
-same bin. It did not exercise `SentinelHealth`; that path still has fixture coverage only. A
-missing table or row stays unavailable or incomplete and never creates a finding or gate. The
+same bin; contract tests cover the exact `SentinelHealth` matching path. A missing table or row stays
+unavailable or incomplete and never creates a finding or gate. The
 existing Logs query permission is enough unless
 the workspace uses table-level RBAC; in that case, the custom role also needs
 `Microsoft.OperationalInsights/workspaces/query/SentinelHealth/read` and

@@ -29,11 +29,11 @@ parameterized_function_body='WorkforceSignIn_CL | where UserPrincipalName == use
 parameterized_function_parameters=userPrincipalName:string
 
 nrt_rule_id=78888888-8888-4888-8888-888888888888
-nrt_display='[lab] Suspicious interactive sign-in (NRT)'
+nrt_display='Suspicious interactive sign-in (NRT)'
 nrt_query='WorkforceSignIn_CL | where TimeGenerated < datetime(1900-01-01)'
 
 predicate_rule_id=77777777-7777-4777-8777-777777777777
-predicate_rule_display='[lab] Palo Alto firewall telemetry stopped'
+predicate_rule_display='Palo Alto firewall telemetry stopped'
 predicate_rule_query="PerimeterSecurity_CL | where DeviceVendor == 'Palo Alto Networks' and DeviceProduct == 'PAN-OS' | project TimeGenerated, SessionId, DeviceVendor, DeviceProduct, SourceIpAddress, DestinationIpAddress, DestinationPort, DeviceAction"
 
 case "$mode" in
@@ -739,17 +739,17 @@ run_collision_preflight() {
 	preflight_function "$parameterized_function_id" "$parameterized_function" "$parameterized_function_body" "$parameterized_function_parameters"
 	preflight_dcr
 
-	preflight_scheduled_rule 11111111-1111-4111-8111-111111111111 '[lab] Suspicious interactive sign-in' PT5M PT30M 'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	preflight_scheduled_rule 22222222-2222-4222-8222-222222222222 '[lab] VPN password spray' PT5M PT30M 'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	preflight_scheduled_rule 33333333-3333-4333-8333-333333333333 '[lab] Cloud sign-in impossible travel' PT5M PT10M 'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
-	preflight_scheduled_rule 44444444-4444-4444-8444-444444444444 '[lab] Partner SSO telemetry missing' PT5M PT30M 'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
-	preflight_scheduled_rule 55555555-5555-4555-8555-555555555555 '[lab] Sign-ins across primary and partner IdPs' PT5M PT30M 'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	preflight_scheduled_rule 66666666-6666-4666-8666-666666666666 '[lab] Interactive sign-in followed by cloud app access' PT5M PT30M 'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	preflight_scheduled_rule 71111111-1111-4111-8111-111111111111 '[lab] Recent identity sign-ins via saved function' PT5M PT30M 'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
-	preflight_scheduled_rule 72222222-2222-4222-8222-222222222222 '[lab] Recent identity sign-ins via function call' PT5M PT30M 'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
-	preflight_scheduled_rule 73333333-3333-4333-8333-333333333333 '[lab] High-risk account sign-in' PT5M PT30M 'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
-	preflight_scheduled_rule 74444444-4444-4444-8444-444444444444 '[lab] Privileged identity operations in archive' PT5M PT30M 'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result'
-	preflight_scheduled_rule 76666666-6666-4666-8666-666666666666 '[lab] Cloud audit activity stopped' PT5M PT30M 'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName'
+	preflight_scheduled_rule 11111111-1111-4111-8111-111111111111 'Suspicious interactive sign-in' PT5M PT30M 'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	preflight_scheduled_rule 22222222-2222-4222-8222-222222222222 'VPN password spray' PT5M PT30M 'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	preflight_scheduled_rule 33333333-3333-4333-8333-333333333333 'Cloud sign-in impossible travel' PT5M PT10M 'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	preflight_scheduled_rule 44444444-4444-4444-8444-444444444444 'Partner SSO telemetry missing' PT5M PT30M 'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	preflight_scheduled_rule 55555555-5555-4555-8555-555555555555 'Sign-ins across primary and partner IdPs' PT5M PT30M 'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	preflight_scheduled_rule 66666666-6666-4666-8666-666666666666 'Interactive sign-in followed by cloud app access' PT5M PT30M 'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	preflight_scheduled_rule 71111111-1111-4111-8111-111111111111 'Recent identity sign-ins via saved function' PT5M PT30M 'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	preflight_scheduled_rule 72222222-2222-4222-8222-222222222222 'Recent identity sign-ins via function call' PT5M PT30M 'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	preflight_scheduled_rule 73333333-3333-4333-8333-333333333333 'High-risk account sign-in' PT5M PT30M 'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	preflight_scheduled_rule 74444444-4444-4444-8444-444444444444 'Privileged identity operations in archive' PT5M PT30M 'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result'
+	preflight_scheduled_rule 76666666-6666-4666-8666-666666666666 'Cloud audit activity stopped' PT5M PT30M 'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName'
 	preflight_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT3H "$predicate_rule_query"
 	preflight_nrt_rule
 
@@ -1280,17 +1280,17 @@ apply_fixtures() {
 	ensure_dcr
 	ingest_base_rows
 
-	ensure_scheduled_rule 11111111-1111-4111-8111-111111111111 '[lab] Suspicious interactive sign-in' PT5M PT30M 'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	ensure_scheduled_rule 22222222-2222-4222-8222-222222222222 '[lab] VPN password spray' PT5M PT30M 'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	ensure_scheduled_rule 33333333-3333-4333-8333-333333333333 '[lab] Cloud sign-in impossible travel' PT5M PT10M 'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
-	ensure_scheduled_rule 44444444-4444-4444-8444-444444444444 '[lab] Partner SSO telemetry missing' PT5M PT30M 'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
-	ensure_scheduled_rule 55555555-5555-4555-8555-555555555555 '[lab] Sign-ins across primary and partner IdPs' PT5M PT30M 'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	ensure_scheduled_rule 66666666-6666-4666-8666-666666666666 '[lab] Interactive sign-in followed by cloud app access' PT5M PT30M 'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	ensure_scheduled_rule 71111111-1111-4111-8111-111111111111 '[lab] Recent identity sign-ins via saved function' PT5M PT30M 'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
-	ensure_scheduled_rule 72222222-2222-4222-8222-222222222222 '[lab] Recent identity sign-ins via function call' PT5M PT30M 'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
-	ensure_scheduled_rule 73333333-3333-4333-8333-333333333333 '[lab] High-risk account sign-in' PT5M PT30M 'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
-	ensure_scheduled_rule 74444444-4444-4444-8444-444444444444 '[lab] Privileged identity operations in archive' PT5M PT30M 'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result'
-	ensure_scheduled_rule 76666666-6666-4666-8666-666666666666 '[lab] Cloud audit activity stopped' PT5M PT30M 'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName'
+	ensure_scheduled_rule 11111111-1111-4111-8111-111111111111 'Suspicious interactive sign-in' PT5M PT30M 'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	ensure_scheduled_rule 22222222-2222-4222-8222-222222222222 'VPN password spray' PT5M PT30M 'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	ensure_scheduled_rule 33333333-3333-4333-8333-333333333333 'Cloud sign-in impossible travel' PT5M PT10M 'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	ensure_scheduled_rule 44444444-4444-4444-8444-444444444444 'Partner SSO telemetry missing' PT5M PT30M 'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	ensure_scheduled_rule 55555555-5555-4555-8555-555555555555 'Sign-ins across primary and partner IdPs' PT5M PT30M 'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	ensure_scheduled_rule 66666666-6666-4666-8666-666666666666 'Interactive sign-in followed by cloud app access' PT5M PT30M 'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	ensure_scheduled_rule 71111111-1111-4111-8111-111111111111 'Recent identity sign-ins via saved function' PT5M PT30M 'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	ensure_scheduled_rule 72222222-2222-4222-8222-222222222222 'Recent identity sign-ins via function call' PT5M PT30M 'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	ensure_scheduled_rule 73333333-3333-4333-8333-333333333333 'High-risk account sign-in' PT5M PT30M 'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	ensure_scheduled_rule 74444444-4444-4444-8444-444444444444 'Privileged identity operations in archive' PT5M PT30M 'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result'
+	ensure_scheduled_rule 76666666-6666-4666-8666-666666666666 'Cloud audit activity stopped' PT5M PT30M 'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName'
 	ensure_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT3H "$predicate_rule_query"
 	ensure_nrt_rule
 
@@ -1417,17 +1417,17 @@ delete_table() {
 }
 
 cleanup_fixtures() {
-	delete_scheduled_rule 11111111-1111-4111-8111-111111111111 '[lab] Suspicious interactive sign-in' PT5M PT30M 'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	delete_scheduled_rule 22222222-2222-4222-8222-222222222222 '[lab] VPN password spray' PT5M PT30M 'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	delete_scheduled_rule 33333333-3333-4333-8333-333333333333 '[lab] Cloud sign-in impossible travel' PT5M PT10M 'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
-	delete_scheduled_rule 44444444-4444-4444-8444-444444444444 '[lab] Partner SSO telemetry missing' PT5M PT30M 'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
-	delete_scheduled_rule 55555555-5555-4555-8555-555555555555 '[lab] Sign-ins across primary and partner IdPs' PT5M PT30M 'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	delete_scheduled_rule 66666666-6666-4666-8666-666666666666 '[lab] Interactive sign-in followed by cloud app access' PT5M PT30M 'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
-	delete_scheduled_rule 71111111-1111-4111-8111-111111111111 '[lab] Recent identity sign-ins via saved function' PT5M PT30M 'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
-	delete_scheduled_rule 72222222-2222-4222-8222-222222222222 '[lab] Recent identity sign-ins via function call' PT5M PT30M 'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
-	delete_scheduled_rule 73333333-3333-4333-8333-333333333333 '[lab] High-risk account sign-in' PT5M PT30M 'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
-	delete_scheduled_rule 74444444-4444-4444-8444-444444444444 '[lab] Privileged identity operations in archive' PT5M PT30M 'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result'
-	delete_scheduled_rule 76666666-6666-4666-8666-666666666666 '[lab] Cloud audit activity stopped' PT5M PT30M 'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName'
+	delete_scheduled_rule 11111111-1111-4111-8111-111111111111 'Suspicious interactive sign-in' PT5M PT30M 'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	delete_scheduled_rule 22222222-2222-4222-8222-222222222222 'VPN password spray' PT5M PT30M 'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	delete_scheduled_rule 33333333-3333-4333-8333-333333333333 'Cloud sign-in impossible travel' PT5M PT10M 'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	delete_scheduled_rule 44444444-4444-4444-8444-444444444444 'Partner SSO telemetry missing' PT5M PT30M 'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	delete_scheduled_rule 55555555-5555-4555-8555-555555555555 'Sign-ins across primary and partner IdPs' PT5M PT30M 'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	delete_scheduled_rule 66666666-6666-4666-8666-666666666666 'Interactive sign-in followed by cloud app access' PT5M PT30M 'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	delete_scheduled_rule 71111111-1111-4111-8111-111111111111 'Recent identity sign-ins via saved function' PT5M PT30M 'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	delete_scheduled_rule 72222222-2222-4222-8222-222222222222 'Recent identity sign-ins via function call' PT5M PT30M 'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	delete_scheduled_rule 73333333-3333-4333-8333-333333333333 'High-risk account sign-in' PT5M PT30M 'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	delete_scheduled_rule 74444444-4444-4444-8444-444444444444 'Privileged identity operations in archive' PT5M PT30M 'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result'
+	delete_scheduled_rule 76666666-6666-4666-8666-666666666666 'Cloud audit activity stopped' PT5M PT30M 'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName'
 	delete_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT3H "$predicate_rule_query"
 	delete_nrt_rule
 	delete_dcr

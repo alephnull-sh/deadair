@@ -25,4 +25,5 @@ Enter
 Hide
 Sleep 18s
 Show
-Sleep 10s
+Screenshot docs/assets/sentinel-lab.png
+Sleep 6s

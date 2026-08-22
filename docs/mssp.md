@@ -10,14 +10,9 @@ concrete index, data stream, or Sentinel table visible to the tenant credential.
 make mssp-lab
 ```
 
-The lab starts throwaway Elastic and OpenSearch stacks, seeds two working tenants and three failure
+The lab covers the Elastic and OpenSearch Docker path. It seeds two working tenants and three failure
 cases, runs `check --fleet`, runs redacted scans with schema and downtime enabled, scrapes
-`serve --fleet --redact`, and writes artifacts to `integration/mssp-lab-out/`. It does not exercise
-Sentinel.
-
-<p align="center">
-  <img alt="deadair MSSP lab output showing lab context, redacted fleet scan, and metrics" src="assets/mssp-lab.gif" width="860">
-</p>
+`serve --fleet --redact`, and writes artifacts to `integration/mssp-lab-out/`.
 
 The generated files show the operator surfaces you will use in a real deployment:
 
@@ -30,9 +25,9 @@ The generated files show the operator surfaces you will use in a real deployment
 | `downtime.json` | expected downtime config |
 | `state.json.*` | per-instance state files |
 
-The lab proves the Docker workflow, config shape, redaction, partial failures, schema drift,
-downtime suppression, exporter labels, and per-instance state. It does not prove customer source
-cadence or hosted-SIEM edge cases.
+The lab covers the Docker workflow, config shape, redaction, partial failures, schema drift,
+downtime suppression, exporter labels, and per-instance state. Validate source cadence and hosted
+SIEM behavior in each customer environment.
 
 ## Deployment shape
 
