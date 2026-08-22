@@ -314,6 +314,120 @@ func TestSentinelRuleMapsWatchlistAndASIMDependencies(t *testing.T) {
 	}
 }
 
+func TestSentinelRuleKeepsMixedDeferredAndUnresolvedBranches(t *testing.T) {
+	enabled := true
+	tests := []struct {
+		name         string
+		query        string
+		functions    map[string]WorkspaceFunction
+		wantPatterns []string
+		wantKinds    []string
+	}{
+		{
+			name:      "mapped workspace and dynamic table",
+			query:     `workspace("mapped").SecurityEvent | union table(DynamicName)`,
+			wantKinds: []string{"sentinel_workspace_table", sentinelKQLUnsupportedDependency},
+		},
+		{
+			name:         "ASIM and missing function",
+			query:        `SecurityEvent | union _Im_Dns(), UnknownFunction()`,
+			functions:    map[string]WorkspaceFunction{},
+			wantPatterns: []string{"SecurityEvent"},
+			wantKinds:    []string{"sentinel_asim_parser", sentinelKQLUnsupportedDependency},
+		},
+		{
+			name:         "watchlist and dynamic table",
+			query:        `SecurityEvent | union _GetWatchlist("VIPs"), table(DynamicName)`,
+			wantPatterns: []string{"SecurityEvent"},
+			wantKinds:    []string{"sentinel_watchlist", sentinelKQLUnsupportedDependency},
+		},
+		{
+			name:  "watchlist and ambiguous function metadata",
+			query: `union _GetWatchlist("VIPs"), Broken("value")`,
+			functions: map[string]WorkspaceFunction{
+				"Broken": {Body: `SecurityEvent`, Parameters: []string{"value"}},
+			},
+			wantKinds: []string{"sentinel_watchlist", sentinelKQLAmbiguousDependency},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := alertRuleJSON{Name: "mixed-native", Kind: "Scheduled"}
+			raw.Properties.Enabled = &enabled
+			raw.Properties.Query = tt.query
+			raw.Properties.QueryFrequency = "PT5M"
+			raw.Properties.QueryPeriod = "PT10M"
+
+			rule := sentinelRule(raw, tt.functions, true)
+			if rule.InputStatus != "" || !reflect.DeepEqual(rule.Patterns, tt.wantPatterns) {
+				t.Fatalf("rule input = status %q patterns %#v detail %q", rule.InputStatus, rule.Patterns, rule.InputDetail)
+			}
+			gotKinds := make([]string, 0, len(rule.Dependencies))
+			for _, dependency := range rule.Dependencies {
+				gotKinds = append(gotKinds, dependency.Kind)
+			}
+			if !reflect.DeepEqual(gotKinds, tt.wantKinds) {
+				t.Fatalf("dependency kinds = %#v, want %#v", gotKinds, tt.wantKinds)
+			}
+			blocking := rule.Dependencies[len(rule.Dependencies)-1]
+			if strings.TrimSpace(blocking.Expression) == "" || !blocking.Required {
+				t.Fatalf("blocking dependency = %#v, want required private detail", blocking)
+			}
+		})
+	}
+}
+
+func TestResolveInputsMixedNativeAndUnsupportedBranchesFailsClosed(t *testing.T) {
+	t.Parallel()
+	credential := &recordingCredential{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/tables"):
+			fmt.Fprint(w, `{"value":[{"name":"SecurityEvent","properties":{"plan":"Analytics","provisioningState":"Succeeded","schema":{"standardColumns":[]}}}]}`)
+		case strings.HasSuffix(r.URL.Path, "/watchlists"):
+			fmt.Fprint(w, `{"value":[{"id":"/watchlists/vip","properties":{"watchlistAlias":"VIPs","provisioningState":"Succeeded","isDeleted":false}}]}`)
+		case strings.HasSuffix(r.URL.Path, "/query"):
+			var request logsQueryRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			if strings.Contains(request.Query, "_GetWatchlist") {
+				fmt.Fprint(w, `{"tables":[{"name":"PrimaryResult","columns":[],"rows":[]}],"permissions":{"dataSources":[{"allowTables":["Watchlist"]}]},"dataSources":[{"tables":["Watchlist"]}]}`)
+			} else {
+				writeAllowedLogsResult(w, "SecurityEvent", `[{"name":"PrimaryResult","columns":[],"rows":[]}]`)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	enabled := true
+	raw := alertRuleJSON{Name: "mixed-native", Kind: "Scheduled"}
+	raw.Properties.Enabled = &enabled
+	raw.Properties.Query = `union SecurityEvent, _GetWatchlist("VIPs"), table(DynamicName)`
+	raw.Properties.QueryFrequency = "PT5M"
+	raw.Properties.QueryPeriod = "PT10M"
+	rule := sentinelRule(raw, map[string]WorkspaceFunction{}, true)
+
+	got, err := fixtureClient(server.URL, credential).ResolveInputs(context.Background(), []backend.Rule{rule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || got[0].Diagnostic || got[0].Status != backend.ResolutionUnsupported || len(got[0].ResolvedSources) != 0 || len(got[0].ResolvedDependencies) != 0 {
+		t.Fatalf("authoritative resolution = %#v", got)
+	}
+	if !got[1].Diagnostic || got[1].Status != backend.ResolutionResolved || !reflect.DeepEqual(got[1].ResolvedSources, []string{"SecurityEvent"}) {
+		t.Fatalf("table diagnostic = %#v", got[1])
+	}
+	if !got[2].Diagnostic || got[2].Status != backend.ResolutionResolved || len(got[2].ResolvedDependencies) != 1 || got[2].ResolvedDependencies[0].Kind != "sentinel_watchlist" {
+		t.Fatalf("watchlist diagnostic = %#v", got[2])
+	}
+	if !got[3].Diagnostic || got[3].Status != backend.ResolutionUnsupported || got[3].SelectorKind != "kql_query" || !strings.Contains(got[3].Detail, "dynamic source function") {
+		t.Fatalf("unsupported diagnostic = %#v", got[3])
+	}
+}
+
 func TestValidateNativeLogsPermissionsTreatsOmittedAllowTablesAsFullAccess(t *testing.T) {
 	client := fixtureClient("https://example.invalid", &recordingCredential{})
 	resourceID := canonicalWorkspaceResourceID(client.SubscriptionID, client.ResourceGroup, client.WorkspaceName)

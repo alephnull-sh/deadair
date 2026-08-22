@@ -32,10 +32,15 @@ Credential guides:
 		fmt.Fprintf(stderr, "deadair: setup accepts one backend, got %q\n", fs.Args())
 		return report.ExitError
 	}
-	backend := "elastic"
-	if fs.NArg() == 1 {
-		backend = fs.Arg(0)
+	if fs.NArg() == 0 {
+		fmt.Fprint(stdout, `Choose a backend:
+  deadair setup elastic      Elastic Security
+  deadair setup opensearch   OpenSearch Security Analytics
+  deadair setup sentinel     Microsoft Sentinel
+`)
+		return report.ExitHealthy
 	}
+	backend := fs.Arg(0)
 	switch backend {
 	case "elastic":
 		fmt.Fprint(stdout, `# deadair setup — Elastic (least privilege, read-only)
@@ -116,25 +121,10 @@ export DEADAIR_SENTINEL_WORKSPACE=<workspace-resource-name>
 deadair check
 deadair scan
 
-# Current limits: Scheduled and NRT rules, resolved local Analytics tables,
-# saved functions with closed scalar arguments, literal watchlists, clean ASIM
-# probes, and explicitly mapped literal workspace() tables are assessed within
-# their evidence boundaries. Other rule kinds, app()/resource() targets,
-# unmapped or dynamic inputs, and source document totals remain unassessed.
-# Every referenced remote must have Sentinel deployed. Microsoft's hard limit
-# is 20 workspaces per analytics-rule query; deadair conservatively counts the
-# home workspace, leaving at most 19 distinct remotes. Microsoft recommends no
-# more than five total for performance.
-# Azure Monitor separately blocks query scopes spanning 20 or more workspace
-# regions and warns at five. deadair treats missing location as unavailable and
-# 20 or more distinct normalized regions as incompatible after any alias proof.
-# Same-subscription source evidence can resolve conclusively. An eligible
-# installed rule that references another subscription needs a matching
-# Sentinel rule-health success after its latest change and within its expected
-# run cadence; scanner access alone is not execution proof.
-# Tenant boundaries are not detected separately.
-# Summary lineage and Content Hub provenance are optional scan enrichment; they
-# are not part of check readiness or health gates.
+# Least-privilege role and cross-workspace setup:
+# https://github.com/alephnull-sh/deadair/blob/main/docs/credentials/sentinel.md
+# Evidence boundaries and current limits:
+# https://github.com/alephnull-sh/deadair/blob/main/docs/usage.md#microsoft-sentinel
 `)
 		return report.ExitHealthy
 	default:

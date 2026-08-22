@@ -19,10 +19,14 @@ const summaryLogsAPIVersion = "2025-07-01"
 const (
 	summaryRuleRunWindow      = 7 * 24 * time.Hour
 	summaryRuleRetryAllowance = 8 * time.Hour
-	maxSummaryRuleRunRules    = 50
-	maxSummaryRuleErrorRunes  = 512
-	summaryRuleRunMethod      = "lasummarylogs-latest-7d"
-	summaryRuleRunTable       = "LASummaryLogs"
+	// ARM systemData can settle a few seconds after the first native timestamp
+	// in LASummaryLogs. Later runs can advance RuleLastModifiedTime without an
+	// ARM definition change, so the allowance applies only to older timestamps.
+	summaryRuleTimestampTolerance = 30 * time.Second
+	maxSummaryRuleRunRules        = 50
+	maxSummaryRuleErrorRunes      = 512
+	summaryRuleRunMethod          = "lasummarylogs-latest-7d"
+	summaryRuleRunTable           = "LASummaryLogs"
 )
 
 type summaryLogsResponse struct {
@@ -45,7 +49,7 @@ type summaryLogJSON struct {
 			Query            string `json:"query"`
 			DestinationTable string `json:"destinationTable"`
 			BinSize          int    `json:"binSize"`
-			BinDelay         int    `json:"binDelay"` // seconds, per the 2025-07-01 REST contract
+			BinDelay         int    `json:"binDelay"` // minutes, as configured by Microsoft Sentinel
 			BinStartTime     string `json:"binStartTime"`
 			TimeSelector     string `json:"timeSelector"`
 		} `json:"ruleDefinition"`
@@ -189,9 +193,10 @@ func (c *Client) SummaryRuleRunEvidence(ctx context.Context, detections []backen
 		case 1:
 			row := matching[0]
 			armModifiedAt, ok := summaryRuleModifiedAt(relevant[index])
-			if !ok || row.RunAt.Before(armModifiedAt) || row.RuleModifiedAt.Before(armModifiedAt) {
+			if !ok || row.RunAt.Before(armModifiedAt) || row.RuleModifiedAt.After(row.RunAt) ||
+				row.RuleModifiedAt.Add(summaryRuleTimestampTolerance).Before(armModifiedAt) {
 				evidence[index].Status = backend.EvidenceIncomplete
-				evidence[index].Detail = "latest LASummaryLogs execution predates the current ARM summary-rule revision"
+				evidence[index].Detail = "latest LASummaryLogs execution could not be linked to the current ARM summary-rule definition"
 				continue
 			}
 			evidence[index].Status = backend.EvidenceAssessed
@@ -267,7 +272,7 @@ func validSummaryBinSize(minutes int) bool {
 func summaryRunIsOverdue(rule summaryLogJSON, observedAt, runAt time.Time) bool {
 	definition := rule.Properties.RuleDefinition
 	maximumAge := time.Duration(definition.BinSize)*time.Minute +
-		time.Duration(definition.BinDelay)*time.Second + summaryRuleRetryAllowance
+		time.Duration(definition.BinDelay)*time.Minute + summaryRuleRetryAllowance
 	return observedAt.Sub(runAt) > maximumAge
 }
 
@@ -759,7 +764,7 @@ func summaryScheduleDetail(rule summaryLogJSON) string {
 		parts = append(parts, fmt.Sprintf("bin %dm", definition.BinSize))
 	}
 	if definition.BinDelay > 0 {
-		parts = append(parts, fmt.Sprintf("delay %ds", definition.BinDelay))
+		parts = append(parts, fmt.Sprintf("delay %dm", definition.BinDelay))
 	}
 	return strings.Join(parts, "; ")
 }

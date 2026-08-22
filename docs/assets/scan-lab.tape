@@ -8,10 +8,10 @@ Output docs/assets/scan-lab.gif
 
 Set FontSize 14
 Set Width 1060
-Set Height 480
+Set Height 620
 Set Padding 14
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 25ms
+Set TypingSpeed 12ms
 
 Hide
 Type `export PATH="$PWD/bin:$PATH" DEADAIR_ES_URL=http://localhost:9200 DEADAIR_KIBANA_URL=http://localhost:5601 DEADAIR_API_KEY=$(cat "$DEADAIR_SCAN_LAB_OUT/api-key") && unset NO_COLOR && cd "$DEADAIR_SCAN_LAB_OUT" && clear`
@@ -21,13 +21,18 @@ Show
 
 Type "deadair check"
 Enter
+Hide
 Sleep 3s
+Show
+Sleep 1500ms
 
 Ctrl+L
 Sleep 500ms
 
 Type "deadair scan --schema --state-file capture-state.json"
 Enter
-Sleep 5s
+Hide
+Sleep 7s
+Show
 Screenshot docs/assets/scan-lab.png
-Sleep 2s
+Sleep 8s

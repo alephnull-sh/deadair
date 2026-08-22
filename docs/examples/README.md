@@ -26,11 +26,11 @@ example, the first no-match finding contains this evidence:
 
 | Evidence | Value |
 |---|---|
-| Rule | `Lab registry persistence` |
+| Rule | `Sysmon registry run-key modification` |
 | JSON reason | `disconnected` |
-| Configured patterns | `deadair-lab-registry-*` |
+| Configured patterns | `winlogbeat-sysmon-*` |
 | Matched sources | none |
-| Lab explanation | the disposable lab intentionally does not create a matching registry source |
+| Lab explanation | the disposable lab intentionally does not create the expected Sysmon source |
 
 The finding does not mean Elasticsearch or the agent is disconnected. It means none of that rule's
 configured patterns resolved to a concrete index or data stream visible to the scan credential.
@@ -41,6 +41,6 @@ Inspect the same fields in your own report with:
 jq '.dead_detections[] | {name, reason, patterns, sources}' report.json
 ```
 
-The sample uses synthetic names and contains no production data, so it is not redacted. Before
-sharing a report from a real environment outside your restricted SOC workspace, run the scan with
-`--redact` and review the result.
+The source names resemble a small Elastic deployment, but the records are synthetic and contain no
+production data, so this sample is not redacted. Before sharing a report from a real environment
+outside your restricted SOC workspace, run the scan with `--redact` and review the result.

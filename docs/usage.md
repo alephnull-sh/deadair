@@ -1,7 +1,7 @@
 # Usage guide
 
 Start here for first scans, triage, CI gates, stateful checks, fleet scans, exporter mode, and safe
-report sharing. For credentials, run `deadair setup` or open the relevant guide under
+report sharing. For credentials, run `deadair setup <backend>` or open the relevant guide under
 [credentials/](credentials/).
 
 ## First scan
@@ -9,8 +9,17 @@ report sharing. For credentials, run `deadair setup` or open the relevant guide 
 Start with a manual scan. Do not wire alerts before a detection engineer has read the first
 report.
 
+Choose one setup command for your SIEM:
+
 ```sh
-deadair setup
+deadair setup elastic
+deadair setup opensearch
+deadair setup sentinel
+```
+
+Then verify the credential and scan:
+
+```sh
 deadair check
 deadair scan
 ```
@@ -67,6 +76,10 @@ deadair check
 deadair scan --json-out sentinel-report.json
 ```
 
+The disposable demo intentionally includes broken data paths. Its scan should print `GATE FAILED`
+and exit `1`, meaning the scan completed and the configured gate found the seeded problems. Exit
+`2` means the scan itself could not complete.
+
 `DEADAIR_SENTINEL_WORKSPACE_ID` can override the discovered Log Analytics customer ID, but deadair
 still verifies it against the workspace returned by ARM. Workload identity, managed identity, and
 service-principal authentication use the same scan variables. See the
@@ -87,9 +100,9 @@ Sentinel and Log Analytics for evidence instead of executing the rule's full que
 | literal `_GetWatchlist('alias')` | watchlist inventory plus a bounded zero-row query; retained as non-monitorable `dependency_evidence` |
 | literal `workspace()` table references | assessed only for explicitly mapped workspaces, as described below |
 | table freshness | `TimeGenerated` for Scheduled-only Analytics sources; `ingestion_time()` for NRT-only sources |
-| filtered source activity | fixture-tested advisory check only when deadair proves one direct local Analytics table followed by a closed literal filter |
+| filtered source activity | advisory check only when deadair proves one direct local Analytics table followed by a closed literal filter |
 | ingest lag | paired event-time and ingestion-time evidence for eligible Scheduled rules |
-| summary pipeline runtime | fixture-tested advisory evidence from the latest completed run in a bounded seven-day `LASummaryLogs` query for relevant active summary rules, capped at 50 rules per scan |
+| summary pipeline runtime | advisory evidence from the latest completed run in a bounded seven-day `LASummaryLogs` query for relevant active summary rules, capped at 50 rules per scan |
 
 An HTTP `200` with `PartialError` is not a successful probe. Dynamic watchlist aliases, tabular
 function parameters, row-derived or dynamic arguments, parameter-driven `table()`, dynamic table
@@ -103,13 +116,14 @@ present in the ARM catalog.
 
 A source used by both Scheduled and NRT rules stays incomplete rather than being measured with the
 wrong freshness clock. Basic and Auxiliary tables are incompatible with this analytics-rule
-evidence path. Sentinel does not expose authoritative rule-required fields or cheap exact document
-and storage totals, so required-field and unused-telemetry findings are unavailable. The CLI
-currently targets Azure public cloud endpoints.
+evidence path. Sentinel does not expose authoritative rule-required fields or a bounded,
+authoritative per-table event and storage inventory, so required-field and unused-telemetry
+findings are unavailable. The CLI currently targets Azure public cloud endpoints.
 
 Filtered source activity catches a gap that table-wide freshness cannot: one vendor, device, or
-operation can disappear while the shared table still looks healthy. This path is fixture-tested;
-it has not yet been observed in a live Sentinel lab. deadair runs the advisory check only when a
+operation can disappear while the shared table still looks healthy. The disposable lab exercised
+this path with current FortiGate data beside a stale Palo Alto Networks/PAN-OS slice. deadair runs
+the advisory check only when a
 query starts at one direct local table and immediately applies a closed,
 parser-supported literal filter. Remote, joined, unioned, dynamic, escaped-literal, and
 function-backed sources do not qualify. The result appears in `rule_source_freshness`; it does not
@@ -195,8 +209,9 @@ and [failure guidance](https://learn.microsoft.com/en-us/azure/sentinel/troubles
 
 These runtime tables are opt-in. `_SentinelHealth()` requires Sentinel auditing and health
 monitoring to be enabled. `LASummaryLogs` requires the summary-rule diagnostic setting and does not
-contain rows until summary events have been emitted. The live lab had no `SentinelHealth` or
-`LASummaryLogs` rows, so both deadair evidence paths currently have fixture coverage only. A
+contain rows until summary events have been emitted. The live lab produced a successful
+`LASummaryLogs` run and matched its 20-minute Analytics output to the Basic source rows from the
+same bin. It did not exercise `SentinelHealth`; that path still has fixture coverage only. A
 missing table or row stays unavailable or incomplete and never creates a finding or gate. The
 existing Logs query permission is enough unless
 the workspace uses table-level RBAC; in that case, the custom role also needs
@@ -247,11 +262,11 @@ A finding from the checked-in lab report:
 
 | Evidence | Value |
 |---|---|
-| Rule | `Lab registry persistence` |
-| Configured patterns | `deadair-lab-registry-*` |
+| Rule | `Sysmon registry run-key modification` |
+| Configured patterns | `winlogbeat-sysmon-*` |
 | Matched sources | none |
 | Impact | the rule currently has no source to query |
-| Lab explanation | the disposable lab intentionally does not create a matching registry source |
+| Lab explanation | the disposable lab intentionally does not create a matching Sysmon source |
 
 That is an expected coverage gap in the lab. A production regression looks similar but has a change
 behind it: a Windows rule still queries `winlogbeat-*`, telemetry moves to
@@ -344,8 +359,8 @@ informational because deadair does not turn uncertainty into a finding.
 If an enabled local input is unsupported, unavailable, or ambiguous, unused telemetry is marked
 `unavailable` and withheld rather than turning incomplete coverage into a cost finding. Candidate
 reports mark it `not-applicable`. Sentinel also withholds unused telemetry because its workspace
-table inventory does not provide the cheap exact document and storage totals required by that
-finding.
+table inventory does not provide the bounded, authoritative per-table event and storage evidence
+required by that finding.
 
 The full source evidence is in `input_resolutions`. Each record includes the declared selector or
 ordered expression, status, resolution method, observation time, logical aliases, and resolved
@@ -361,13 +376,19 @@ sources. Sentinel reports can also include:
 - `rule_provenance` for exact native template and Content Hub template/package IDs and versions.
 
 `dependency_evidence` explains dependency-resolution outcomes. A required dependency's outcome also
-appears in authoritative input resolution and can affect the rule verdict. `source_lineage` and
-`rule_provenance` are informational. `rule_source_freshness` and `summary_rule_runs` currently have
-fixture coverage only; they are also informational and do not change gates. Summary lineage
-describes ARM structure; `summary_rule_runs` describes a bounded latest completed native run.
-In-progress `Started` rows do not replace the last completed run. A successful run older than its
-configured cadence and delay plus the documented eight-hour retry allowance is retained as
-incomplete evidence. Neither section proves end-to-end detection health.
+appears in authoritative input resolution and can affect the rule verdict. `source_lineage`,
+`rule_provenance`, `rule_source_freshness`, and `summary_rule_runs` are informational and do not
+change gates. On 2026-08-22, the disposable live lab isolated a stale Palo Alto Networks/PAN-OS
+slice from a fresh shared table and matched a Basic-plan source bin to its successful summary
+execution and Analytics destination count.
+
+Summary lineage describes ARM structure; `summary_rule_runs` describes a bounded latest completed
+native run. In the live lab, `LASummaryLogs.RuleLastModifiedTime` advanced between bins while the ARM
+definition stayed unchanged. deadair therefore uses that field as a timestamp sanity check and
+lower bound, not as proof of an exact rule revision. In-progress `Started` rows do not replace the
+last completed run. A successful run older than its configured cadence and delay plus the documented
+eight-hour retry allowance is retained as incomplete evidence. Neither section proves end-to-end
+detection health.
 
 `--include` and `--exclude` do not change detection verdicts. They do scope source-level reporting
 and source-level findings such as degraded, low-volume, schema-drifted, or unused sources, so a
@@ -468,7 +489,8 @@ Entra federated credential's subject match that environment. `id-token: write` l
 GitHub for an OIDC token; Azure RBAC still decides what the identity can read or write. Give it the
 read-only workspace roles from the [Sentinel credential guide](credentials/sentinel.md), leave
 Azure Login's cleanup enabled, and run only trusted, pinned actions after the login step. An Azure
-CLI login is shared by later steps in the same job.
+CLI login is shared by later steps in the same job. The disposable lab used a certificate-backed
+`EnvironmentCredential`; this hosted OIDC path has not been live-validated.
 
 `sentinel-workspace-id` can supply the optional Log Analytics customer-ID override, and
 `sentinel-remotes-file` can point to the explicit JSON mapping used by cross-workspace rules. The

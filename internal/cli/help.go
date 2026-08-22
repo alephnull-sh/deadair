@@ -29,18 +29,6 @@ func scanUsage(w io.Writer) {
 Run a live, read-only assessment. Exit 0 passes the configured gate, 1 means
 gated findings, and 2 means the scan could not complete.
 
-On Sentinel, deadair follows enabled Scheduled and NRT rules to local Analytics
-tables and explicitly mapped workspace targets. It also surfaces filtered data
-that has gone quiet and summary pipelines that failed or fell behind. Those
-runtime signals are advisory and do not change the gate.
-
-Dynamic and unmapped inputs stay unassessed. Mapped workspaces must have
-Sentinel deployed. Queries are limited to 20 workspaces and fewer than 20
-regions; missing location is unavailable. An eligible installed rule that
-references another subscription needs a matching Sentinel rule-health success
-after its latest change and within its expected run cadence, or its execution
-identity stays unassessed. Tenant boundaries are not detected separately.
-
 Connection:
   --backend NAME              elastic, opensearch, or sentinel (default: elastic)
   --es-url URL                Elasticsearch URL (DEADAIR_ES_URL)
@@ -159,18 +147,6 @@ func serveUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage: deadair serve [options]
 
 Run periodic live scans and expose the latest result as Prometheus metrics.
-
-On Sentinel, deadair follows enabled Scheduled and NRT rules to local Analytics
-tables and explicitly mapped workspace targets. It also surfaces filtered data
-that has gone quiet and summary pipelines that failed or fell behind. Those
-runtime signals are advisory and do not change the gate.
-
-Dynamic and unmapped inputs stay unassessed. Mapped workspaces must have
-Sentinel deployed. Queries are limited to 20 workspaces and fewer than 20
-regions; missing location is unavailable. An eligible installed rule that
-references another subscription needs a matching Sentinel rule-health success
-after its latest change and within its expected run cadence, or its execution
-identity stays unassessed. Tenant boundaries are not detected separately.
 
 Exporter:
   --bind ADDRESS              listen address (default: 127.0.0.1:9317)

@@ -55,6 +55,12 @@ type KQLResolution struct {
 	Status       backend.ResolutionStatus
 	Dependencies []Dependency
 	Reason       string
+	// BlockingStatus is set only when an unresolved construct remains after
+	// any literal workspace, watchlist, or built-in ASIM dependency is probed.
+	// It keeps an independent dynamic or ambiguous query leg from inheriting
+	// the deferred dependency's eventual result.
+	BlockingStatus backend.ResolutionStatus
+	BlockingReason string
 }
 
 // WorkspaceFunction is the metadata needed to expand a stored Log Analytics
@@ -109,6 +115,7 @@ func ResolveKQLDependenciesWithFunctions(query string, functions map[string]Work
 		resolvingFunctions: make(map[string]bool),
 		seenDeps:           make(map[string]int),
 		seenNotes:          make(map[string]struct{}),
+		seenBlockingNotes:  make(map[string]struct{}),
 	}
 	a.parseProgram(tokens)
 	return a.result()
@@ -261,21 +268,24 @@ func validateKQLParens(tokens []kqlToken) error {
 }
 
 type kqlAnalyzer struct {
-	bindings           map[string][]kqlToken
-	resolving          map[string]bool
-	scalarResolving    map[string]bool
-	functions          map[string]WorkspaceFunction
-	scalarParameters   map[string]bool
-	resolvingFunctions map[string]bool
-	functionDepth      int
-	deps               []Dependency
-	seenDeps           map[string]int
-	notes              []string
-	seenNotes          map[string]struct{}
-	remote             bool
-	unsupported        bool
-	ambiguous          bool
-	optionalDepth      int
+	bindings            map[string][]kqlToken
+	resolving           map[string]bool
+	scalarResolving     map[string]bool
+	functions           map[string]WorkspaceFunction
+	scalarParameters    map[string]bool
+	resolvingFunctions  map[string]bool
+	functionDepth       int
+	deps                []Dependency
+	seenDeps            map[string]int
+	notes               []string
+	seenNotes           map[string]struct{}
+	blockingNotes       []string
+	seenBlockingNotes   map[string]struct{}
+	remote              bool
+	unsupported         bool
+	deferredUnsupported bool
+	ambiguous           bool
+	optionalDepth       int
 }
 
 const maxKQLFunctionExpansionDepth = 32
@@ -465,7 +475,7 @@ func (a *kqlAnalyzer) parseOneSource(tokens []kqlToken) int {
 				call, ok := a.canonicalASIMCall(name, tokens[2:close], true)
 				a.addDependency(Dependency{Name: name, Kind: KindASIMBuiltin, Call: call})
 				if ok {
-					a.markUnsupported(fmt.Sprintf("built-in ASIM parser %s requires a native dependency probe", name))
+					a.markDeferredUnsupported(fmt.Sprintf("built-in ASIM parser %s requires a native dependency probe", name))
 				} else {
 					a.markUnsupported(fmt.Sprintf("built-in ASIM parser %s has non-literal or unsupported arguments", name))
 				}
@@ -493,7 +503,7 @@ func (a *kqlAnalyzer) parseOneSource(tokens []kqlToken) int {
 	}
 	if isKQLASIMParserName(name) {
 		a.addDependency(Dependency{Name: name, Kind: KindASIMBuiltin, Call: name})
-		a.markUnsupported(fmt.Sprintf("built-in ASIM parser %s requires a native dependency probe", name))
+		a.markDeferredUnsupported(fmt.Sprintf("built-in ASIM parser %s requires a native dependency probe", name))
 		return 1
 	}
 	if a.scalarParameters[name] {
@@ -1439,20 +1449,41 @@ func (a *kqlAnalyzer) addNote(note string) {
 	a.notes = append(a.notes, note)
 }
 
+func (a *kqlAnalyzer) addBlockingNote(note string) {
+	if _, exists := a.seenBlockingNotes[note]; exists {
+		return
+	}
+	a.seenBlockingNotes[note] = struct{}{}
+	a.blockingNotes = append(a.blockingNotes, note)
+}
+
 func (a *kqlAnalyzer) markUnsupported(reason string) {
 	a.unsupported = true
+	a.addNote(reason)
+	a.addBlockingNote(reason)
+}
+
+func (a *kqlAnalyzer) markDeferredUnsupported(reason string) {
+	a.deferredUnsupported = true
 	a.addNote(reason)
 }
 
 func (a *kqlAnalyzer) markAmbiguous(reason string) {
 	a.ambiguous = true
 	a.addNote(reason)
+	a.addBlockingNote(reason)
 }
 
 func (a *kqlAnalyzer) result() KQLResolution {
 	result := KQLResolution{
-		Dependencies: append([]Dependency(nil), a.deps...),
-		Reason:       strings.Join(a.notes, "; "),
+		Dependencies:   append([]Dependency(nil), a.deps...),
+		Reason:         strings.Join(a.notes, "; "),
+		BlockingReason: strings.Join(a.blockingNotes, "; "),
+	}
+	if a.ambiguous {
+		result.BlockingStatus = backend.ResolutionAmbiguous
+	} else if a.unsupported {
+		result.BlockingStatus = backend.ResolutionUnsupported
 	}
 	switch {
 	case a.remote:
@@ -1461,12 +1492,14 @@ func (a *kqlAnalyzer) result() KQLResolution {
 		result.Status = backend.ResolutionAmbiguous
 	case a.unsupported:
 		result.Status = backend.ResolutionUnsupported
+	case a.deferredUnsupported:
+		result.Status = backend.ResolutionUnsupported
 	case hasKQLDependencyKind(a.deps, KindTable), hasKQLDependencyKind(a.deps, KindWatchlist):
 		result.Status = backend.ResolutionResolved
 		if result.Reason == "" {
 			tables := countKQLDependencyKind(a.deps, KindTable)
 			watchlists := countKQLDependencyKind(a.deps, KindWatchlist)
-			result.Reason = fmt.Sprintf("resolved %d direct local table source(s) and %d literal watchlist(s)", tables, watchlists)
+			result.Reason = fmt.Sprintf("resolved %s and %s", counted(tables, "direct local table source", "direct local table sources"), counted(watchlists, "literal watchlist", "literal watchlists"))
 		}
 	default:
 		result.Status = backend.ResolutionEmpty
@@ -1475,6 +1508,14 @@ func (a *kqlAnalyzer) result() KQLResolution {
 		}
 	}
 	return result
+}
+
+func counted(n int, singular, plural string) string {
+	label := plural
+	if n == 1 {
+		label = singular
+	}
+	return fmt.Sprintf("%d %s", n, label)
 }
 
 func hasKQLDependencyKind(dependencies []Dependency, kind DependencyKind) bool {

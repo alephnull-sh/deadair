@@ -403,6 +403,9 @@ func TestResolveKQLDependenciesFunctionReferencesRemainUnsupported(t *testing.T)
 			if tt.want[0].Kind == KindASIMBuiltin && !strings.Contains(got.Reason, "native dependency probe") {
 				t.Fatalf("reason = %q, want native dependency probe detail", got.Reason)
 			}
+			if tt.want[0].Kind == KindASIMBuiltin && got.BlockingStatus != "" {
+				t.Fatalf("blocking status = %q, want deferred native probe only", got.BlockingStatus)
+			}
 		})
 	}
 }
@@ -838,6 +841,69 @@ func TestResolveKQLDependenciesMixedRemoteIsNotResolved(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Dependencies, want) {
 		t.Fatalf("dependencies = %#v, want %#v", got.Dependencies, want)
+	}
+}
+
+func TestResolveKQLDependenciesMixedDeferredAndUnresolvedRemainBlocking(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		query     string
+		functions map[string]WorkspaceFunction
+		status    backend.ResolutionStatus
+		blocking  backend.ResolutionStatus
+		want      []Dependency
+	}{
+		{
+			name:   "mapped workspace and dynamic table",
+			query:  `workspace("mapped").SecurityEvent | union table(DynamicName)`,
+			status: backend.ResolutionRemote, blocking: backend.ResolutionUnsupported,
+			want: []Dependency{{Name: "SecurityEvent", Kind: KindRemoteTable, ScopeKind: "workspace", Scope: "mapped", Target: "SecurityEvent"}},
+		},
+		{
+			name:      "ASIM and missing function",
+			query:     `SecurityEvent | union _Im_Dns(), UnknownFunction()`,
+			functions: map[string]WorkspaceFunction{},
+			status:    backend.ResolutionUnsupported, blocking: backend.ResolutionUnsupported,
+			want: []Dependency{
+				{Name: "SecurityEvent", Kind: KindTable},
+				{Name: "_Im_Dns", Kind: KindASIMBuiltin, Call: "_Im_Dns()"},
+				{Name: "UnknownFunction", Kind: KindFunction},
+			},
+		},
+		{
+			name:   "watchlist and dynamic table",
+			query:  `SecurityEvent | union _GetWatchlist("VIPs"), table(DynamicName)`,
+			status: backend.ResolutionUnsupported, blocking: backend.ResolutionUnsupported,
+			want: []Dependency{
+				{Name: "SecurityEvent", Kind: KindTable},
+				{Name: "VIPs", Kind: KindWatchlist},
+			},
+		},
+		{
+			name:  "watchlist and ambiguous function metadata",
+			query: `union _GetWatchlist("VIPs"), Broken("value")`,
+			functions: map[string]WorkspaceFunction{
+				"Broken": {Body: `SecurityEvent`, Parameters: []string{"value"}},
+			},
+			status: backend.ResolutionAmbiguous, blocking: backend.ResolutionAmbiguous,
+			want: []Dependency{
+				{Name: "VIPs", Kind: KindWatchlist},
+				{Name: "Broken", Kind: KindFunction},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ResolveKQLDependenciesWithFunctions(tt.query, tt.functions)
+			if got.Status != tt.status || got.BlockingStatus != tt.blocking || strings.TrimSpace(got.BlockingReason) == "" {
+				t.Fatalf("resolution = %+v, want status %s with blocking status %s", got, tt.status, tt.blocking)
+			}
+			if !reflect.DeepEqual(got.Dependencies, tt.want) {
+				t.Fatalf("dependencies = %#v, want %#v", got.Dependencies, tt.want)
+			}
+		})
 	}
 }
 

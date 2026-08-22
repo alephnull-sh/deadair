@@ -52,9 +52,13 @@ or call Azure write APIs. It accepts only a certificate-backed scanner service p
 identity contract before contacting the workspace and never prints credential values or certificate
 paths.
 
-The full base and expansion setup, scanner test, denial test, and cleanup path ran in disposable UK
-South workspaces on 2026-08-21. That result applies to the named workspaces and identity. It does
-not cover every tenant, region, RBAC layout, or KQL construct.
+The realistic fixture lab completed a fresh disposable UK South validation on 2026-08-22.
+Expansion `verify` passed, finding a recent Basic-plan denied-flow row and confirming its exact
+source-bin count.
+`TestSentinelReadOnlyLab` passed with the scanner authenticated only through certificate-backed
+`EnvironmentCredential`, and all three write-denial probes passed with exact HTTP 403 responses.
+These results apply only to the named workspaces and identity; they do not cover every tenant,
+region, RBAC layout, or KQL construct.
 
 ```sh
 DEADAIR_IT_SENTINEL=1 \
@@ -79,29 +83,40 @@ It first proves that the fixed alert-rule and table DELETE targets do not exist,
 HTTP 403 responses for both DELETE requests and the workspace shared-keys POST. It never reads a
 successful shared-keys response body. A 2xx response fails the test.
 
-The home workspace must contain the `DeadairFresh_CL`, `DeadairLag_CL`,
-`DeadairStale_CL`, `DeadairUnused_CL`, `DeadairBasic_CL`, `DeadairAuxiliary_CL`, and
-`DeadairEmptyAnalytics_CL` tables, the saved `DeadairLabSource` and closed scalar
-`DeadairLabParameterized` functions, and the matching deadair lab rules. The removed-table fixture
-must stay absent. The disabled NRT rule
+The home workspace must contain the `WorkforceSignIn_CL`, `SaaSSignIn_CL`,
+`RemoteAccessAuth_CL`, `ADFSAuthentication_CL`, `PerimeterSecurity_CL`,
+`FirewallTrafficRaw_CL`, `IdentityAuditArchive_CL`, and `SaaSAudit_CL` tables;
+the saved `RecentIdentitySignIns` and parameterized `IdentitySignInsByUser` functions; and the
+matching lab rules. The removed `PartnerSSOAuth_CL` fixture must stay absent. The disabled NRT rule
 `78888888-8888-4888-8888-888888888888` is part of the base fixture and remains disabled throughout
-the test. The expansion fixtures add the `DeadairVIPs` watchlist, a second workspace with
-`DeadairRemote_CL`, and the `deadair-basic-summary` summary rule whose pre-created, independently
-marked Analytics destination is `DeadairBasicSummary_CL`. Four owned, disabled Scheduled rules
-consume the literal watchlist, native ASIM parser, remote table, and summary destination. The live
-test reads their KQL dependencies through the normal Sentinel inventory and enables only in-memory
-copies for evidence collection; the Azure rules remain disabled. Sentinel must be deployed on the
+the test. The expansion fixtures add the `PrivilegedAccounts` watchlist, a second workspace
+with `RegionalRemoteAccess_CL`, and the `firewall-deny-summary` summary rule whose pre-created,
+independently marked Analytics destination is `FirewallDenySummary_CL`. Its workspace
+diagnostic setting routes only the Summary Logs category to `LASummaryLogs`. Four owned, disabled
+Scheduled rules consume the literal watchlist, native ASIM parser, remote table, and summary
+destination. The live test reads their KQL dependencies through the normal Sentinel inventory and
+enables only in-memory copies for evidence collection; the Azure rules remain disabled. Sentinel
+must be deployed on the
 second workspace through its exact `onboardingStates/default` resource before the test will assess
-it. The test covers GA and preview NRT inventory, table-plan
-compatibility, saved-function expansion, literal-watchlist proof, configured literal `workspace()`
+it. The test covers GA and preview NRT inventory, table-plan compatibility, saved-function
+expansion, literal-watchlist proof, configured literal `workspace()`
 proof, an intentionally unassessed native-ASIM `PartialError`, structural summary lineage, mixed
 present/missing inputs, Scheduled event-time freshness, NRT ingestion-time freshness, mixed timing,
-and paired ingest-lag evidence. Readiness runs once with the literal watchlist, native ASIM, remote
-workspace, and the in-memory enabled copy of the NRT rule; a second pass without the intentionally
-limited ASIM result covers the watchlist, local-table, NRT, and remote-table read paths without the
-known ASIM limitation.
-The Azure NRT rule stays disabled. Summary `binDelay` follows the 2025-07-01 REST/Bicep schema and
-is measured in seconds.
+fresh table-wide network telemetry beside a stale Palo Alto Networks/PAN-OS slice, a successful
+native summary execution, the matching denied-firewall Basic-to-Analytics bin and count, and paired
+ingest-lag evidence. Readiness runs once with the literal watchlist, native ASIM, remote workspace,
+and the in-memory enabled copy of the NRT rule. A second pass without the intentionally limited ASIM
+result covers the watchlist, local-table, NRT, and remote-table read paths without the known ASIM
+limitation.
+The Azure NRT rule stays disabled. Summary `binDelay` is measured in minutes, matching Azure
+Monitor's summary-rule scheduling model and the Sentinel portal.
+
+The custom schemas resemble the sources their names describe. Authentication rows use sign-in,
+principal, client-address, and result fields; SaaS and partner rows add the application, while ADFS
+adds its relying party. Perimeter and raw firewall rows carry device, address, port, action, and
+session or flow fields. Audit rows carry actor, operation, result, and service context. The Palo
+Alto rule looks back three hours, so its 90-minute-old vendor slice is stale without also becoming
+an ingest-lag finding.
 
 ### Prepare a disposable lab
 
@@ -110,7 +125,9 @@ already onboarded to Sentinel. Register `Microsoft.OperationalInsights`,
 `Microsoft.SecurityInsights`, and `Microsoft.Insights`, and put a small subscription budget and
 alert in place before provisioning fixtures. The provisioner needs permission to manage workspace
 tables and saved searches, Sentinel alert rules, and a resource-group-scoped data collection rule.
-It also needs `Monitoring Metrics Publisher` at the resource-group scope for the four Logs
+The home workspace name must be 4 to 26 characters so `${workspace}-dcr` fits Azure's 30-character
+limit for this Direct DCR.
+It also needs `Monitoring Metrics Publisher` at the resource-group scope for the six Logs
 Ingestion API calls; assign that before `apply`, because the DCR does not exist yet. The script also
 runs a bounded `print ... | take 1` capability probe before its first write, so the provisioner must
 be allowed to execute Log Analytics queries on the workspace.
@@ -122,17 +139,27 @@ workspace name and independently supplied customer UUID, verifies Sentinel onboa
 relevant ARM inventories, and rejects collisions in resource IDs, function names, or rule
 inventory. It waits for owned tables and the DCR to reach a successful stable state, then checks
 their full definitions again before using them. It creates only the named child fixtures and adds
-four rows on every apply. It also creates `DeadairEmptyAnalytics_CL` as an empty Analytics table and
-removes `DeadairRemoved_CL` after the DCR and missing/partial rules exist. Row evidence expires after
-24 hours. Running `apply` again refreshes it by adding four more rows. The empty Analytics table
-receives no rows and validates assessed-empty freshness for a resolved rule input.
+seven rows in six ingestion requests on every apply: current workforce authentication, delayed SaaS
+sign-in, stale remote-access authentication, current but otherwise unused ADFS authentication,
+current FortiGate, stale Palo Alto Networks/PAN-OS, and current denied-firewall records. It also
+creates `SaaSAudit_CL` as an empty Analytics table and removes
+`PartnerSSOAuth_CL` after the DCR and missing/partial rules exist. Row evidence expires after 24
+hours. Running `apply` again refreshes it with another set. The empty Analytics table receives no
+rows and validates assessed-empty freshness for a resolved rule input.
+
+`refresh-summary-proof` is the narrow refresh used by expansion `apply`. It requires the same exact
+base confirmation, workspace name, and independently resolved customer UUID as base `apply`. Before
+ingestion it requires every final base fixture, `FirewallTrafficRaw_CL`, and the DCR to retain their
+complete owned definitions; a missing or changed resource stops the run. It sends one current,
+uniquely identified Fortinet/FortiGate denied-flow row through the existing DCR and waits for that
+exact `FlowId` through the Basic Logs search endpoint. It does not backdate the row, issue ARM
+`PUT` or `DELETE` requests, or create or repair fixtures.
 
 Azure retains deleted Log Analytics tables and their data for 15 days for name reservation and
 recovery. Treat base cleanup as a terminal or cooling-off operation. For an immediate clean rerun,
 use a fresh workspace; otherwise, wait for the retention window to expire. Cleanup does not
-immediately purge the four retained rows. An interrupted apply can resume only while visible owned
-resources still match their exact definitions. The full create, ingest, and exact cleanup path ran
-through this script on 2026-08-21.
+immediately purge the retained rows. An interrupted apply can resume only while visible owned
+resources still match their exact definitions.
 
 Before each deletion, cleanup re-reads the target and checks its full fixture definition. This is
 not a transaction: another writer could still change a resource between the final GET and DELETE.
@@ -158,6 +185,13 @@ DEADAIR_AZURE_SUBSCRIPTION_ID=... \
 DEADAIR_AZURE_RESOURCE_GROUP=... \
 DEADAIR_SENTINEL_WORKSPACE=WORKSPACE \
 DEADAIR_SENTINEL_WORKSPACE_ID=WORKSPACE-CUSTOMER-UUID \
+integration/prepare-sentinel-base-lab.sh refresh-summary-proof
+
+DEADAIR_SENTINEL_BASE_LAB_CONFIRM=deadair-sentinel-base-validation:WORKSPACE:WORKSPACE-CUSTOMER-UUID \
+DEADAIR_AZURE_SUBSCRIPTION_ID=... \
+DEADAIR_AZURE_RESOURCE_GROUP=... \
+DEADAIR_SENTINEL_WORKSPACE=WORKSPACE \
+DEADAIR_SENTINEL_WORKSPACE_ID=WORKSPACE-CUSTOMER-UUID \
 integration/prepare-sentinel-base-lab.sh cleanup
 ```
 
@@ -173,11 +207,18 @@ environment, and confirmation value. `apply` completes the preflight and every c
 before its first write.
 
 The preflight checks exact table plans and schemas, exact base rule and function definitions,
-`BuiltInFusion`, and a bounded aggregate proving recent nonempty Fresh, Lag, Stale, and Unused rows
-with Fresh < Lag < Stale paired ingest lag. It returns aggregate flags and lag seconds, never source
-records. It does not create or repair base fixtures. `apply` and `cleanup` touch only the named
-disposable expansion fixtures and require the explicit confirmation value printed by the script.
-Authenticate with Azure CLI first, then run:
+`BuiltInFusion`, both sides of the fresh-table/stale-vendor network case, and a current denied-flow
+row through the Basic Logs search endpoint. A bounded aggregate proves recent nonempty workforce,
+SaaS, remote-access, and ADFS authentication rows with workforce < SaaS < remote-access paired
+ingest lag. It returns aggregate flags and lag seconds, never source records. After the exact
+summary definition and ARM revision become readable, `apply` calls the separately confirmed base
+`refresh-summary-proof` mode. That puts one current denied-flow row into an eligible future summary
+bin before runtime polling begins. A completed run is accepted only when it succeeds with one
+positive result record; a zero-result run is not proof. After the bounded source-to-destination
+proof, `apply` checks the current base rows again before calling the lab ready. Apart from the
+one-row refresh, it does not create or repair base fixtures. Expansion resources and the base-row
+refresh require their separate confirmation values printed by `plan`. Authenticate with Azure CLI
+first, then run:
 
 ```sh
 DEADAIR_AZURE_SUBSCRIPTION_ID=... \
@@ -193,6 +234,7 @@ DEADAIR_SENTINEL_REMOTE_WORKSPACE=... \
 integration/prepare-sentinel-expansion-lab.sh plan
 
 DEADAIR_SENTINEL_LAB_CONFIRM=deadair-sentinel-expansion-validation \
+DEADAIR_SENTINEL_BASE_LAB_CONFIRM=deadair-sentinel-base-validation:WORKSPACE:WORKSPACE-CUSTOMER-UUID \
 DEADAIR_AZURE_SUBSCRIPTION_ID=... \
 DEADAIR_AZURE_RESOURCE_GROUP=... \
 DEADAIR_SENTINEL_WORKSPACE=... \
@@ -209,17 +251,19 @@ integration/prepare-sentinel-expansion-lab.sh cleanup
 
 #### Expansion safeguards
 
-Watchlist apply uses `FixtureID` as the source search-key column because Sentinel reserves and
-generates `SearchKey`. It waits for lifecycle fields returned by Azure to settle and tolerates fields
+Watchlist apply uses `UserPrincipalName` as its search-key column; Sentinel reserves and generates
+`SearchKey`. It waits for lifecycle fields returned by Azure to settle and tolerates fields
 that the API omits. Cleanup refuses an explicitly in-progress watchlist. It accepts an omitted
 response `contentType` only when every other identity and ownership field matches exactly. Remote
 onboarding likewise accepts an omitted default `customerManagedKey`, but rejects explicit `true`.
 
 The summary destination includes mandatory `TimeGenerated` and is created before the rule with an
-exact schema-description ownership marker. Cleanup checks the marker independently, deletes the
-rule first, and can resume with only the table left after an interrupted deletion. The four disabled
-Scheduled rules are checked for collisions before the first write, polled until their exact
-definitions are readable, and deleted before their watchlist, remote-workspace, or summary
+exact schema-description ownership marker. The Summary Logs diagnostic setting is matched by exact
+workspace destination and category; `apply` waits for a successful one-result execution after the
+ARM definition became visible. Cleanup checks each resource again immediately before deletion,
+deletes the rule first, and can resume with only the table left after an interrupted deletion. The
+four disabled Scheduled rules are checked for collisions before the first write, polled until their
+exact definitions are readable, and deleted before their watchlist, remote-workspace, or summary
 dependencies. A missing or changed marker always fails closed. Every mode rejects identical home
 and remote workspace names.
 
@@ -234,11 +278,20 @@ When `BuiltInFusion` exposes an exact native template ID and installed version, 
 assessed evidence for that template and version. If the tenant does not expose those fields, the test
 records positive native-template provenance as pending rather than claiming live validation.
 
+The 2026-08-22 realistic-lab run proved the predicate query path, a fresh network table beside a
+stale Palo Alto Networks/PAN-OS slice, and a Basic-plan denied-firewall row flowing through a
+successful summary execution to the matching Analytics destination bin. The summary's
+`DeniedConnections` value matched the exact `Deny`/`FlowId` count for the same device vendor and
+product in that source bin, and predicate literals did not appear in serialized evidence.
+`LASummaryLogs.RuleLastModifiedTime` advanced
+between completed bins while the ARM definition stayed unchanged, so deadair treats it as a
+timestamp sanity check and lower bound. It does not claim that the field identifies the exact ARM
+revision.
+
 A successful run proves only the named workspaces and scanner identity. It does not prove:
 
 - cross-tenant Azure Lighthouse;
 - cross-subscription or cross-tenant creator-credential execution;
-- summary-rule run health; or
 - a positive installed Content Hub package association.
 
 Same-subscription mapped evidence remains conclusive for source availability. Cross-subscription

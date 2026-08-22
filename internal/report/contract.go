@@ -204,7 +204,7 @@ func backendMetadata(name, observedVersion string) BackendMetadata {
 		statuses[CapabilityFreshness] = CapabilityPartial
 		details[CapabilityFreshness] = "table-wide freshness is measured only for resolved local or explicitly mapped remote Analytics tables: bounded TimeGenerated freshness for Scheduled-only sources and ingestion_time() freshness for NRT-only sources; sources shared by both rule types remain incomplete; separate informational rule-source freshness is limited to one parser-proved local Analytics table with a closed literal predicate"
 		statuses[CapabilityDocsStorage] = CapabilityUnavailable
-		details[CapabilityDocsStorage] = "Azure does not expose a cheap source document inventory equivalent"
+		details[CapabilityDocsStorage] = "Sentinel does not expose authoritative per-table document inventory and storage totals through the APIs used by this scan"
 		statuses[CapabilitySchema] = CapabilityPartial
 		details[CapabilitySchema] = "measured only for resolved local or explicitly mapped remote Analytics tables"
 		statuses[CapabilityRequiredFields] = CapabilityUnavailable

@@ -42,9 +42,12 @@ jq -r '
   ] +
   (if .policy then ["| Policy-gated findings | \($s.gated_findings // 0) |"] else [] end) +
   [
-    "| Degraded sources | \($s.degraded_sources // 0) |",
-    "| Unused sources | \($s.unused_sources // 0) |"
-  ])[]
+    "| Degraded sources | \($s.degraded_sources // 0) |"
+  ] +
+  (if (($s.unused_telemetry_assessment // "") == "unavailable" or ($s.unused_telemetry_assessment // "") == "not-applicable")
+   then []
+   else ["| Unused sources | \($s.unused_sources // 0) |"]
+   end))[]
 ' "$report" >>"$summary"
 
 printf '\nThe full evidence is attached as the workflow artifact.\n' >>"$summary"

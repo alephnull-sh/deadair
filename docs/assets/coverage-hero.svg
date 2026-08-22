@@ -4,7 +4,7 @@
   <!-- brand + audience tag -->
   <circle cx="72" cy="52" r="7" fill="#f27b70"/>
   <text x="88" y="60" font-size="24" font-weight="700" fill="#f1f0ec">deadair</text>
-  <text x="1136" y="58" text-anchor="end" font-size="14" fill="#85837e">read-only · Elastic + OpenSearch</text>
+  <text x="1136" y="58" text-anchor="end" font-size="14" fill="#85837e">read-only · Elastic · OpenSearch · Sentinel</text>
 
   <!-- headline -->
   <text x="64" y="108" font-size="29" font-weight="700" fill="#f1f0ec" font-family="Georgia,'Times New Roman',serif">Which enabled detections have gone blind</text>

@@ -10,22 +10,19 @@ Output docs/assets/sentinel-lab.gif
 
 Set FontSize 14
 Set Width 1060
-Set Height 900
+Set Height 780
 Set Padding 14
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 25ms
+Set TypingSpeed 12ms
 
 Hide
 Type `export PATH="$PWD/bin:$PATH" && unset NO_COLOR && clear`
 Enter
 Sleep 500ms
 Show
-
-Type "deadair check"
+Type `deadair scan`
 Enter
+Hide
+Sleep 18s
+Show
 Sleep 10s
-Ctrl+L
-Sleep 500ms
-Type "deadair scan"
-Enter
-Sleep 16s

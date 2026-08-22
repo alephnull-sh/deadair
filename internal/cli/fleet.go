@@ -104,8 +104,8 @@ func assessmentConfigurationID(o connOpts, scanBackend backendpkg.Backend) (stri
 		digest := sha256.Sum256(data)
 		fmt.Fprintf(h, "%x\n", digest[:])
 	}
-	fmt.Fprintln(h, "sentinel-remotes=")
 	if client, ok := scanBackend.(*sentinel.Client); ok {
+		fmt.Fprintln(h, "sentinel-remotes=")
 		for _, identity := range sentinel.RemoteWorkspaceIdentitySet(client.RemoteWorkspaces) {
 			fmt.Fprintf(h, "%x\n", sha256.Sum256([]byte(identity)))
 		}
@@ -279,22 +279,31 @@ func scanFleet(instances []fleetInstance, o connOpts, run func(fleetInstance, co
 }
 
 func printFleetSummary(w io.Writer, f *report.FleetReport) {
-	fmt.Fprintf(w, "deadair fleet — %d instance(s)", f.Summary.Instances)
+	fmt.Fprintf(w, "deadair fleet — %s", countLabel(f.Summary.Instances, "instance", "instances"))
 	if f.Summary.InstancesFailed > 0 {
 		fmt.Fprintf(w, ", %d failed", f.Summary.InstancesFailed)
 	}
 	fmt.Fprintln(w)
 	for _, r := range f.Instances {
 		unused := humanBytes(r.Summary.UnusedBytes) + " unused"
+		showUnused := true
 		switch r.Summary.UnusedTelemetryAssessment {
 		case report.UnusedAssessmentUnavailable:
-			unused = "unused not assessed"
+			if strings.EqualFold(r.Backend, "sentinel") {
+				showUnused = false
+			} else {
+				unused = "unused not assessed"
+			}
 		case report.UnusedAssessmentNotApplicable:
 			unused = "unused not applicable"
 		}
-		fmt.Fprintf(w, "  %s (%s): %d dead, %d impaired, %d degraded source(s), %s\n",
+		fmt.Fprintf(w, "  %s (%s): %d dead, %d impaired, %s",
 			r.Instance, r.Backend, r.Summary.DeadDetections, r.Summary.ImpairedDetections,
-			r.Summary.DegradedSources, unused)
+			countLabel(r.Summary.DegradedSources, "degraded source", "degraded sources"))
+		if showUnused {
+			fmt.Fprintf(w, ", %s", unused)
+		}
+		fmt.Fprintln(w)
 	}
 	for _, e := range f.Errors {
 		fmt.Fprintf(w, "  %s: scan failed: %s\n", e.Instance, e.Error)

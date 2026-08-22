@@ -203,6 +203,20 @@ if grep -Fq 'Healthy' "$passed_summary"; then
 	exit 1
 fi
 
+sentinel_report="$tmp_dir/sentinel-report.json"
+printf '%s\n' '{"summary":{"enabled_rules":3,"sources":2,"dead_detections":1,"impaired_detections":0,"gated_findings":1,"degraded_sources":1,"unused_sources":0,"unused_telemetry_assessment":"unavailable"},"policy":{"version":1}}' >"$sentinel_report"
+sentinel_summary="$tmp_dir/sentinel-summary"
+: >"$sentinel_summary"
+GITHUB_STEP_SUMMARY="$sentinel_summary" \
+	DEADAIR_ACTION_REPORT_PATH="$sentinel_report" \
+	DEADAIR_ACTION_EXIT_CODE=1 \
+	bash "$script_dir/summary.sh"
+grep -Fq '| Degraded sources | 1 |' "$sentinel_summary"
+if grep -Fq '| Unused sources |' "$sentinel_summary"; then
+	printf 'summary must omit unused telemetry when the backend cannot assess it\n' >&2
+	exit 1
+fi
+
 error_output="$tmp_dir/error-output"
 : >"$error_output"
 RUNNER_TEMP="$runner_tmp" \
