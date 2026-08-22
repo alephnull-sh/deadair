@@ -30,6 +30,61 @@ func TestEvaluate(t *testing.T) {
 	}
 }
 
+func TestEvaluateBoundedEmptyFreshness(t *testing.T) {
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	source := backend.Source{
+		Docs: -1,
+		Freshness: backend.FreshnessEvidence{
+			Status: backend.EvidenceAssessed, ObservedAt: now,
+			Window: 24 * time.Hour,
+		},
+	}
+
+	within := Check{MaxStale: 24 * time.Hour, Now: func() time.Time { return now }}.Evaluate(source)
+	if within.Status != StatusStale || within.Age != 24*time.Hour || !within.AgeLowerBound {
+		t.Fatalf("empty 24h window at 24h threshold = %+v, want lower-bound stale", within)
+	}
+
+	beyond := Check{MaxStale: 25 * time.Hour, Now: func() time.Time { return now }}.Evaluate(source)
+	if beyond.Status != StatusUnknown || beyond.Age != 0 || beyond.AgeLowerBound {
+		t.Fatalf("empty 24h window at 25h threshold = %+v, want unknown", beyond)
+	}
+}
+
+func TestEvaluateIgnoresUnboundedOrIncompleteFreshness(t *testing.T) {
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		freshness backend.FreshnessEvidence
+	}{
+		{
+			name: "non-Sentinel source has no freshness evidence",
+		},
+		{
+			name: "assessed evidence has no observation time",
+			freshness: backend.FreshnessEvidence{
+				Status: backend.EvidenceAssessed, Window: 24 * time.Hour,
+			},
+		},
+		{
+			name: "incomplete evidence",
+			freshness: backend.FreshnessEvidence{
+				Status: backend.EvidenceIncomplete, ObservedAt: now, Window: 24 * time.Hour,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Check{MaxStale: time.Hour, Now: func() time.Time { return now }}.Evaluate(backend.Source{
+				Docs: -1, Freshness: tt.freshness,
+			})
+			if got.Status != StatusUnknown || got.AgeLowerBound {
+				t.Fatalf("Evaluate() = %+v, want unknown without lower-bound claim", got)
+			}
+		})
+	}
+}
+
 func TestEvaluateDowntimeWindow(t *testing.T) {
 	now := time.Date(2026, 7, 5, 2, 30, 0, 0, time.UTC) // Sunday
 	check := Check{

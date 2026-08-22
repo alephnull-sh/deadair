@@ -1,6 +1,7 @@
 package opensearch
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -96,7 +97,7 @@ func TestParseCandidatesDetectorAPIShapes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rules, err := (&Client{}).ParseCandidates([]byte(tt.data))
+			rules, err := (&Client{}).ParseCandidates(context.Background(), []byte(tt.data))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -124,7 +125,7 @@ func TestParseCandidatesDetectorAPIShapes(t *testing.T) {
 }
 
 func TestParseCandidatesArray(t *testing.T) {
-	rules, err := (&Client{}).ParseCandidates([]byte(`[
+	rules, err := (&Client{}).ParseCandidates(context.Background(), []byte(`[
 		{"name":"First detector","detector_type":"linux","inputs":[{"detector_input":{"indices":["linux-*"]}}]},
 		{"name":"Second detector","detector_type":"network","inputs":[{"input":{"indices":["network-*"]}}]}
 	]`))
@@ -137,7 +138,7 @@ func TestParseCandidatesArray(t *testing.T) {
 }
 
 func TestParseCandidatesRejectsDuplicateFallbackIDs(t *testing.T) {
-	_, err := (&Client{}).ParseCandidates([]byte(`[
+	_, err := (&Client{}).ParseCandidates(context.Background(), []byte(`[
 		{"name":"Duplicate detector","detector_type":"linux","inputs":[{"detector_input":{"indices":["linux-a-*"]}}]},
 		{"name":"Duplicate detector","detector_type":"linux","inputs":[{"detector_input":{"indices":["linux-b-*"]}}]}
 	]`))
@@ -147,7 +148,7 @@ func TestParseCandidatesRejectsDuplicateFallbackIDs(t *testing.T) {
 }
 
 func TestParseCandidatesMissingSelectorIsUnsupported(t *testing.T) {
-	rules, err := (&Client{}).ParseCandidates([]byte(`{
+	rules, err := (&Client{}).ParseCandidates(context.Background(), []byte(`{
 		"name":"Unmapped candidate",
 		"detector_type":"windows",
 		"enabled":false,
@@ -187,7 +188,7 @@ func TestParseCandidatesRejectsInvalidInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := (&Client{}).ParseCandidates([]byte(tt.data))
+			_, err := (&Client{}).ParseCandidates(context.Background(), []byte(tt.data))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want substring %q", err, tt.want)
 			}

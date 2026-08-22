@@ -1,8 +1,8 @@
 # Contributing
 
-External pull requests are welcome. Start with an issue for backend work or a change that affects
-the report contract, permissions, or command behavior. Small bug fixes and tests can
-go straight to a pull request.
+Pull requests are welcome. Open an issue first for a new backend or a change to the report
+contract, permissions, or command behavior. Small bug fixes and tests can go straight to a pull
+request.
 
 ## Local validation
 
@@ -12,13 +12,14 @@ Use the Go version declared in `go.mod`, then run:
 make validate
 ```
 
-This is the same fork-safe baseline used by pull-request CI: formatting, vet, unit tests, the race
+This runs the same fork-safe checks as pull-request CI: formatting, vet, unit tests, the race
 detector, a static build, and a `go mod tidy` comparison. It needs no SIEM credentials and does not
-start Docker. The tidy check uses a temporary module file and does not rewrite tracked module files.
+start Docker. The tidy check uses a temporary module file, so it does not rewrite tracked files.
 
-Keep tests close to the behavior they cover. Table-driven unit tests are a good fit for parsers and
-normalization. Run a focused package while iterating, then run `make validate` before sending the
-change. CI also builds all macOS, Linux, and Windows release targets and runs tests on Windows.
+Keep tests close to the behavior they cover. Table-driven tests work well for parsers and
+normalization. Run the relevant package while working, then run `make validate` before opening the
+pull request. CI also builds every macOS, Linux, and Windows release target and runs tests on
+Windows.
 
 ## Optional live integration tests
 
@@ -30,17 +31,21 @@ make opensearch-integration
 make fleet-integration
 ```
 
-`make integration` runs all three. See [integration/README.md](integration/README.md) for exact
-versions, overrides, startup/teardown commands, and fixture behavior. New tests must follow the
-`TestElastic*`, `TestOpenSearch*`, or `TestFleet*` naming convention so trusted integration CI runs
-them. Pull-request CI never starts these services or receives repository secrets.
+`make integration` runs all three. See [integration/README.md](integration/README.md) for tested
+versions, overrides, setup and cleanup commands, and fixture behavior. Name new tests
+`TestElastic*`, `TestOpenSearch*`, or `TestFleet*` so trusted integration CI picks them up.
+Pull-request CI never starts these services or receives repository secrets.
+
+Sentinel tests use the `TestSentinel*` prefix and run separately against a disposable Azure lab.
+They are not part of `make integration`; the integration guide documents their setup, permissions,
+and cleanup.
 
 ## The read-only invariant
 
 deadair's production backend interface is read-only. A production credential may list or inspect
-rules, sources, mappings, and aggregate statistics; it must not create, update, or delete monitored
-SIEM objects. Do not add a write method or broaden a documented role to make an implementation
-easier.
+rules, sources, mappings, and aggregate statistics. It must not create, update, or delete anything
+in the monitored SIEM. Do not add a write method or broaden a documented role to make an
+implementation easier.
 
 Integration setup may use an administrator credential only to create and remove synthetic fixtures
 inside a throwaway stack. Each backend proof must scan with the documented least-privilege
@@ -59,10 +64,10 @@ finding.
 
 ## Backend changes
 
-A new backend, new backend major, or material API/permission change starts with the
-[backend RFC template](.github/ISSUE_TEMPLATE/backend_rfc.md). The RFC must cover exact versions,
-API methods, least-privilege credentials, normalized capability gaps, rejected-write proof,
-fixtures, and report compatibility.
+Use the [backend RFC template](.github/ISSUE_TEMPLATE/backend_rfc.md) for a new backend, a new
+backend major, or a material API or permission change. Include exact versions, API methods,
+least-privilege credentials, capability gaps, rejected-write proof, fixtures, and report
+compatibility.
 
 Keep the workflow matrix, compose defaults, integration guide, and credential guides aligned when
 changing tested versions.

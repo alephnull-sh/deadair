@@ -18,20 +18,20 @@ it warn. The second question is messier. Did the rule's sources exist, were they
 fields still line up, and did events arrive before the lookback window moved on? "Ran successfully, 0
 alerts" can still mean "the search completed over data that could not have matched."
 
-deadair compares each enabled rule's configured inputs with the concrete indices and data streams
-visible to its read-only credential. It resolves those inputs with the SIEM's own rules, then checks
-the state of the sources it finds. Four failures matter:
+deadair compares each enabled rule's configured inputs with the concrete indices, data streams, or
+tables visible to its read-only credential. It resolves those inputs with backend-native evidence,
+then checks the sources it finds. Four failures matter:
 
-- **No matching source.** Inputs the SIEM's native resolver positively resolves to zero aliases,
-  indices, or data streams. For example,
-  a rule copied from a NetFlow-enabled tenant still searches `netflow-*`, but the receiving tenant
-  has never onboarded NetFlow.
+- **No matching source.** Inputs that positively resolve to no aliases, indices, data streams, or
+  Sentinel tables. For example, a rule copied from a NetFlow-enabled tenant still searches
+  `netflow-*`, but the receiving tenant has never onboarded NetFlow.
 - **All matching sources stale or empty.** The sources exist but have stopped sending data or never
   received any. A dead shipper, a broken connector, a pipeline dropping its output.
-- **Missing fields.** The rule filters on a field the source stopped providing. An integration changes
-  its ECS mapping, the field goes null, the condition never matches again.
-- **Ingest-lag blind windows.** Source and fields are fine, but events land too late to fall inside
-  the rule's window.
+- **Missing fields.** On Elastic, a rule declares a field that the source no longer maps as
+  searchable. An integration changes its ECS mapping, the field goes null, and the condition never
+  matches again.
+- **Ingest-lag blind windows.** For eligible Elastic and Sentinel Scheduled rules, events land too
+  late to fall inside the rule's window even though the source is otherwise healthy.
 
 A production-shaped no-match failure is a Beats-to-Agent migration. An enabled Windows rule still
 queries `winlogbeat-*`, while current events now land in
@@ -60,10 +60,10 @@ missing input, stale source, missing-field, ingest-lag, and unused-telemetry con
 
 ## Resolving sources and affected rules
 
-For each rule input, deadair calls the SIEM's native resolver so the backend handles aliases, data
-streams, indices, and exclusions. It checks the state of each resolved source and records the evidence
-against the rule. A no-match finding requires a positive empty resolution. Unsupported, unavailable,
-remote, and ambiguous inputs remain unassessed rather than being guessed dead. A stale-or-empty
+For each rule input, deadair asks the backend for native resolution evidence. Elastic and OpenSearch
+resolve aliases, data streams, indices, selectors, and exclusions. Sentinel combines KQL dependency
+analysis with its table catalog and bounded Logs queries. A no-match finding requires positive empty
+evidence. Unsupported, unavailable, remote, and ambiguous inputs remain unassessed. A stale-or-empty
 finding includes the degraded source names and health evidence.
 
 For each degraded source, the report lists the enabled rules that resolve to it. A failed connector
@@ -71,9 +71,9 @@ can then be triaged as a set of affected detections instead of an isolated fresh
 rule packages make this especially visible because many enabled rules may expect integrations the
 tenant does not run.
 
-The report can only see indices available to the monitoring role. If that role cannot see an expected
-index, deadair cannot distinguish hidden from absent. Before acting on no-match findings, check that
-one known-good rule and source pair appears in the report.
+The report can only see sources available to the monitoring role. If that role cannot see an
+expected source, deadair cannot distinguish hidden from absent. Before acting on no-match findings,
+check that one known-good rule and source pair appears in the report.
 
 ## When a field quietly disappears
 
@@ -115,7 +115,7 @@ past it. That leaves `P − L` minutes for a run on an `I`-minute cadence to lan
   <figcaption>Fraction of events a rule catches as source ingest lag grows, for a rule with a 6-minute lookback running every 5 minutes. The line is the formula, the open points are the simulation, and the shaded area is coverage lost with no error and no alert.</figcaption>
 </figure>
 
-A [15-line simulation](https://github.com/alephnull-sh/deadair/blob/main/docs/assets/lagsim.py) matches
+A [small simulation](https://github.com/alephnull-sh/deadair/blob/main/docs/assets/lagsim.py) matches
 the model to within rounding, shown by the open points on the chart. A rule with `from: now-6m` running
 every 5 minutes has a one-minute margin. With 3 minutes of fixed lag, it catches around **60% of its
 events** in this model. Real schedulers add jitter, retries, manual runs, deduplication, timestamp
@@ -157,12 +157,15 @@ reads.
 
 ## Implementation and limits
 
-deadair runs outside the SIEM with a read-only credential. It does not read event bodies. It reads
-counts, timestamps, mappings, `field_caps`, and size-0 `max(@timestamp)` and
-paired `event.ingested` and `@timestamp` values from a bounded recent sample.
+deadair runs outside the SIEM with a read-only credential. It does not fetch full event records. Its
+Elastic checks use counts, timestamps, mappings, `field_caps`, size-0 freshness aggregations, and a
+bounded recent sample for paired ingest-lag timestamps. Sentinel uses ARM metadata and bounded Logs
+queries, with unavailable evidence left unassessed.
 
-It currently supports Elastic Security and OpenSearch Security Analytics. Some checks depend on rule
-metadata and are limited by what each SIEM exposes. deadair checks whether a rule can see the data it
-expects. It does not assess the rule logic.
+The current backends are Elastic Security, OpenSearch Security Analytics, and Microsoft Sentinel.
+The examples and native-health comparison on this page focus on Elastic, where the original
+investigation and simulation ran. The [usage guide](usage.md#microsoft-sentinel) and
+[validation status](validation.md) describe Sentinel's evidence model and live-tested boundary.
+deadair checks whether a rule can see the data it expects. It does not assess the rule logic.
 
 <p style="margin-top:2rem"><a href="https://github.com/alephnull-sh/deadair">deadair on GitHub →</a></p>

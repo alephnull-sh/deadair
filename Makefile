@@ -19,7 +19,7 @@ CI_OUT_ABS := $(if $(filter /%,$(CI_OUT)),$(CI_OUT),$(CURDIR)/$(CI_OUT))
 SCAN_LAB_OUT ?= integration/scan-lab-out
 SCAN_LAB_OUT_ABS := $(if $(filter /%,$(SCAN_LAB_OUT)),$(SCAN_LAB_OUT),$(CURDIR)/$(SCAN_LAB_OUT))
 
-.PHONY: build static-build test race vet fmt check tidy-check validate release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down record-ci record-scan-lab mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
+.PHONY: build static-build test race vet fmt check tidy-check validate release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down record-ci record-scan-lab record-sentinel-lab mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BIN) ./cmd/deadair
@@ -138,6 +138,13 @@ record-scan-lab: build
 	fi; \
 	$(SCAN_LAB_COMPOSE) down -v; \
 	exit $$status
+
+record-sentinel-lab: build
+	@test -n "$(DEADAIR_AZURE_SUBSCRIPTION_ID)" || (echo "DEADAIR_AZURE_SUBSCRIPTION_ID is required" >&2; exit 1)
+	@test -n "$(DEADAIR_AZURE_RESOURCE_GROUP)" || (echo "DEADAIR_AZURE_RESOURCE_GROUP is required" >&2; exit 1)
+	@test -n "$(DEADAIR_SENTINEL_WORKSPACE)" || (echo "DEADAIR_SENTINEL_WORKSPACE is required" >&2; exit 1)
+	@test "$(DEADAIR_SENTINEL_CAPTURE_CONFIRM)" = "record-disposable-sentinel:$(DEADAIR_SENTINEL_WORKSPACE)" || (echo "Set DEADAIR_SENTINEL_CAPTURE_CONFIRM=record-disposable-sentinel:$(DEADAIR_SENTINEL_WORKSPACE) to confirm this is a disposable lab" >&2; exit 1)
+	DEADAIR_BACKEND=sentinel AZURE_TOKEN_CREDENTIALS=AzureCLICredential vhs docs/assets/sentinel-lab.tape
 
 mssp-lab-up:
 	$(COMPOSE) up -d --wait

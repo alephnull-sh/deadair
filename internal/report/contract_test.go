@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alephnull-sh/deadair/internal/backend"
 	"github.com/alephnull-sh/deadair/internal/graph"
 )
 
@@ -18,27 +19,44 @@ func TestBuildInitializesReportContract(t *testing.T) {
 	tests := []struct {
 		backend        string
 		product        string
+		observed       string
 		supportedLines []string
 		statuses       []CapabilityStatus
 	}{
 		{
 			backend:        "elastic",
 			product:        "Elastic Security",
+			observed:       "observed-1",
 			supportedLines: []string{"8.x", "9.x"},
 			statuses: []CapabilityStatus{
 				CapabilitySupported, CapabilityPartial, CapabilitySupported,
 				CapabilitySupported, CapabilitySupported, CapabilitySupported,
 				CapabilitySupported, CapabilitySupported, CapabilityListedOnly,
+				CapabilityUnavailable, CapabilityUnavailable, CapabilityUnavailable, CapabilityUnavailable,
 			},
 		},
 		{
 			backend:        "opensearch",
 			product:        "OpenSearch Security Analytics",
+			observed:       "observed-1",
 			supportedLines: []string{"2.x", "3.x"},
 			statuses: []CapabilityStatus{
 				CapabilitySupported, CapabilitySupported, CapabilitySupported,
 				CapabilitySupported, CapabilitySupported, CapabilityUnavailable,
 				CapabilityUnavailable, CapabilitySupported, CapabilityListedOnly,
+				CapabilityUnavailable, CapabilityUnavailable, CapabilityUnavailable, CapabilityUnavailable,
+			},
+		},
+		{
+			backend:        "sentinel",
+			product:        "Microsoft Sentinel",
+			observed:       "",
+			supportedLines: []string{},
+			statuses: []CapabilityStatus{
+				CapabilitySupported, CapabilityPartial, CapabilityPartial,
+				CapabilityUnavailable, CapabilityPartial, CapabilityUnavailable,
+				CapabilityPartial, CapabilitySupported, CapabilityPartial,
+				CapabilityPartial, CapabilityPartial, CapabilityPartial, CapabilityPartial,
 			},
 		},
 	}
@@ -59,7 +77,7 @@ func TestBuildInitializesReportContract(t *testing.T) {
 				t.Fatalf("backend compatibility field = %q, want %q", r.Backend, tt.backend)
 			}
 			metadata := r.BackendMetadata
-			if metadata.Name != tt.backend || metadata.Product != tt.product || metadata.ObservedVersion != "observed-1" {
+			if metadata.Name != tt.backend || metadata.Product != tt.product || metadata.ObservedVersion != tt.observed {
 				t.Fatalf("backend metadata = %+v", metadata)
 			}
 			if !reflect.DeepEqual(metadata.SupportedVersionLines, tt.supportedLines) {
@@ -83,6 +101,52 @@ func TestBuildInitializesReportContract(t *testing.T) {
 	}
 	if r.BackendMetadata.ObservedVersion != "" {
 		t.Fatalf("default observed backend version = %q, want omitted", r.BackendMetadata.ObservedVersion)
+	}
+}
+
+func TestSentinelCapabilityDetailsDescribeAssessmentBoundaries(t *testing.T) {
+	metadata := MetadataForBackend("sentinel", "api-version-is-not-a-product-version")
+	if metadata.ObservedVersion != "" || len(metadata.SupportedVersionLines) != 0 {
+		t.Fatalf("Sentinel SaaS metadata exposes product versions: %+v", metadata)
+	}
+
+	details := make(map[string]Capability, len(metadata.Capabilities))
+	for _, capability := range metadata.Capabilities {
+		details[capability.Name] = capability
+	}
+	checks := map[string][]string{
+		CapabilityRuleInventory:        {"Scheduled", "2025-09-01", "NRT", "2025-10-01-preview", "non-query rule kinds"},
+		CapabilitySourceResolution:     {"direct local tables", "union/join/lookup", "tabular let aliases", "closed scalar arguments", "metadata-backed ASIM", "positive table and permission evidence", "mapped literal workspace()", "dynamic table names"},
+		CapabilityFreshness:            {"resolved local or explicitly mapped remote Analytics tables", "informational rule-source freshness", "one parser-proved local Analytics table", "closed literal predicate"},
+		CapabilityDocsStorage:          {"does not expose", "document inventory"},
+		CapabilitySchema:               {"resolved local or explicitly mapped remote Analytics tables"},
+		CapabilityRequiredFields:       {"not authoritative"},
+		CapabilityIngestLag:            {"TimeGenerated", "ingestion_time()", "mapped remote", "incomplete"},
+		CapabilityCandidateParsing:     {"Scheduled", "NRT", "ARM deployment JSON", "Azure-Sentinel", "without installation"},
+		CapabilityRemote:               {"mapped literal workspace()", "Sentinel-onboarded", "unmapped or dynamic", "app()", "resource()", "unassessed"},
+		CapabilityDependencyResolution: {"literal _GetWatchlist()", "native ASIM", "permission evidence", "informational", "concrete monitorable tables", "source-health edges"},
+		CapabilityCrossWorkspace:       {"configured literal workspace()", "onboardingStates/default", "scoped Logs evidence", "textual aliases", "original-literal Logs proof", "canonical counting", "GUID and ARM-ID mappings", "20 workspaces per analytics-rule query", "conservatively counts the home workspace", "19 distinct remotes per rule", "20 or more distinct normalized workspace regions", "after any alias proof", "ordinary dependency and freshness probes", "missing workspace location", "warning at five regions", "guidance", "same-subscription mapped source evidence is conclusive", "eligible installed rule that references another subscription", "exact successful SentinelHealth", "latest rule change", "expected run cadence plus scheduling delay", "candidate", "absent", "stale", "ambiguous", "mismatched", "non-successful", "creator's credentials", "tenant boundaries are not separately identified", "Azure Lighthouse", "cross-tenant topology", "not live-validated", "compatible", "unavailable"},
+		CapabilitySourceLineage:        {"ARM-only structural lineage", "summary-rule", "Analytics output table", "separate from bounded schedule-aware latest-completed-run LASummaryLogs evidence", "invalid runtime configuration", "overdue successes", "incomplete", "informational", "native runtime failures", "findings or gates"},
+		CapabilityRuleProvenance:       {"informational exact-ID joins", "Content Hub", "display names", "guess provenance"},
+	}
+	wantPartial := map[string]bool{
+		CapabilitySourceResolution: true, CapabilityFreshness: true, CapabilitySchema: true,
+		CapabilityIngestLag: true, CapabilityRemote: true, CapabilityDependencyResolution: true,
+		CapabilityCrossWorkspace: true, CapabilitySourceLineage: true, CapabilityRuleProvenance: true,
+	}
+	for name, fragments := range checks {
+		capability, ok := details[name]
+		if !ok {
+			t.Fatalf("Sentinel capability %q is missing", name)
+		}
+		if wantPartial[name] && capability.Status != CapabilityPartial {
+			t.Errorf("Sentinel %s status = %q, want %q", name, capability.Status, CapabilityPartial)
+		}
+		for _, fragment := range fragments {
+			if !strings.Contains(capability.Detail, fragment) {
+				t.Errorf("Sentinel %s detail %q does not contain %q", name, capability.Detail, fragment)
+			}
+		}
 	}
 }
 
@@ -153,11 +217,32 @@ func TestReportContractSchemas(t *testing.T) {
 	if got, want := stringsAt(t, status, "enum"), []string{"supported", "partial", "unavailable", "listed-only"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("capability status enum = %v, want %v", got, want)
 	}
+	capabilityNames := stringsAt(t, objectAt(t, objectAt(t, capability, "properties"), "name"), "enum")
+	for _, name := range []string{CapabilityDependencyResolution, CapabilityCrossWorkspace, CapabilitySourceLineage, CapabilityRuleProvenance} {
+		if !containsString(capabilityNames, name) {
+			t.Fatalf("capability name enum = %v, want %s", capabilityNames, name)
+		}
+	}
 	evidenceStatus := objectAt(t, defs, "evidenceStatus")
 	if got, want := stringsAt(t, evidenceStatus, "enum"), []string{"assessed", "disabled", "incomplete", "unavailable"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("runtime evidence status enum = %v, want %v", got, want)
 	}
 	assertRequired(t, objectAt(t, defs, "runtimeAssessment"), "name", "status")
+	runtimeAssessmentProperties := objectAt(t, objectAt(t, defs, "runtimeAssessment"), "properties")
+	runtimeAssessmentNames := stringsAt(t, objectAt(t, runtimeAssessmentProperties, "name"), "enum")
+	for _, name := range []string{
+		AssessmentSourceResolution,
+		AssessmentSourceFreshness,
+		AssessmentPredicateFreshness,
+		AssessmentRequiredFields,
+		AssessmentIngestLag,
+		AssessmentSchemaDrift,
+		AssessmentCandidateParsing,
+	} {
+		if !containsString(runtimeAssessmentNames, name) {
+			t.Fatalf("runtime assessment name enum = %v, want %s", runtimeAssessmentNames, name)
+		}
+	}
 	assertRequired(t, objectAt(t, defs, "ingestLagHealth"), "status")
 	assertRequired(t, objectAt(t, defs, "requiredFieldAssessment"), "rule_id", "rule_name", "sources")
 	assertRequired(t, summary, "input_resolution", "unused_telemetry_assessment")
@@ -172,6 +257,55 @@ func TestReportContractSchemas(t *testing.T) {
 		if _, ok := objectAt(t, inputResolution, "properties")[field]; !ok {
 			t.Fatalf("input resolution schema is missing %s", field)
 		}
+	}
+	for _, field := range []string{"resolved_dependencies"} {
+		if _, ok := objectAt(t, inputResolution, "properties")[field]; !ok {
+			t.Fatalf("input resolution schema is missing %s", field)
+		}
+	}
+	for _, field := range []string{"dependency_evidence", "rule_provenance", "source_lineage", "rule_source_freshness", "summary_rule_runs"} {
+		if _, ok := objectAt(t, reportSchema, "properties")[field]; !ok {
+			t.Fatalf("report schema is missing %s", field)
+		}
+		if containsString(stringsAt(t, reportSchema, "required"), field) {
+			t.Fatalf("additive report field %s must remain optional", field)
+		}
+	}
+	for _, definition := range []string{"dependencyRef", "provenanceRef", "dependencyEvidence", "ruleProvenance", "sourceLineage", "ruleSourceFreshness", "summaryRuleRun"} {
+		if _, ok := defs[definition]; !ok {
+			t.Fatalf("report schema is missing %s definition", definition)
+		}
+	}
+	assertRequired(t, objectAt(t, defs, "ruleSourceFreshness"), "rule_id", "source", "status", "observed_at", "freshness_status")
+	assertRequired(t, objectAt(t, defs, "summaryRuleRun"), "rule", "output", "status", "method", "observed_at")
+	inputSummary := objectAt(t, defs, "inputResolutionSummary")
+	if _, ok := objectAt(t, inputSummary, "properties")["incompatible"]; !ok {
+		t.Fatal("input resolution summary schema is missing incompatible")
+	}
+	if containsString(stringsAt(t, inputSummary, "required"), "incompatible") {
+		t.Fatal("the additive incompatible count must not make older v1 reports invalid")
+	}
+	resolutionStatuses := stringsAt(t, objectAt(t, objectAt(t, inputResolution, "properties"), "status"), "enum")
+	if !containsString(resolutionStatuses, string(backend.ResolutionIncompatible)) {
+		t.Fatalf("input resolution status enum = %v, want incompatible", resolutionStatuses)
+	}
+	impaired := objectAt(t, defs, "impairedDetection")
+	if _, ok := objectAt(t, impaired, "properties")["incompatible_sources"]; !ok {
+		t.Fatal("impaired detection schema is missing incompatible_sources")
+	}
+	deadProperties := objectAt(t, objectAt(t, defs, "deadDetection"), "properties")
+	deadReasons := stringsAt(t, objectAt(t, deadProperties, "reason"), "enum")
+	if !containsString(deadReasons, ReasonSourcePlanIncompatible) {
+		t.Fatalf("dead reason enum = %v, want %s", deadReasons, ReasonSourcePlanIncompatible)
+	}
+	impairedProperties := objectAt(t, impaired, "properties")
+	impairedReasonItems := objectAt(t, objectAt(t, impairedProperties, "reasons"), "items")
+	impairedReasons := stringsAt(t, impairedReasonItems, "enum")
+	if !containsString(impairedReasons, ReasonSourcePlanIncompatible) {
+		t.Fatalf("impaired reason enum = %v, want %s", impairedReasons, ReasonSourcePlanIncompatible)
+	}
+	if _, ok := objectAt(t, objectAt(t, defs, "sourceHealth"), "properties")["age_lower_bound"]; !ok {
+		t.Fatal("source health schema is missing age_lower_bound")
 	}
 	assertRequired(t, objectAt(t, defs, "partialInputCoverage"), "rule_id", "rule_name", "severity", "expression", "observed_at")
 	unusedAssessment := objectAt(t, objectAt(t, summary, "properties"), "unused_telemetry_assessment")
@@ -202,6 +336,20 @@ func TestReportContractSchemas(t *testing.T) {
 	}}
 	r.UnmappedRules = []RuleRef{{ID: "unmapped", Name: "Unmapped", Severity: "low"}}
 	r.RemoteRules = []RuleRef{{ID: "remote", Name: "Remote", Severity: "low"}}
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	lastEvent := now.Add(-time.Minute)
+	runAt := now.Add(-time.Minute)
+	r.RuleSourceFreshness = []RuleSourceFreshness{{
+		RuleID: "rule", Source: "SecurityEvent", Fields: []string{"EventID"},
+		Status: backend.EvidenceAssessed, Method: "sentinel-predicate-max", ObservedAt: now,
+		WindowSeconds: 86400, LastEvent: &lastEvent, FreshnessStatus: "ok", AgeSeconds: 60,
+	}}
+	r.SummaryRuleRuns = []SummaryRuleRun{{
+		ID: "summary-run", Rule: backend.DependencyRef{ID: "summary-rule", Kind: "sentinel_summary_rule"},
+		Output: backend.DependencyRef{ID: "Summary_CL", Kind: "telemetry_table", Monitorable: true},
+		Status: backend.EvidenceAssessed, Method: "lasummarylogs-latest-7d", ObservedAt: now,
+		WindowSeconds: 604800, RunAt: &runAt, RunStatus: "Succeeded",
+	}}
 	reportValue := marshalContractValue(t, r)
 	reportValue.(map[string]any)["future_field"] = true
 	objectAt(t, reportValue.(map[string]any), "backend_metadata")["future_metadata"] = "allowed"

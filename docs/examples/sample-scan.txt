@@ -1,7 +1,8 @@
-deadair scan — elastic — 2026-08-20T21:04:20Z
+deadair scan — elastic — 2026-08-22T03:13:44Z
+GATE FAILED — one or more findings require attention
 sources:    5 (4 ok, 1 stale, 0 empty, 0 unknown, 0 maintenance)
 detections: 5 enabled / 5 total (0 unmapped)
-inputs:     4 resolved, 1 empty, 0 unsupported, 0 unavailable, 0 remote, 0 ambiguous
+inputs:     4 resolved, 1 empty, 0 incompatible, 0 unsupported, 0 unavailable, 0 remote, 0 ambiguous
 
 DEAD: 2 enabled detection(s) cannot fire right now
   [high] Lab registry persistence — no matching source
@@ -9,7 +10,7 @@ DEAD: 2 enabled detection(s) cannot fire right now
 
 IMPAIRED: 2 enabled detection(s) run with reduced visibility
   [high] Lab parser field coverage — missing-fields (missing process.command_line)
-  [medium] Lab delayed ingest — lag-blind-window (ingest lag p95 44m59s (max 44m59s) in deadair-lab-lag exceeds window margin)
+  [medium] Lab delayed ingest — lag-blind-window (ingest lag p95 45m (max 45m) in deadair-lab-lag exceeds window margin)
 
 unused telemetry: 1 source(s), 4.1 KiB stored with no enabled detection reading it
   deadair-lab-unused (4.1 KiB)

@@ -24,6 +24,7 @@ import (
 	backendpkg "github.com/alephnull-sh/deadair/internal/backend"
 	"github.com/alephnull-sh/deadair/internal/backend/elastic"
 	"github.com/alephnull-sh/deadair/internal/backend/opensearch"
+	"github.com/alephnull-sh/deadair/internal/backend/sentinel"
 	"github.com/alephnull-sh/deadair/internal/exporter"
 	"github.com/alephnull-sh/deadair/internal/graph"
 	"github.com/alephnull-sh/deadair/internal/health"
@@ -34,6 +35,13 @@ import (
 
 // Version is stamped at build time via -ldflags.
 var Version = "dev"
+
+const sentinelUnusedTelemetryUnavailableDetail = "Sentinel lacks authoritative source storage and document-count inventory"
+
+// Read-only provenance and lineage enrich a completed health scan. Bound each
+// optional provider independently so a slow catalog cannot consume the scan's
+// full deadline or turn informational evidence into a gating failure.
+var readOnlyEnrichmentTimeout = 10 * time.Second
 
 func init() {
 	info, ok := debug.ReadBuildInfo()
@@ -64,7 +72,7 @@ func printHelp(w io.Writer) {
 	h := func(s string) string { return color(w, "1", s) }
 	fmt.Fprintf(w, "%s — telemetry health monitoring for SIEM detections\n\n", h("deadair"))
 	fmt.Fprintln(w, "Maps detection rules to the log sources they read and reports which rules")
-	fmt.Fprintln(w, "cannot currently detect anything. Read-only; Elastic and OpenSearch.")
+	fmt.Fprintln(w, "cannot currently detect anything. Read-only; Elastic, OpenSearch, and Microsoft Sentinel.")
 	fmt.Fprintf(w, "\n%s\n", h("USAGE"))
 	fmt.Fprintln(w, "  deadair <command> [flags]")
 	fmt.Fprintf(w, "\n%s\n", h("COMMANDS"))
@@ -83,6 +91,8 @@ func printHelp(w io.Writer) {
 		fmt.Fprintln(w, "\nconfigured: elastic")
 	} else if os.Getenv("DEADAIR_OPENSEARCH_URL") != "" {
 		fmt.Fprintln(w, "\nconfigured: opensearch")
+	} else if strings.EqualFold(os.Getenv("DEADAIR_BACKEND"), "sentinel") && os.Getenv("DEADAIR_SENTINEL_WORKSPACE") != "" {
+		fmt.Fprintln(w, "\nconfigured: sentinel")
 	} else {
 		fmt.Fprintln(w, "\nnot configured yet — start with: deadair setup")
 	}
@@ -164,6 +174,11 @@ type connOpts struct {
 	opensearchURL          string
 	opensearchUsername     string
 	opensearchPasswordFile string
+	azureSubscriptionID    string
+	azureResourceGroup     string
+	sentinelWorkspace      string
+	sentinelWorkspaceID    string
+	sentinelRemotesFile    string
 	apiKeyFile             string
 	timeout                time.Duration
 	concurrency            int
@@ -188,12 +203,17 @@ type connOpts struct {
 }
 
 func addBackendFlags(fs *flag.FlagSet, o *connOpts) {
-	fs.StringVar(&o.backendName, "backend", envOr("DEADAIR_BACKEND", "elastic"), "backend to scan: elastic or opensearch (env DEADAIR_BACKEND)")
+	fs.StringVar(&o.backendName, "backend", envOr("DEADAIR_BACKEND", "elastic"), "backend to scan: elastic, opensearch, or sentinel (env DEADAIR_BACKEND)")
 	fs.StringVar(&o.esURL, "es-url", os.Getenv("DEADAIR_ES_URL"), "Elasticsearch base URL (env DEADAIR_ES_URL)")
 	fs.StringVar(&o.kibanaURL, "kibana-url", os.Getenv("DEADAIR_KIBANA_URL"), "Kibana base URL (env DEADAIR_KIBANA_URL)")
 	fs.StringVar(&o.opensearchURL, "opensearch-url", os.Getenv("DEADAIR_OPENSEARCH_URL"), "OpenSearch base URL (env DEADAIR_OPENSEARCH_URL)")
 	fs.StringVar(&o.opensearchUsername, "opensearch-username", os.Getenv("DEADAIR_OPENSEARCH_USERNAME"), "OpenSearch username for basic auth (env DEADAIR_OPENSEARCH_USERNAME)")
 	fs.StringVar(&o.opensearchPasswordFile, "opensearch-password-file", "", "file containing the OpenSearch password (default: env DEADAIR_OPENSEARCH_PASSWORD)")
+	fs.StringVar(&o.azureSubscriptionID, "azure-subscription", os.Getenv("DEADAIR_AZURE_SUBSCRIPTION_ID"), "Azure subscription ID (env DEADAIR_AZURE_SUBSCRIPTION_ID)")
+	fs.StringVar(&o.azureResourceGroup, "azure-resource-group", os.Getenv("DEADAIR_AZURE_RESOURCE_GROUP"), "Azure resource group containing the Sentinel workspace (env DEADAIR_AZURE_RESOURCE_GROUP)")
+	fs.StringVar(&o.sentinelWorkspace, "sentinel-workspace", os.Getenv("DEADAIR_SENTINEL_WORKSPACE"), "Sentinel Log Analytics workspace resource name (env DEADAIR_SENTINEL_WORKSPACE)")
+	fs.StringVar(&o.sentinelWorkspaceID, "sentinel-workspace-id", os.Getenv("DEADAIR_SENTINEL_WORKSPACE_ID"), "optional Log Analytics customer ID override (env DEADAIR_SENTINEL_WORKSPACE_ID; discovered through ARM by default)")
+	fs.StringVar(&o.sentinelRemotesFile, "sentinel-remotes", os.Getenv("DEADAIR_SENTINEL_REMOTES"), "JSON file explicitly mapping literal workspace() targets (env DEADAIR_SENTINEL_REMOTES)")
 	fs.StringVar(&o.apiKeyFile, "api-key-file", "", "file containing the API key (default: env DEADAIR_API_KEY)")
 	fs.DurationVar(&o.timeout, "timeout", 60*time.Second, "overall timeout per scan")
 	fs.IntVar(&o.concurrency, "concurrency", 4, "max parallel source-health and input-resolution queries")
@@ -348,14 +368,51 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 	}, nil
 }
 
+func (o *connOpts) sentinelClient(stderr io.Writer) (backendpkg.Backend, error) {
+	hc, err := o.httpClient(stderr)
+	if err != nil {
+		return nil, err
+	}
+	remotes, err := loadSentinelRemotes(o.sentinelRemotesFile)
+	if err != nil {
+		return nil, err
+	}
+	return sentinel.NewClient(sentinel.Config{
+		SubscriptionID:   o.azureSubscriptionID,
+		ResourceGroup:    o.azureResourceGroup,
+		WorkspaceName:    o.sentinelWorkspace,
+		WorkspaceID:      o.sentinelWorkspaceID,
+		RemoteWorkspaces: remotes,
+		HTTP:             hc,
+		Concurrency:      o.concurrency,
+	})
+}
+
+func loadSentinelRemotes(path string) ([]sentinel.RemoteWorkspace, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading Sentinel remote-workspace file: %w", err)
+	}
+	remotes, err := sentinel.ParseRemoteWorkspaces(data)
+	if err != nil {
+		return nil, err
+	}
+	return remotes, nil
+}
+
 func (o *connOpts) client(stderr io.Writer) (backendpkg.Backend, error) {
 	switch strings.ToLower(strings.TrimSpace(o.backendName)) {
 	case "", "elastic":
 		return o.elasticClient(stderr)
 	case "opensearch":
 		return o.openSearchClient(stderr)
+	case "sentinel":
+		return o.sentinelClient(stderr)
 	default:
-		return nil, fmt.Errorf("unknown backend %q (want elastic or opensearch)", o.backendName)
+		return nil, fmt.Errorf("unknown backend %q (want elastic, opensearch, or sentinel)", o.backendName)
 	}
 }
 
@@ -442,6 +499,129 @@ func collectRequiredFieldEvidence(ctx context.Context, c backendpkg.Backend, rul
 	return evidence, assessment, nil
 }
 
+func enabledConcreteSources(rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source) []backendpkg.Source {
+	wanted := make(map[string]bool)
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		for _, source := range g.SourcesFor(rule.ID) {
+			wanted[source] = true
+		}
+	}
+	sources := make([]backendpkg.Source, 0, len(wanted))
+	for _, source := range inventory {
+		if wanted[source.Name] {
+			sources = append(sources, source)
+		}
+	}
+	return sources
+}
+
+func freshnessRequests(rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration) []backendpkg.FreshnessRequest {
+	type clocks struct{ event, ingestion bool }
+	wanted := make(map[string]clocks)
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		ingestion := strings.EqualFold(strings.TrimSpace(rule.TimestampOverride), "ingestion_time()")
+		for _, source := range g.SourcesFor(rule.ID) {
+			use := wanted[source]
+			if ingestion {
+				use.ingestion = true
+			} else {
+				use.event = true
+			}
+			wanted[source] = use
+		}
+	}
+	requests := make([]backendpkg.FreshnessRequest, 0, len(wanted))
+	for _, source := range inventory {
+		use, ok := wanted[source.Name]
+		if !ok {
+			continue
+		}
+		basis := backendpkg.FreshnessEventTime
+		switch {
+		case use.event && use.ingestion:
+			basis = backendpkg.FreshnessMixed
+		case use.ingestion:
+			basis = backendpkg.FreshnessIngestionTime
+		}
+		requests = append(requests, backendpkg.FreshnessRequest{Source: source, Basis: basis, Window: maxStale})
+	}
+	return requests
+}
+
+func collectFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration) (map[string]backendpkg.FreshnessEvidence, report.RuntimeAssessment, error) {
+	assessment := report.RuntimeAssessment{Name: report.AssessmentSourceFreshness}
+	provider, legacy := c.(backendpkg.FreshnessProvider)
+	requestProvider, ruleAware := c.(backendpkg.FreshnessRequestProvider)
+	if !legacy && !ruleAware {
+		return nil, report.RuntimeAssessment{}, nil
+	}
+	requests := freshnessRequests(rules, g, inventory, maxStale)
+	if len(requests) == 0 {
+		assessment.Status = backendpkg.EvidenceDisabled
+		assessment.Detail = "no enabled rule resolved to a local source"
+		return map[string]backendpkg.FreshnessEvidence{}, assessment, nil
+	}
+	sources := make([]backendpkg.Source, 0, len(requests))
+	for _, request := range requests {
+		sources = append(sources, request.Source)
+	}
+	var evidence map[string]backendpkg.FreshnessEvidence
+	var err error
+	if ruleAware {
+		evidence, err = requestProvider.FreshnessEvidenceFor(ctx, requests)
+	} else {
+		evidence, err = provider.FreshnessEvidence(ctx, sources)
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, assessment, ctx.Err()
+		}
+		assessment.Status = backendpkg.EvidenceIncomplete
+		assessment.Detail = "bounded freshness evidence could not be collected"
+		return map[string]backendpkg.FreshnessEvidence{}, assessment, nil
+	}
+
+	assessed, unavailable, incomplete := 0, 0, 0
+	for _, source := range sources {
+		item, found := evidence[source.Name]
+		if !found {
+			incomplete++
+			continue
+		}
+		if item.Status == backendpkg.EvidenceAssessed && item.LastEvent.IsZero() && maxStale > 0 && item.Window < maxStale {
+			item.Status = backendpkg.EvidenceIncomplete
+			item.Detail = fmt.Sprintf("bounded freshness window %s is shorter than max-stale %s", item.Window, maxStale)
+			evidence[source.Name] = item
+		}
+		switch item.Status {
+		case backendpkg.EvidenceAssessed:
+			assessed++
+		case backendpkg.EvidenceUnavailable:
+			unavailable++
+		default:
+			incomplete++
+		}
+	}
+	switch {
+	case unavailable == len(sources):
+		assessment.Status = backendpkg.EvidenceUnavailable
+		assessment.Detail = fmt.Sprintf("freshness is unavailable for %d consumed source(s)", unavailable)
+	case unavailable > 0 || incomplete > 0:
+		assessment.Status = backendpkg.EvidenceIncomplete
+		assessment.Detail = fmt.Sprintf("freshness evidence incomplete for %d of %d consumed source(s)", unavailable+incomplete, len(sources))
+	default:
+		assessment.Status = backendpkg.EvidenceAssessed
+		assessment.Detail = fmt.Sprintf("bounded freshness evidence collected for %d consumed source(s)", assessed)
+	}
+	return evidence, assessment, nil
+}
+
 func collectIngestLagEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source) (map[string]backendpkg.IngestLagEvidence, report.RuntimeAssessment, error) {
 	assessment := report.RuntimeAssessment{Name: report.AssessmentIngestLag}
 	provider, ok := c.(backendpkg.IngestLagProvider)
@@ -497,7 +677,112 @@ func collectIngestLagEvidence(ctx context.Context, c backendpkg.Backend, rules [
 	return evidence, assessment, nil
 }
 
-func runtimeAssessments(o connOpts, g *graph.Graph, scoped []backendpkg.Source, schemaEvidence map[string]state.SchemaAssessment, fields, lag report.RuntimeAssessment) []report.RuntimeAssessment {
+func predicateFreshnessRequests(rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration, policy *report.Policy) []backendpkg.RulePredicateFreshnessRequest {
+	sources := make(map[string]backendpkg.Source, len(inventory))
+	for _, source := range inventory {
+		sources[source.Name] = source
+	}
+	var requests []backendpkg.RulePredicateFreshnessRequest
+	for _, rule := range rules {
+		if !rule.Enabled || len(rule.PredicateFreshness) == 0 {
+			continue
+		}
+		resolved := make(map[string]bool)
+		for _, source := range g.SourcesFor(rule.ID) {
+			resolved[source] = true
+		}
+		basis := backendpkg.FreshnessEventTime
+		if strings.EqualFold(strings.TrimSpace(rule.TimestampOverride), "ingestion_time()") {
+			basis = backendpkg.FreshnessIngestionTime
+		}
+		for _, selector := range rule.PredicateFreshness {
+			source, ok := sources[selector.Source]
+			if !ok || !resolved[selector.Source] {
+				continue
+			}
+			window := maxStale
+			if policy != nil {
+				window = policy.MaxStaleFor(source.Name, maxStale)
+			}
+			requests = append(requests, backendpkg.RulePredicateFreshnessRequest{
+				RuleID: rule.ID, BackendObjectID: rule.BackendObjectID, Source: source,
+				Basis: basis, Window: window, Selector: selector,
+			})
+		}
+	}
+	sort.Slice(requests, func(i, j int) bool {
+		if requests[i].RuleID != requests[j].RuleID {
+			return requests[i].RuleID < requests[j].RuleID
+		}
+		if requests[i].Source.Name != requests[j].Source.Name {
+			return requests[i].Source.Name < requests[j].Source.Name
+		}
+		return requests[i].Selector.Expression < requests[j].Selector.Expression
+	})
+	return requests
+}
+
+func collectPredicateFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration, policy *report.Policy) ([]backendpkg.RulePredicateFreshnessEvidence, report.RuntimeAssessment, error) {
+	provider, ok := c.(backendpkg.RulePredicateFreshnessProvider)
+	if !ok {
+		return nil, report.RuntimeAssessment{}, nil
+	}
+	assessment := report.RuntimeAssessment{Name: report.AssessmentPredicateFreshness}
+	requests := predicateFreshnessRequests(rules, g, inventory, maxStale, policy)
+	if len(requests) == 0 {
+		assessment.Status = backendpkg.EvidenceDisabled
+		assessment.Detail = "no enabled, fully resolved rule exposed a supported closed source predicate"
+		return nil, assessment, nil
+	}
+	evidence, err := provider.RulePredicateFreshnessEvidenceFor(ctx, requests)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, assessment, ctx.Err()
+		}
+		assessment.Status = backendpkg.EvidenceIncomplete
+		assessment.Detail = "predicate-qualified freshness evidence could not be collected"
+		return nil, assessment, nil
+	}
+	assessed, incomplete, unavailable := 0, 0, 0
+	for i := range evidence {
+		item := &evidence[i]
+		effectiveMaxStale := maxStale
+		if policy != nil {
+			effectiveMaxStale = policy.MaxStaleFor(item.Source, maxStale)
+		}
+		if item.Freshness.Status == backendpkg.EvidenceAssessed && item.Freshness.LastEvent.IsZero() &&
+			effectiveMaxStale > 0 && item.Freshness.Window < effectiveMaxStale {
+			item.Freshness.Status = backendpkg.EvidenceIncomplete
+			item.Freshness.Detail = "bounded predicate query window is shorter than the stale threshold"
+		}
+		switch item.Freshness.Status {
+		case backendpkg.EvidenceAssessed:
+			assessed++
+		case backendpkg.EvidenceUnavailable:
+			unavailable++
+		default:
+			incomplete++
+		}
+	}
+	missing := len(requests) - len(evidence)
+	if missing > 0 {
+		incomplete += missing
+	}
+	switch {
+	case unavailable == len(requests):
+		assessment.Status = backendpkg.EvidenceUnavailable
+		assessment.Detail = "predicate-qualified freshness is unavailable for " + countLabel(unavailable, "rule/source check", "rule/source checks")
+	case unavailable > 0 || incomplete > 0:
+		assessment.Status = backendpkg.EvidenceIncomplete
+		assessment.Detail = fmt.Sprintf("predicate-qualified freshness is incomplete for %d of %d rule/source checks", unavailable+incomplete, len(requests))
+	default:
+		assessment.Status = backendpkg.EvidenceAssessed
+		assessment.Detail = "bounded predicate-qualified freshness collected for " + countLabel(assessed, "rule/source check", "rule/source checks")
+	}
+	return evidence, assessment, nil
+}
+
+func runtimeAssessments(o connOpts, g *graph.Graph, scoped []backendpkg.Source, schemaEvidence map[string]state.SchemaAssessment, fields, lag report.RuntimeAssessment, extra ...report.RuntimeAssessment) []report.RuntimeAssessment {
 	resolution := report.RuntimeAssessment{Name: report.AssessmentSourceResolution, Status: backendpkg.EvidenceAssessed}
 	enabledRules := make(map[string]bool, len(g.Rules))
 	for _, rule := range g.Rules {
@@ -518,7 +803,7 @@ func runtimeAssessments(o connOpts, g *graph.Graph, scoped []backendpkg.Source, 
 				authoritative[item.RuleID] = true
 			}
 			switch item.Status {
-			case backendpkg.ResolutionResolved, backendpkg.ResolutionEmpty:
+			case backendpkg.ResolutionResolved, backendpkg.ResolutionEmpty, backendpkg.ResolutionIncompatible:
 			default:
 				resolution.Status = backendpkg.EvidenceIncomplete
 				resolution.Detail = "one or more rule inputs could not be assessed locally"
@@ -557,7 +842,13 @@ func runtimeAssessments(o connOpts, g *graph.Graph, scoped []backendpkg.Source, 
 		candidate.Status = backendpkg.EvidenceAssessed
 		candidate.Detail = "candidate rule file parsed without installation"
 	}
-	return []report.RuntimeAssessment{resolution, fields, lag, schema, candidate}
+	assessments := []report.RuntimeAssessment{resolution}
+	for _, assessment := range extra {
+		if assessment.Name != "" {
+			assessments = append(assessments, assessment)
+		}
+	}
+	return append(assessments, fields, lag, schema, candidate)
 }
 
 func (o *connOpts) stateAssessments(ctx context.Context, c backendpkg.Backend, sources []backendpkg.Source, check health.Check, targetID string) (stateAssessments, *state.Store, error) {
@@ -621,6 +912,73 @@ type scanResult struct {
 	findingsOnlyState bool
 }
 
+func collectReadOnlyEnrichment(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, candidate bool) ([]backendpkg.ProvenanceEvidence, []backendpkg.LineageEvidence, []backendpkg.SummaryRuleRunEvidence, error) {
+	if candidate {
+		return nil, nil, nil, nil
+	}
+	var provenance []backendpkg.ProvenanceEvidence
+	if provider, ok := c.(backendpkg.ProvenanceProvider); ok {
+		enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
+		items, err := provider.ProvenanceEvidence(enrichmentCtx, rules)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, nil, ctx.Err()
+			}
+			observedAt := time.Now().UTC()
+			items = make([]backendpkg.ProvenanceEvidence, 0, len(rules))
+			for _, rule := range rules {
+				items = append(items, backendpkg.ProvenanceEvidence{
+					RuleID: rule.ID, BackendObjectID: rule.BackendObjectID,
+					Provenance: backendpkg.ProvenanceRef{Kind: "backend_rule_provenance"},
+					Status:     backendpkg.EvidenceUnavailable, Method: "backend-provenance",
+					ObservedAt: observedAt, Detail: "rule provenance could not be read",
+				})
+			}
+		}
+		provenance = items
+	}
+	var lineage []backendpkg.LineageEvidence
+	if provider, ok := c.(backendpkg.LineageProvider); ok {
+		enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
+		items, err := provider.LineageEvidence(enrichmentCtx, rules)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, nil, ctx.Err()
+			}
+			items = []backendpkg.LineageEvidence{{
+				Kind:   "backend_lineage_inventory",
+				Input:  backendpkg.DependencyRef{Kind: "unavailable_lineage_input"},
+				Output: backendpkg.DependencyRef{Kind: "unavailable_lineage_output"},
+				Status: backendpkg.EvidenceUnavailable, Method: "backend-lineage",
+				ObservedAt: time.Now().UTC(), Detail: "source lineage could not be read",
+			}}
+		}
+		lineage = items
+	}
+	var summaryRuns []backendpkg.SummaryRuleRunEvidence
+	if provider, ok := c.(backendpkg.SummaryRuleRunProvider); ok {
+		enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
+		items, err := provider.SummaryRuleRunEvidence(enrichmentCtx, rules)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, nil, ctx.Err()
+			}
+			items = []backendpkg.SummaryRuleRunEvidence{{
+				ID:     "backend-summary-rule-runs",
+				Rule:   backendpkg.DependencyRef{Kind: "unavailable_summary_rule"},
+				Output: backendpkg.DependencyRef{Kind: "unavailable_summary_output"},
+				Status: backendpkg.EvidenceUnavailable, Method: "backend-summary-rule-runs",
+				ObservedAt: time.Now().UTC(), Detail: "summary-rule runtime evidence could not be read",
+			}}
+		}
+		summaryRuns = items
+	}
+	return provenance, lineage, summaryRuns, nil
+}
+
 func (s scanResult) commitState() error {
 	if s.store == nil {
 		return nil
@@ -632,6 +990,11 @@ func (s scanResult) commitState() error {
 }
 
 func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, targetID string) (scanResult, error) {
+	if refresher, ok := c.(backendpkg.ScanRefresher); ok {
+		if err := refresher.RefreshForScan(ctx); err != nil {
+			return scanResult{}, fmt.Errorf("refreshing backend scan metadata: %w", err)
+		}
+	}
 	var err error
 	if o.policyFile != "" {
 		o.policy, err = report.LoadPolicy(o.policyFile, time.Now().UTC())
@@ -639,7 +1002,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 			return scanResult{}, err
 		}
 	}
-	configurationID, err := assessmentConfigurationID(o)
+	configurationID, err := assessmentConfigurationID(o, c)
 	if err != nil {
 		return scanResult{}, err
 	}
@@ -666,7 +1029,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 		if !ok {
 			return scanResult{}, fmt.Errorf("candidate-rule parsing is unavailable for backend %q", c.Name())
 		}
-		rules, err = parser.ParseCandidates(data)
+		rules, err = parser.ParseCandidates(ctx, data)
 	} else {
 		rules, err = c.Rules(ctx)
 	}
@@ -680,15 +1043,48 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 	if err != nil {
 		return scanResult{}, err
 	}
+	resolver, ok := c.(backendpkg.Resolver)
+	if !ok {
+		return scanResult{}, fmt.Errorf("backend %q does not provide native input resolution", c.Name())
+	}
+	resolutions, err := resolver.ResolveInputs(ctx, rules)
+	if err != nil {
+		return scanResult{}, fmt.Errorf("resolving rule inputs: %w", err)
+	}
+	g := graph.BuildResolved(rules, all, resolutions)
+	freshnessEvidence, freshnessAssessment, err := collectFreshnessEvidence(ctx, c, rules, g, all, o.maxStale)
+	if err != nil {
+		return scanResult{}, fmt.Errorf("reading source-freshness evidence: %w", err)
+	}
+	for i := range all {
+		if evidence, found := freshnessEvidence[all[i].Name]; found {
+			all[i].Freshness = evidence
+			if evidence.Status == backendpkg.EvidenceAssessed && !evidence.LastEvent.IsZero() {
+				all[i].LastEvent = evidence.LastEvent
+			}
+		}
+	}
+	// Runtime evidence is attached only after native resolution selects the
+	// bounded source set. Rebuild so verdicts see it without narrowing the
+	// full catalog used to prove missing tables.
+	g = graph.BuildResolved(rules, all, resolutions)
+
 	// Filters scope what the report lists and which sources get stateful
 	// assessments; verdicts always see the full inventory, so scoping can
 	// never manufacture a dead detection (report.BuildOptions.Scope).
+	filtersSet := len(o.include) > 0 || len(o.exclude) > 0
 	scoped := graph.FilterSources(all, o.include, o.exclude)
 	var scope map[string]bool
-	if len(o.include) > 0 || len(o.exclude) > 0 {
+	if c.Name() == "sentinel" && !filtersSet {
+		scoped = enabledConcreteSources(rules, g, all)
 		scope = make(map[string]bool, len(scoped))
-		for _, s := range scoped {
-			scope[s.Name] = true
+		for _, source := range scoped {
+			scope[source.Name] = true
+		}
+	} else if filtersSet {
+		scope = make(map[string]bool, len(scoped))
+		for _, source := range scoped {
+			scope[source.Name] = true
 		}
 	}
 	check, err := o.healthCheck()
@@ -699,15 +1095,6 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 	if err != nil {
 		return scanResult{}, err
 	}
-	resolver, ok := c.(backendpkg.Resolver)
-	if !ok {
-		return scanResult{}, fmt.Errorf("backend %q does not provide native input resolution", c.Name())
-	}
-	resolutions, err := resolver.ResolveInputs(ctx, rules)
-	if err != nil {
-		return scanResult{}, fmt.Errorf("resolving rule inputs: %w", err)
-	}
-	g := graph.BuildResolved(rules, all, resolutions)
 	lagEvidence, lagAssessment, err := collectIngestLagEvidence(ctx, c, rules, g, all)
 	if err != nil {
 		return scanResult{}, fmt.Errorf("reading ingest-lag evidence: %w", err)
@@ -719,20 +1106,41 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 	}
 	// Attach the measurements to the graph used by report impairment checks.
 	g = graph.BuildResolved(rules, all, resolutions)
+	predicateFreshnessEvidence, predicateFreshnessAssessment, err := collectPredicateFreshnessEvidence(ctx, c, rules, g, all, o.maxStale, o.policy)
+	if err != nil {
+		return scanResult{}, fmt.Errorf("reading predicate-qualified freshness evidence: %w", err)
+	}
 	fieldEvidence, fieldAssessment, err := collectRequiredFieldEvidence(ctx, c, rules, g, all)
 	if err != nil {
 		return scanResult{}, fmt.Errorf("reading required-field evidence: %w", err)
 	}
+	provenanceEvidence, lineageEvidence, summaryRunEvidence, err := collectReadOnlyEnrichment(ctx, c, rules, o.ruleFile != "")
+	if err != nil {
+		return scanResult{}, fmt.Errorf("reading backend enrichment evidence: %w", err)
+	}
+	suppressUnused := o.ruleFile != ""
+	unusedTelemetryUnavailableDetail := ""
+	if c.Name() == "sentinel" && !suppressUnused {
+		// The v1 unused-telemetry result requires a source document inventory.
+		// Sentinel exposes bounded freshness queries, not a cheap table total,
+		// so absence of a consumer is not enough to claim stored unused data.
+		unusedTelemetryUnavailableDetail = sentinelUnusedTelemetryUnavailableDetail
+	}
 	r := report.BuildWithOptions(c.Name(), g, report.BuildOptions{
-		Check:                  check,
-		Volume:                 stateAssess.volume,
-		Schema:                 stateAssess.schema,
-		Scope:                  scope,
-		FieldEvidence:          fieldEvidence,
-		Assessments:            runtimeAssessments(o, g, scoped, stateAssess.schema, fieldAssessment, lagAssessment),
-		SkipUnused:             o.ruleFile != "",
-		ProducerVersion:        Version,
-		BackendObservedVersion: observedVersion,
+		Check:                            check,
+		Volume:                           stateAssess.volume,
+		Schema:                           stateAssess.schema,
+		Scope:                            scope,
+		FieldEvidence:                    fieldEvidence,
+		PredicateFreshnessEvidence:       predicateFreshnessEvidence,
+		ProvenanceEvidence:               provenanceEvidence,
+		LineageEvidence:                  lineageEvidence,
+		SummaryRuleRunEvidence:           summaryRunEvidence,
+		Assessments:                      runtimeAssessments(o, g, scoped, stateAssess.schema, fieldAssessment, lagAssessment, freshnessAssessment, predicateFreshnessAssessment),
+		SkipUnused:                       suppressUnused,
+		UnusedTelemetryUnavailableDetail: unusedTelemetryUnavailableDetail,
+		ProducerVersion:                  Version,
+		BackendObservedVersion:           observedVersion,
 		ScanScope: report.ScanScope{
 			Mode: func() string {
 				if o.ruleFile != "" {
@@ -959,6 +1367,7 @@ func printSummary(w io.Writer, r *report.Report) {
 func printPlainSummary(w io.Writer, r *report.Report) {
 	s := r.Summary
 	fmt.Fprintf(w, "deadair scan — %s — %s\n", r.Backend, r.GeneratedAt.Format(time.RFC3339))
+	printPlainGateStatus(w, r)
 	counts := map[string]int{}
 	for _, src := range r.Sources {
 		counts[src.Status]++
@@ -968,8 +1377,8 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 	fmt.Fprintf(w, "detections: %d enabled / %d total (%d unmapped)\n", s.EnabledRules, s.Rules, s.UnmappedRules)
 	if len(r.InputResolutions) > 0 {
 		resolution := s.InputResolution
-		fmt.Fprintf(w, "inputs:     %d resolved, %d empty, %d unsupported, %d unavailable, %d remote, %d ambiguous\n",
-			resolution.Resolved, resolution.Empty, resolution.Unsupported, resolution.Unavailable,
+		fmt.Fprintf(w, "inputs:     %d resolved, %d empty, %d incompatible, %d unsupported, %d unavailable, %d remote, %d ambiguous\n",
+			resolution.Resolved, resolution.Empty, resolution.Incompatible, resolution.Unsupported, resolution.Unavailable,
 			resolution.Remote, resolution.Ambiguous)
 	}
 	if r.Policy != nil {
@@ -983,7 +1392,10 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 		fmt.Fprintf(w, "schema:     %d source(s) changed field_caps since previous snapshot\n", s.SchemaDriftSources)
 	}
 	if checks := unassessedChecks(r); len(checks) > 0 {
-		fmt.Fprintf(w, "checks:     %s\n", strings.Join(checks, ", "))
+		fmt.Fprintln(w, "checks:")
+		for _, check := range checks {
+			fmt.Fprintf(w, "  %s\n", check)
+		}
 	}
 	if len(r.DeadDetections) > 0 {
 		fmt.Fprintf(w, "\n%s\n", color(w, "31;1", fmt.Sprintf("DEAD: %d enabled detection(s) cannot fire right now", s.DeadDetections)))
@@ -1048,8 +1460,9 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 			shown++
 		}
 	}
+	printPlainSentinelSignals(w, r)
 	if s.UnusedTelemetryAssessment == report.UnusedAssessmentUnavailable {
-		fmt.Fprintln(w, "\nunused telemetry: not assessed because one or more enabled local rule inputs could not be resolved safely")
+		fmt.Fprintf(w, "\nunused telemetry: not assessed because %s\n", s.UnusedTelemetryExplanation())
 	} else if s.UnusedSources > 0 {
 		fmt.Fprintf(w, "\nunused telemetry: %d source(s), %s stored with no enabled detection reading it\n",
 			s.UnusedSources, humanBytes(s.UnusedBytes))
@@ -1065,13 +1478,150 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 			fmt.Fprintln(w, ")")
 		}
 	}
-	if r.ExitCode() == report.ExitHealthy {
-		if len(r.UnmappedRules) > 0 || len(r.RemoteRules) > 0 {
-			fmt.Fprintln(w, "\nno positive findings; one or more rule inputs were not assessed")
-		} else {
-			fmt.Fprintf(w, "\n%s\n", color(w, "32", "healthy: no dead detections, no degraded sources"))
+}
+
+func printPlainGateStatus(w io.Writer, r *report.Report) {
+	switch terminalGateExitCode(r) {
+	case report.ExitHealthy:
+		if count := sentinelSignalCount(r); count > 0 {
+			fmt.Fprintf(w, "%s — no gated findings; review %s below\n", color(w, "32;1", "GATE PASSED"), countLabel(count, "Sentinel signal", "Sentinel signals"))
+			return
+		}
+		fmt.Fprintf(w, "%s — no gated findings\n", color(w, "32;1", "GATE PASSED"))
+	case report.ExitFindings:
+		fmt.Fprintf(w, "%s — one or more findings require attention\n", color(w, "31;1", "GATE FAILED"))
+	default:
+		fmt.Fprintf(w, "%s — the gate could not be evaluated safely\n", color(w, "33;1", "SCAN INCOMPLETE"))
+	}
+}
+
+func printPlainSentinelSignals(w io.Writer, r *report.Report) {
+	freshness := ruleSourceFreshnessWarnings(r)
+	summaryRuns := summaryRuleRunWarnings(r)
+	if len(freshness)+len(summaryRuns) == 0 {
+		return
+	}
+	count := len(freshness) + len(summaryRuns)
+	verb := "need"
+	if count == 1 {
+		verb = "needs"
+	}
+	fmt.Fprintf(w, "\nSENTINEL SIGNALS: %s %s review. Advisory evidence only; gate unchanged.\n",
+		countLabel(count, "signal", "signals"), verb)
+	shown := 0
+	for _, item := range freshness {
+		if shown >= 10 {
+			fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", len(freshness)+len(summaryRuns)-shown)
+			return
+		}
+		shown++
+		fmt.Fprintf(w, "  Filtered data — %s\n", ruleSourceLabel(item))
+		fmt.Fprintf(w, "    %s\n", filteredFreshnessDetail(item))
+		fmt.Fprintln(w, "    Review this rule's filter and matching connector.")
+	}
+	for _, item := range summaryRuns {
+		if shown >= 10 {
+			fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", len(freshness)+len(summaryRuns)-shown)
+			return
+		}
+		shown++
+		fmt.Fprintf(w, "  Summary pipeline — %s\n", summaryRuleLabel(item))
+		fmt.Fprintf(w, "    %s\n", summaryRunDetail(r, item))
+		fmt.Fprintln(w, "    Open the summary rule run history in Sentinel.")
+	}
+}
+
+func terminalGateExitCode(r *report.Report) int {
+	if r.Scope.Mode == "candidate" {
+		return r.CandidateExitCode()
+	}
+	return r.ExitCode()
+}
+
+func sentinelSignalCount(r *report.Report) int {
+	return len(ruleSourceFreshnessWarnings(r)) + len(summaryRuleRunWarnings(r))
+}
+
+func ruleSourceLabel(item report.RuleSourceFreshness) string {
+	name := item.RuleName
+	if name == "" {
+		name = item.RuleID
+	}
+	return name + " → " + item.Source
+}
+
+func filteredFreshnessDetail(item report.RuleSourceFreshness) string {
+	status := "Freshness: " + strings.ReplaceAll(item.FreshnessStatus, "-", " ")
+	if item.AgeSeconds > 0 && (item.FreshnessStatus == "stale" || item.FreshnessStatus == "empty") {
+		prefix := ""
+		if item.AgeLowerBound {
+			prefix = "at least "
+		}
+		status = "No matching data for " + prefix + humanDuration(item.AgeSeconds)
+	} else if item.FreshnessStatus == "unknown" {
+		status = "Freshness could not be confirmed"
+	}
+	if len(item.Fields) > 0 {
+		status += " · Filter fields: " + strings.Join(item.Fields, ", ")
+	}
+	return status
+}
+
+func summaryRuleLabel(item report.SummaryRuleRun) string {
+	ruleName := item.Rule.Name
+	if ruleName == "" {
+		ruleName = item.Rule.ID
+	}
+	output := item.Output.Name
+	if output == "" {
+		output = item.Output.ID
+	}
+	if output == "" {
+		return ruleName
+	}
+	return ruleName + " → " + output
+}
+
+func summaryRunDetail(r *report.Report, item report.SummaryRuleRun) string {
+	status := item.RunStatus
+	if status == "" {
+		status = string(item.Status)
+	}
+	parts := []string{status}
+	if item.RunAt != nil {
+		reference := r.GeneratedAt
+		if reference.IsZero() {
+			reference = item.ObservedAt
+		}
+		if !reference.IsZero() && !item.RunAt.After(reference) {
+			age := reference.Sub(*item.RunAt)
+			if age < time.Second {
+				parts[0] += " just now"
+			} else {
+				parts[0] += " " + humanDuration(age.Seconds()) + " ago"
+			}
 		}
 	}
+	if item.QueryDurationMillis != nil {
+		parts = append(parts, humanMilliseconds(*item.QueryDurationMillis))
+	}
+	if item.ResultCount != nil {
+		parts = append(parts, countLabel(int(*item.ResultCount), "row", "rows"))
+	}
+	if item.Error != "" {
+		parts = append(parts, item.Error)
+	} else if item.Detail != "" {
+		parts = append(parts, item.Detail)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func humanMilliseconds(milliseconds int64) string {
+	if milliseconds < 1000 {
+		return fmt.Sprintf("%d ms", milliseconds)
+	}
+	seconds := float64(milliseconds) / 1000
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.1f", seconds), "0"), ".") + "s"
 }
 
 // color wraps s in an ANSI code only when writing to an interactive
@@ -1103,10 +1653,21 @@ func impairedDetail(d report.ImpairedDetection) string {
 		parts = append(parts, fmt.Sprintf("ingest lag p95 %s (max %s) in %s exceeds window margin",
 			humanDuration(d.P95LagSeconds), humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
 	}
+	if len(d.IncompatibleSources) > 0 {
+		parts = append(parts, incompatibleSourceDetail(d.IncompatibleSources))
+	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return " (" + strings.Join(parts, "; ") + ")"
+}
+
+func incompatibleSourceDetail(sources []string) string {
+	label := "source not usable by this rule"
+	if len(sources) != 1 {
+		label = "sources not usable by this rule"
+	}
+	return label + ": " + strings.Join(sources, ", ")
 }
 
 func humanDuration(seconds float64) string {

@@ -1,7 +1,7 @@
 # MSSP deployment guide
 
-This guide is for running deadair across multiple client SIEMs from an operator-owned host. In this
-guide, a source is a concrete index or data stream visible to the tenant credential. See
+This guide covers running deadair across client SIEMs from an operator-owned host. A source is a
+concrete index, data stream, or Sentinel table visible to the tenant credential. See
 [Read the findings](usage.md#read-the-findings) for the evidence and triage model.
 
 ## Run the lab first
@@ -10,9 +10,10 @@ guide, a source is a concrete index or data stream visible to the tenant credent
 make mssp-lab
 ```
 
-The lab starts throwaway Elastic and OpenSearch stacks, seeds two working tenants plus three
-failure cases, runs `check --fleet`, runs redacted scans with schema and downtime enabled,
-scrapes `serve --fleet --redact`, and writes artifacts to `integration/mssp-lab-out/`.
+The lab starts throwaway Elastic and OpenSearch stacks, seeds two working tenants and three failure
+cases, runs `check --fleet`, runs redacted scans with schema and downtime enabled, scrapes
+`serve --fleet --redact`, and writes artifacts to `integration/mssp-lab-out/`. It does not exercise
+Sentinel.
 
 <p align="center">
   <img alt="deadair MSSP lab output showing lab context, redacted fleet scan, and metrics" src="assets/mssp-lab.gif" width="860">
@@ -38,7 +39,8 @@ cadence or hosted-SIEM edge cases.
 Run deadair from a hardened host with outbound HTTPS access to each client SIEM API. Nothing is
 installed in the client SIEM.
 
-Use one least-privilege credential per tenant. Store only secret references in the fleet file.
+Keep every credential or workload identity scoped to the tenants it is meant to scan. Store only
+secret references in the fleet file.
 
 ```text
 /etc/deadair/
@@ -53,6 +55,7 @@ Use one least-privilege credential per tenant. Store only secret references in t
   state/
     fleet-state.json.acme-prod
     fleet-state.json.beta-corp
+    fleet-state.json.gamma-sentinel
   reports/
     latest-redacted.json
     latest-internal.json
@@ -83,9 +86,22 @@ Recommended permissions:
     "opensearch_url": "https://os.beta.example:9200",
     "username": "deadair",
     "password_file": "/etc/deadair/secrets/beta-opensearch-password"
+  },
+  {
+    "name": "gamma-sentinel",
+    "backend": "sentinel",
+    "azure_subscription_id": "<subscription-id>",
+    "azure_resource_group": "gamma-security",
+    "sentinel_workspace": "gamma-sentinel"
   }
 ]}
 ```
+
+Sentinel fleet entries use the process's `DefaultAzureCredential`; they do not carry credentials in
+the fleet file. If customers require different Azure identities, run those fleet entries in
+separate deadair processes. Add `sentinel_remote_workspaces` only for literal `workspace()` targets
+you intend to assess. The [Sentinel usage guide](usage.md#microsoft-sentinel) explains the mapping
+format and the cross-tenant execution boundary.
 
 Keep `name` stable. It keys metrics, per-instance state files, redacted pseudonyms, and historical
 baselines. Renaming a tenant starts a new baseline unless you deliberately migrate the state file.
@@ -147,7 +163,7 @@ For each actionable finding, keep enough context for the receiving team to start
 |---|---|
 | instance | identifies the customer or deployment with the gap |
 | rule and severity | identifies affected detection coverage and priority |
-| configured patterns | shows what input the rule expects |
+| configured patterns or dependencies | shows what input the rule expects |
 | matched sources and health | shows whether resolution or telemetry delivery failed |
 | first seen or diff state | separates backlog from a new regression |
 | disposition and owner | records accepted scope, remediation, or false positive |
@@ -180,12 +196,13 @@ Use `--redact` before authorized sharing through:
 - screenshots
 - shared issue reports
 
-Redaction covers tenant, source, rule, pattern, and field names with keyed HMAC pseudonyms. Generate
-a separate random key file for each correlation boundary and set `DEADAIR_REDACT_KEY_FILE` to its
-path. Supplying the key file also enables redaction. Reports record the non-secret key identifier,
-so a reporting job can reject inputs created with different keys. Without a key file, pseudonyms
-are stable only for the life of one process.
-Redacted fleet reports expose a fixed failure category rather than raw backend errors.
+Redaction covers tenant, source, rule, pattern, field, dependency, lineage, provenance, workspace,
+watchlist, template, and package identifiers with keyed HMAC pseudonyms. Generate a separate random
+key file for each correlation boundary and set `DEADAIR_REDACT_KEY_FILE` to its path. Supplying the
+key file also enables redaction. Reports record the non-secret key identifier, so a reporting job
+can reject inputs created with different keys. Without a key file, pseudonyms are stable only for
+the life of one process. Redacted fleet reports expose a fixed failure category rather than raw
+backend errors.
 
 Redaction is not declassification. Backend versions, counts, severities, timing, lag, storage
 volume, and the kinds of blind spots remain visible. Review the result and share it only with an
@@ -204,6 +221,8 @@ Route by the type of work, not by the tool.
 | no matching source | detection engineering or tenant onboarding, after checking credential scope |
 | all matching sources stale or empty | telemetry pipeline owner, with detection engineering copied |
 | impaired detections | detection engineering plus parser or pipeline owner |
+| source plan incompatible | detection engineering and the Sentinel workspace owner |
+| lag blind window | detection engineering and telemetry pipeline owner |
 | stale, empty, or low-volume sources | telemetry pipeline owner |
 | schema drift | parser, integration, or content owner |
 | unused telemetry | detection engineering and cost/platform owner |
@@ -257,8 +276,8 @@ an error entry for each failed instance. The process exits `2` to mark the scan 
 | Failure | What happens | Operator action |
 |---|---|---|
 | expired or revoked credential | instance fails with 401/403 | rotate the tenant secret, then run `deadair check --fleet` |
-| credential excludes expected indices | sources outside role scope appear absent and can produce no-match findings | expand the tenant role to the intended telemetry patterns, then verify a known-good rule/source pair |
-| missing optional privilege | scan works, but schema or lag evidence may be unavailable | add the optional read privilege only if you need that check |
+| credential excludes expected sources | sources outside role scope appear absent and can produce no-match findings | expand the tenant role to the intended sources, then verify a known-good rule/source pair |
+| missing optional privilege | scan works, but schema, lag, lineage, or provenance evidence may be unavailable | add the optional read privilege only if you need that check |
 | tenant SIEM unreachable | instance is reported failed; other tenants still scan | check DNS, proxy, allowlists, VPN, and client-side availability |
 | API throttling or timeouts | instance fails or sources become unknown | increase interval, lower concurrency, or split the fleet |
 | planned maintenance | stale or empty findings may appear after the window | declare downtime windows instead of excluding sources |

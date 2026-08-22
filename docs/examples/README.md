@@ -11,14 +11,18 @@ These files were captured from the disposable Elastic 9.4.4 lab used by
 - one unused source
 - the least-privilege Elastic role from [credentials/elastic.md](../credentials/elastic.md)
 
-Files:
+The capture includes:
 
-- [sample-scan.txt](sample-scan.txt) - concise operator summary
-- [sample-report.json](sample-report.json) - diagnostic report with rule patterns, matched sources, and source evidence
-- [sample-report.html](sample-report.html) - browser-readable overview for human review
+- [sample-scan.txt](sample-scan.txt) — concise operator summary
+- [sample-report.json](sample-report.json) — diagnostic report with rule patterns, matched sources,
+  and source evidence
+- [sample-report.html](sample-report.html) — browser-readable report
 
-Start with the terminal summary, then use JSON to answer why a rule received its verdict. For
-example, the first no-match finding in this sample is:
+The JSON and HTML record the exact deadair producer version used for the capture. Regenerate the
+terminal, JSON, and HTML files together so their evidence stays comparable.
+
+Start with the terminal summary. Use the JSON report when you need to understand a verdict. For
+example, the first no-match finding contains this evidence:
 
 | Evidence | Value |
 |---|---|
@@ -37,5 +41,6 @@ Inspect the same fields in your own report with:
 jq '.dead_detections[] | {name, reason, patterns, sources}' report.json
 ```
 
-The sample uses synthetic lab names and contains no production data, so it is not redacted. Use
-`--redact` before sharing reports from a real environment outside your restricted SOC workspace.
+The sample uses synthetic names and contains no production data, so it is not redacted. Before
+sharing a report from a real environment outside your restricted SOC workspace, run the scan with
+`--redact` and review the result.

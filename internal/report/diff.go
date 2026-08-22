@@ -205,6 +205,10 @@ func appendLegacyRegression(d *DiffResult, r *Report, finding Finding) {
 			} else if finding.Reason == ReasonLagBlindWindow {
 				impaired.LagSources = []string{finding.Source}
 				impaired.MissingFields = nil
+			} else if finding.Reason == ReasonSourcePlanIncompatible {
+				impaired.IncompatibleSources = []string{finding.Source}
+				impaired.LagSources = nil
+				impaired.MissingFields = nil
 			}
 			d.NewlyImpaired = append(d.NewlyImpaired, impaired)
 			return

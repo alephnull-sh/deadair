@@ -58,6 +58,26 @@
       "type": "array",
       "items": { "$ref": "#/$defs/inputResolution" }
     },
+    "dependency_evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/dependencyEvidence" }
+    },
+    "rule_provenance": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ruleProvenance" }
+    },
+    "source_lineage": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceLineage" }
+    },
+    "rule_source_freshness": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ruleSourceFreshness" }
+    },
+    "summary_rule_runs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/summaryRuleRun" }
+    },
     "unused_telemetry": {
       "type": ["array", "null"],
       "items": { "$ref": "#/$defs/unusedSource" }
@@ -190,7 +210,11 @@
             "required_fields",
             "ingest_lag",
             "candidate_parsing",
-            "remote"
+            "remote",
+            "dependency_resolution",
+            "cross_workspace",
+            "source_lineage",
+            "rule_provenance"
           ]
         },
         "status": {
@@ -207,7 +231,7 @@
       "properties": {
         "name": {
           "type": "string",
-          "enum": ["source_resolution", "required_fields", "ingest_lag", "schema_drift", "candidate_parsing"]
+          "enum": ["source_resolution", "source_freshness", "predicate_freshness", "required_fields", "ingest_lag", "schema_drift", "candidate_parsing", "dependency_resolution", "cross_workspace", "source_lineage", "rule_provenance"]
         },
         "status": { "$ref": "#/$defs/evidenceStatus" },
         "detail": { "type": "string" }
@@ -253,7 +277,8 @@
         "unused_telemetry_assessment": {
           "type": "string",
           "enum": ["complete", "legacy", "unavailable", "not-applicable"]
-        }
+        },
+        "unused_telemetry_assessment_detail": { "type": "string" }
       },
       "additionalProperties": true
     },
@@ -266,7 +291,8 @@
         "unsupported": { "type": "integer" },
         "unavailable": { "type": "integer" },
         "remote": { "type": "integer" },
-        "ambiguous": { "type": "integer" }
+        "ambiguous": { "type": "integer" },
+        "incompatible": { "type": "integer" }
       },
       "additionalProperties": true
     },
@@ -280,6 +306,7 @@
           "enum": ["ok", "stale", "empty", "unknown", "maintenance"]
         },
         "age_seconds": { "type": "number" },
+        "age_lower_bound": { "type": "boolean" },
         "docs": { "type": "integer" },
         "size_bytes": { "type": "integer" },
         "expected_downtime": { "type": "boolean" },
@@ -373,7 +400,7 @@
         "severity": { "type": "string" },
         "reason": {
           "type": "string",
-          "enum": ["disconnected", "starved"]
+          "enum": ["disconnected", "starved", "source-plan-incompatible"]
         },
         "patterns": {
           "type": ["array", "null"],
@@ -399,7 +426,7 @@
           "type": ["array", "null"],
           "items": {
             "type": "string",
-            "enum": ["missing-fields", "lag-blind-window"]
+            "enum": ["missing-fields", "lag-blind-window", "source-plan-incompatible"]
           }
         },
         "missing_fields": {
@@ -411,6 +438,10 @@
         "max_lag_seconds": { "type": "number" },
         "p95_lag_seconds": { "type": "number" },
         "lag_sources": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "incompatible_sources": {
           "type": "array",
           "items": { "type": "string" }
         },
@@ -460,7 +491,7 @@
         "severity": { "type": "string" },
         "assessment_status": {
           "type": "string",
-          "enum": ["resolved", "empty", "unsupported", "unavailable", "remote", "ambiguous"]
+          "enum": ["resolved", "empty", "unsupported", "unavailable", "remote", "ambiguous", "incompatible"]
         },
         "detail": { "type": "string" }
       },
@@ -478,13 +509,128 @@
         "diagnostic": { "type": "boolean" },
         "selector_kind": { "type": "string" },
         "resolved_sources": { "type": "array", "items": { "type": "string" } },
+        "resolved_dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependencyRef" } },
         "aliases": { "type": "array", "items": { "type": "string" } },
         "resolution_method": { "type": "string" },
         "observed_at": { "type": "string", "format": "date-time" },
         "status": {
           "type": "string",
-          "enum": ["resolved", "empty", "unsupported", "unavailable", "remote", "ambiguous"]
+          "enum": ["resolved", "empty", "unsupported", "unavailable", "remote", "ambiguous", "incompatible"]
         },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "dependencyRef": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "type": "string" },
+        "scope": { "type": "string" },
+        "monitorable": { "type": "boolean" },
+        "required": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "provenanceRef": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "type": "string" },
+        "scope": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "dependencyEvidence": {
+      "type": "object",
+      "required": ["rule_id", "dependency", "status", "resolution_method", "observed_at"],
+      "properties": {
+        "rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
+        "rule_name": { "type": "string" },
+        "severity": { "type": "string" },
+        "dependency": { "$ref": "#/$defs/dependencyRef" },
+        "status": { "type": "string", "enum": ["resolved", "empty", "unsupported", "unavailable", "remote", "ambiguous", "incompatible"] },
+        "resolution_method": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "ruleProvenance": {
+      "type": "object",
+      "required": ["rule_id", "provenance", "status", "method", "observed_at"],
+      "properties": {
+        "rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
+        "rule_name": { "type": "string" },
+        "provenance": { "$ref": "#/$defs/provenanceRef" },
+        "status": { "$ref": "#/$defs/evidenceStatus" },
+        "method": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "sourceLineage": {
+      "type": "object",
+      "required": ["kind", "input", "output", "status", "method", "observed_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "name": { "type": "string" },
+        "input": { "$ref": "#/$defs/dependencyRef" },
+        "output": { "$ref": "#/$defs/dependencyRef" },
+        "status": { "$ref": "#/$defs/evidenceStatus" },
+        "method": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "ruleSourceFreshness": {
+      "type": "object",
+      "required": ["rule_id", "source", "status", "observed_at", "freshness_status"],
+      "properties": {
+        "rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
+        "rule_name": { "type": "string" },
+        "source": { "type": "string" },
+        "fields": { "type": "array", "items": { "type": "string" } },
+        "status": { "$ref": "#/$defs/evidenceStatus" },
+        "method": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "window_seconds": { "type": "number", "minimum": 0 },
+        "last_event": { "type": "string", "format": "date-time" },
+        "freshness_status": { "type": "string", "enum": ["ok", "stale", "empty", "unknown", "maintenance"] },
+        "age_seconds": { "type": "number" },
+        "age_lower_bound": { "type": "boolean" },
+        "expected_downtime": { "type": "boolean" },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "summaryRuleRun": {
+      "type": "object",
+      "required": ["rule", "output", "status", "method", "observed_at"],
+      "properties": {
+        "id": { "type": "string" },
+        "rule": { "$ref": "#/$defs/dependencyRef" },
+        "output": { "$ref": "#/$defs/dependencyRef" },
+        "status": { "$ref": "#/$defs/evidenceStatus" },
+        "method": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "window_seconds": { "type": "number", "minimum": 0 },
+        "run_at": { "type": "string", "format": "date-time" },
+        "run_status": { "type": "string" },
+        "query_duration_millis": { "type": "integer", "minimum": 0 },
+        "result_count": { "type": "integer", "minimum": 0 },
+        "rule_modified_at": { "type": "string", "format": "date-time" },
+        "error": { "type": "string" },
         "detail": { "type": "string" }
       },
       "additionalProperties": true

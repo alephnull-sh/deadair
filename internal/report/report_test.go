@@ -1,9 +1,11 @@
 package report
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -89,6 +91,21 @@ func TestBuildClassification(t *testing.T) {
 	}
 	if r.ExitCode() != ExitFindings {
 		t.Errorf("exit = %d, want %d", r.ExitCode(), ExitFindings)
+	}
+}
+
+func TestSourceHealthPreservesBoundedFreshnessLowerBound(t *testing.T) {
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	r := Build("test", graph.Build(nil, []backend.Source{{
+		Name: "quiet-table", Docs: -1,
+		Freshness: backend.FreshnessEvidence{
+			Status: backend.EvidenceAssessed, Method: "bounded-max-event-time",
+			ObservedAt: now, Window: 24 * time.Hour,
+		},
+	}}), health.Check{MaxStale: time.Hour, Now: func() time.Time { return now }})
+	if len(r.Sources) != 1 || r.Sources[0].Status != "stale" ||
+		r.Sources[0].AgeSeconds != (24*time.Hour).Seconds() || !r.Sources[0].AgeLowerBound {
+		t.Fatalf("source health = %+v", r.Sources)
 	}
 }
 
@@ -243,7 +260,7 @@ func TestLagFindingAtZeroWindowMargin(t *testing.T) {
 	}
 }
 
-// TestMissingFieldsLimits pins the two honest limits of the schema-drift check.
+// TestMissingFieldsLimits pins two limits of the schema-drift check.
 // It inspects only a rule's DECLARED required_fields (it never parses the query
 // body), and it stays silent when a source's schema could not be fetched instead
 // of flagging every declared field as missing. The "declared" rule is the
@@ -352,6 +369,28 @@ func TestSkipUnused(t *testing.T) {
 	}
 	if r.Summary.UnusedTelemetryAssessment != UnusedAssessmentNotApplicable {
 		t.Fatalf("unused assessment = %q, want not-applicable", r.Summary.UnusedTelemetryAssessment)
+	}
+}
+
+func TestBackendCanMakeUnusedTelemetryUnavailableBeforeFindingsAreBuilt(t *testing.T) {
+	g := graph.BuildResolved(nil, []backend.Source{{
+		Name: "orphan", Docs: 10, SizeBytes: 100, LastEvent: time.Now(),
+	}}, nil)
+	r := BuildWithOptions("sentinel", g, BuildOptions{
+		Check:                            health.Check{MaxStale: time.Hour},
+		UnusedTelemetryUnavailableDetail: "backend inventory is unavailable",
+	})
+	if r.Summary.UnusedTelemetryAssessment != UnusedAssessmentUnavailable ||
+		r.Summary.UnusedTelemetryAssessmentDetail != "backend inventory is unavailable" {
+		t.Fatalf("unused assessment = %+v", r.Summary)
+	}
+	if len(r.UnusedTelemetry) != 0 || r.Summary.UnusedSources != 0 || r.Summary.UnusedBytes != 0 {
+		t.Fatalf("unavailable assessment emitted unused telemetry: %+v", r.UnusedTelemetry)
+	}
+	for _, finding := range r.Findings {
+		if finding.Class == FindingUnused {
+			t.Fatalf("unavailable assessment emitted unused finding: %+v", finding)
+		}
 	}
 }
 
@@ -653,7 +692,9 @@ func TestRedactWithRemovesEverySensitiveReportField(t *testing.T) {
 		ImpairedDetections: []ImpairedDetection{{
 			ID: secret("impaired-id"), RuleID: secret("impaired-rule-id"), BackendObjectID: secret("impaired-object"),
 			Name: secret("impaired-name"), MissingFields: []string{secret("impaired-field")},
-			LagSources: []string{secret("impaired-lag-source")}, Sources: []string{secret("impaired-source")},
+			LagSources:          []string{secret("impaired-lag-source")},
+			IncompatibleSources: []string{secret("impaired-incompatible-source")},
+			Sources:             []string{secret("impaired-source")},
 		}},
 		UnmappedRules: []RuleRef{{
 			ID: secret("unmapped-id"), RuleID: secret("unmapped-rule-id"), BackendObjectID: secret("unmapped-object"),
@@ -668,7 +709,27 @@ func TestRedactWithRemovesEverySensitiveReportField(t *testing.T) {
 		InputResolutions: []backend.InputResolution{{
 			RuleID: secret("resolution-rule"), Selector: secret("resolution-selector"),
 			Expression: secret("resolution-expression"), ResolvedSources: []string{secret("resolution-source")},
+			ResolvedDependencies: []backend.DependencyRef{{
+				ID: secret("resolution-dependency-id"), Name: secret("resolution-dependency-name"),
+				Kind: "watchlist", Scope: secret("resolution-dependency-scope"),
+			}},
 			Aliases: []string{secret("resolution-alias")}, Detail: secret("resolution-detail"),
+		}},
+		DependencyEvidence: []DependencyEvidence{{
+			RuleID: secret("dependency-rule"), BackendObjectID: secret("dependency-object"), RuleName: secret("dependency-rule-name"),
+			Dependency: backend.DependencyRef{ID: secret("dependency-id"), Name: secret("dependency-name"), Kind: "watchlist", Scope: secret("dependency-scope")},
+			Detail:     secret("dependency-detail"),
+		}},
+		RuleProvenance: []RuleProvenance{{
+			RuleID: secret("provenance-rule"), BackendObjectID: secret("provenance-object"), RuleName: secret("provenance-rule-name"),
+			Provenance: backend.ProvenanceRef{ID: secret("provenance-id"), Name: secret("provenance-name"), Kind: "content-package", Scope: secret("provenance-scope")},
+			Detail:     secret("provenance-detail"),
+		}},
+		SourceLineage: []SourceLineage{{
+			ID: secret("lineage-id"), Name: secret("lineage-name"), Kind: "summary-rule",
+			Input:  backend.DependencyRef{ID: secret("lineage-input-id"), Name: secret("lineage-input-name"), Kind: "telemetry_table", Scope: secret("lineage-input-scope")},
+			Output: backend.DependencyRef{ID: secret("lineage-output-id"), Name: secret("lineage-output-name"), Kind: "telemetry_table", Scope: secret("lineage-output-scope")},
+			Detail: secret("lineage-detail"),
 		}},
 		PartialInputCoverage: []PartialInputCoverage{{
 			RuleID: secret("partial-rule"), BackendObjectID: secret("partial-object"), RuleName: secret("partial-name"),
@@ -705,6 +766,282 @@ func TestRedactWithRemovesEverySensitiveReportField(t *testing.T) {
 	}
 }
 
+func TestBuildAddsInformationalDependencyProvenanceAndLineageEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	rule := backend.Rule{
+		ID: "rule-logical", BackendObjectID: "rule-resource", Name: "Rule", Enabled: true, Severity: "high",
+		Patterns:   []string{"SecurityEvent"},
+		Provenance: []backend.ProvenanceRef{{ID: "template-id", Name: "Template", Kind: "sentinel-template", Scope: "workspace"}},
+	}
+	resolution := backend.InputResolution{
+		RuleID: rule.ID, Status: backend.ResolutionResolved, ResolutionMethod: "resolver", ObservedAt: now,
+		ResolvedSources:      []string{"SecurityEvent"},
+		ResolvedDependencies: []backend.DependencyRef{{ID: "watchlist-id", Name: "VIPs", Kind: "watchlist", Scope: "workspace", Required: true}},
+	}
+	r := BuildWithOptions("sentinel", graph.BuildResolved([]backend.Rule{rule}, []backend.Source{{
+		Name: "SecurityEvent", Docs: 1, LastEvent: now,
+	}}, []backend.InputResolution{resolution}), BuildOptions{
+		Check: health.Check{MaxStale: time.Hour, Now: func() time.Time { return now }},
+		DependencyEvidence: []backend.DependencyEvidence{{
+			RuleID: rule.ID, BackendObjectID: rule.BackendObjectID,
+			Dependency: backend.DependencyRef{ID: "package-id", Name: "Package dependency", Kind: "content-package", Scope: "tenant"},
+			Status:     backend.ResolutionResolved, ResolutionMethod: "content-api", ObservedAt: now,
+		}},
+		ProvenanceEvidence: []backend.ProvenanceEvidence{{
+			RuleID: rule.ID, BackendObjectID: rule.BackendObjectID,
+			Provenance: backend.ProvenanceRef{ID: "package-id", Name: "Package", Kind: "content-package", Scope: "tenant"},
+			Status:     backend.EvidenceAssessed, Method: "content-api", ObservedAt: now,
+		}},
+		LineageEvidence: []backend.LineageEvidence{{
+			ID: "summary-id", Kind: "summary-rule", Name: "Summary", Status: backend.EvidenceAssessed, Method: "summary-api", ObservedAt: now,
+			Input:  backend.DependencyRef{ID: "raw", Name: "Raw", Kind: "telemetry_table", Monitorable: true},
+			Output: backend.DependencyRef{ID: "summary", Name: "Summary_CL", Kind: "telemetry_table", Monitorable: true},
+		}},
+	})
+	if len(r.DependencyEvidence) != 2 || len(r.RuleProvenance) != 2 || len(r.SourceLineage) != 1 {
+		t.Fatalf("informational evidence = dependencies=%+v provenance=%+v lineage=%+v", r.DependencyEvidence, r.RuleProvenance, r.SourceLineage)
+	}
+	if r.ExitCode() != ExitHealthy || r.CandidateExitCode() != ExitHealthy || len(r.Findings) != 0 {
+		t.Fatalf("informational evidence changed verdicts: exit=%d candidate=%d findings=%+v", r.ExitCode(), r.CandidateExitCode(), r.Findings)
+	}
+}
+
+func TestBuildAddsRuleSourceFreshnessAndSummaryRuleRunsAsInformationalEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	rule := backend.Rule{
+		ID: "rule-logical", BackendObjectID: "rule-resource", Name: "Filtered sign-ins",
+		Enabled: true, Severity: "high", Patterns: []string{"SigninLogs"},
+	}
+	runAt := now.Add(-5 * time.Minute)
+	modifiedAt := now.Add(-24 * time.Hour)
+	r := BuildWithOptions("sentinel", graph.Build([]backend.Rule{rule}, []backend.Source{{
+		Name: "SigninLogs", Docs: 1, LastEvent: now.Add(-time.Minute),
+	}}), BuildOptions{
+		Check: health.Check{MaxStale: time.Hour, Now: func() time.Time { return now }},
+		PredicateFreshnessEvidence: []backend.RulePredicateFreshnessEvidence{{
+			RuleID: rule.ID, Source: "SigninLogs", Fields: []string{"OperationName"},
+			Freshness: backend.FreshnessEvidence{
+				Status: backend.EvidenceAssessed, Method: "sentinel-predicate-event-time",
+				ObservedAt: now, Window: 24 * time.Hour,
+			},
+		}},
+		SummaryRuleRunEvidence: []backend.SummaryRuleRunEvidence{{
+			ID: "summary-runtime", Rule: backend.DependencyRef{
+				ID: "summary-rule", Name: "Summarize sign-ins", Kind: "sentinel_summary_rule",
+			}, Output: backend.DependencyRef{
+				ID: "SummarySignin_CL", Name: "SummarySignin_CL", Kind: "telemetry_table", Monitorable: true,
+			}, Status: backend.EvidenceAssessed, Method: "lasummarylogs-latest-7d", ObservedAt: now,
+			Window: 7 * 24 * time.Hour, RunAt: runAt, RunStatus: "Failed",
+			QueryDurationMillis: 1234, ResultCount: 7, RuleModifiedAt: modifiedAt,
+			Error: "native summary execution failed", Detail: "exact ARM rule-name match",
+		}},
+	})
+
+	if len(r.RuleSourceFreshness) != 1 {
+		t.Fatalf("rule-source freshness = %+v", r.RuleSourceFreshness)
+	}
+	freshness := r.RuleSourceFreshness[0]
+	if freshness.RuleID != rule.ID || freshness.BackendObjectID != rule.BackendObjectID ||
+		freshness.RuleName != rule.Name || freshness.Source != "SigninLogs" ||
+		!reflect.DeepEqual(freshness.Fields, []string{"OperationName"}) ||
+		freshness.Status != backend.EvidenceAssessed || freshness.Method != "sentinel-predicate-event-time" ||
+		freshness.WindowSeconds != (24*time.Hour).Seconds() || freshness.LastEvent != nil ||
+		freshness.FreshnessStatus != string(health.StatusStale) ||
+		freshness.AgeSeconds != (24*time.Hour).Seconds() || !freshness.AgeLowerBound {
+		t.Fatalf("rule-source freshness was not preserved: %+v", freshness)
+	}
+
+	if len(r.SummaryRuleRuns) != 1 {
+		t.Fatalf("summary rule runs = %+v", r.SummaryRuleRuns)
+	}
+	run := r.SummaryRuleRuns[0]
+	if run.ID != "summary-runtime" || run.Rule.ID != "summary-rule" || run.Output.Name != "SummarySignin_CL" ||
+		run.Status != backend.EvidenceAssessed || run.Method != "lasummarylogs-latest-7d" ||
+		run.WindowSeconds != (7*24*time.Hour).Seconds() || run.RunAt == nil || !run.RunAt.Equal(runAt) ||
+		run.RunStatus != "Failed" || run.QueryDurationMillis == nil || *run.QueryDurationMillis != 1234 ||
+		run.ResultCount == nil || *run.ResultCount != 7 ||
+		run.RuleModifiedAt == nil || !run.RuleModifiedAt.Equal(modifiedAt) ||
+		run.Error != "native summary execution failed" {
+		t.Fatalf("summary run was not preserved: %+v", run)
+	}
+	if len(r.Findings) != 0 || r.ExitCode() != ExitHealthy {
+		t.Fatalf("informational runtime evidence changed the gate: exit=%d findings=%+v", r.ExitCode(), r.Findings)
+	}
+	zero := int64(0)
+	r.SummaryRuleRuns[0].QueryDurationMillis = &zero
+	r.SummaryRuleRuns[0].ResultCount = &zero
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"query_duration_millis":0`)) || !bytes.Contains(encoded, []byte(`"result_count":0`)) {
+		t.Fatalf("assessed zero summary metrics were omitted: %s", encoded)
+	}
+}
+
+func TestRedactionCoversRuleSourceFreshnessAndSummaryRuleRuns(t *testing.T) {
+	redactor, err := redactpkg.New([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &Report{
+		Sources: []SourceHealth{{Name: "SigninLogs"}},
+		RuleSourceFreshness: []RuleSourceFreshness{{
+			RuleID: "rule-id", BackendObjectID: "rule-object", RuleName: "Filtered sign-ins",
+			Source: "SigninLogs", Fields: []string{"OperationName"}, Detail: "tenant-specific predicate detail",
+		}},
+		SummaryRuleRuns: []SummaryRuleRun{{
+			ID: "summary-runtime", Rule: backend.DependencyRef{
+				ID: "summary-rule", Name: "Summarize sign-ins", Kind: "sentinel_summary_rule", Scope: "workspace-id",
+			}, Output: backend.DependencyRef{
+				ID: "summary-table-id", Name: "SigninLogs", Kind: "telemetry_table", Scope: "workspace-id", Monitorable: true,
+			}, Error: "native customer error", Detail: "tenant-specific runtime detail",
+		}},
+	}
+	r.RedactWith(redactor)
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		"rule-id", "rule-object", "Filtered sign-ins", "SigninLogs", "OperationName",
+		"tenant-specific predicate detail", "summary-runtime", "summary-rule", "Summarize sign-ins",
+		"summary-table-id", "workspace-id", "native customer error", "tenant-specific runtime detail",
+	} {
+		if strings.Contains(string(data), raw) {
+			t.Errorf("redacted runtime evidence leaks %q", raw)
+		}
+	}
+	if r.RuleSourceFreshness[0].Source != r.Sources[0].Name ||
+		r.SummaryRuleRuns[0].Output.Name != r.Sources[0].Name {
+		t.Fatalf("redaction broke source joins: source=%q freshness=%q summary-output=%q",
+			r.Sources[0].Name, r.RuleSourceFreshness[0].Source, r.SummaryRuleRuns[0].Output.Name)
+	}
+}
+
+func TestHTMLRendersRuleSourceFreshnessAndSummaryRuntimeSeparatelyFromLineage(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	durationMillis, resultCount := int64(1234), int64(0)
+	r := fixtureReport(t)
+	r.SourceLineage = []SourceLineage{{
+		ID: "lineage", Kind: "summary-rule", Name: "Structural summary path",
+		Input:  backend.DependencyRef{Name: "RawSignin_CL", Kind: "telemetry_table"},
+		Output: backend.DependencyRef{Name: "SummarySignin_CL", Kind: "telemetry_table"},
+		Status: backend.EvidenceAssessed, Method: "arm-summary-logs", ObservedAt: now,
+	}}
+	r.RuleSourceFreshness = []RuleSourceFreshness{{
+		RuleID: "rule", RuleName: "Filtered sign-ins", Source: "SigninLogs", Fields: []string{"OperationName"},
+		Status: backend.EvidenceAssessed, Method: "sentinel-predicate-event-time", ObservedAt: now,
+		FreshnessStatus: string(health.StatusStale), AgeSeconds: 3600, Detail: `<script>predicate</script>`,
+	}}
+	r.SummaryRuleRuns = []SummaryRuleRun{{
+		ID: "runtime", Rule: backend.DependencyRef{Name: "Summarize sign-ins", Kind: "sentinel_summary_rule"},
+		Output: backend.DependencyRef{Name: "SummarySignin_CL", Kind: "telemetry_table"},
+		Status: backend.EvidenceAssessed, Method: "lasummarylogs-latest-7d", ObservedAt: now,
+		RunAt: &now, RunStatus: "Failed", QueryDurationMillis: &durationMillis, ResultCount: &resultCount,
+		RuleModifiedAt: &now, Error: "native failure", Detail: `<script>runtime</script>`,
+	}}
+	path := filepath.Join(t.TempDir(), "sentinel-evidence.html")
+	if err := r.WriteHTML(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	for _, want := range []string{
+		"Source lineage", "Structural summary path", "Filtered source activity",
+		"parser-proved literal filters", "Filtered sign-ins", "OperationName",
+		"Summary pipeline runs", "Latest completed native run", "Summarize sign-ins", "Failed", "1234 ms", ">0<", "native failure",
+		"&lt;script&gt;predicate&lt;/script&gt;", "&lt;script&gt;runtime&lt;/script&gt;",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("HTML runtime evidence missing %q", want)
+		}
+	}
+	if strings.Contains(html, "<script>predicate</script>") || strings.Contains(html, "<script>runtime</script>") {
+		t.Fatal("HTML runtime evidence was not escaped")
+	}
+	if attention, evidence := strings.Index(html, "Needs attention"), strings.Index(html, "Evidence details"); attention < 0 || evidence < 0 || attention >= evidence {
+		t.Fatalf("HTML did not put the operator decision before technical evidence: attention=%d evidence=%d", attention, evidence)
+	}
+	if !strings.Contains(html, `<details class="evidence-panel">`) {
+		t.Fatal("HTML technical evidence is not progressively disclosed")
+	}
+}
+
+func TestHTMLAdvisoryFailureUsesGateLanguageWithoutHealthyClaim(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	durationMillis, resultCount := int64(1200), int64(0)
+	r := &Report{
+		GeneratedAt: now,
+		Producer:    producer("dev"),
+		Backend:     "sentinel",
+		BackendMetadata: BackendMetadata{
+			Product: "Microsoft Sentinel",
+		},
+		Summary: Summary{
+			Rules: 1, EnabledRules: 1,
+			UnusedTelemetryAssessment: UnusedAssessmentNotApplicable,
+		},
+		SummaryRuleRuns: []SummaryRuleRun{{
+			Rule:   backend.DependencyRef{Name: "Summarize sign-ins", Kind: "sentinel_summary_rule"},
+			Output: backend.DependencyRef{Name: "SummarySignin_CL", Kind: "telemetry_table"},
+			Status: backend.EvidenceAssessed, RunAt: &now, RunStatus: "Failed",
+			QueryDurationMillis: &durationMillis, ResultCount: &resultCount,
+			Error: "native failure",
+		}},
+	}
+	path := filepath.Join(t.TempDir(), "sentinel-advisory.html")
+	if err := r.WriteHTML(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	for _, want := range []string{"Gate passed", "1 advisory signal needs review", "Summary pipeline failed", "do not change the gate"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("HTML advisory report missing %q", want)
+		}
+	}
+	if strings.Contains(html, "No blind spots found") {
+		t.Fatal("HTML advisory failure made an unqualified healthy claim")
+	}
+}
+
+func TestRedactionKeepsMonitorableLineageJoinableToResolvedSources(t *testing.T) {
+	redactor, err := redactpkg.New([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &Report{
+		Sources: []SourceHealth{{Name: "Summary_CL"}},
+		InputResolutions: []backend.InputResolution{{
+			ResolvedSources: []string{"Summary_CL"},
+		}},
+		SourceLineage: []SourceLineage{{
+			Input: backend.DependencyRef{
+				ID: "RawBasic_CL", Name: "RawBasic_CL", Kind: "telemetry_table", Monitorable: true,
+			},
+			Output: backend.DependencyRef{
+				ID:   "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/lab/tables/Summary_CL",
+				Name: "Summary_CL", Kind: "telemetry_table", Monitorable: true,
+			},
+		}},
+	}
+	r.RedactWith(redactor)
+	resolved := r.InputResolutions[0].ResolvedSources[0]
+	if r.Sources[0].Name != resolved || r.SourceLineage[0].Output.Name != resolved {
+		t.Fatalf("redacted source join was lost: source=%q resolved=%q lineage=%q", r.Sources[0].Name, resolved, r.SourceLineage[0].Output.Name)
+	}
+	if r.SourceLineage[0].Output.ID == "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/lab/tables/Summary_CL" {
+		t.Fatal("monitorable lineage ID was not redacted")
+	}
+}
+
 func TestCandidateExitCodeFailsClosedOnIncompleteResolution(t *testing.T) {
 	for _, name := range []string{AssessmentSourceResolution, AssessmentRequiredFields, AssessmentIngestLag} {
 		t.Run(name, func(t *testing.T) {
@@ -721,6 +1058,30 @@ func TestCandidateExitCodeFailsClosedOnIncompleteResolution(t *testing.T) {
 				t.Fatalf("candidate exit = %d, want healthy when backend capability is unavailable", got)
 			}
 		})
+	}
+}
+
+func TestCandidateExitCodeFailsClosedOnMissingFreshnessForResolvedSource(t *testing.T) {
+	for _, status := range []backend.EvidenceStatus{backend.EvidenceIncomplete, backend.EvidenceUnavailable} {
+		t.Run(string(status), func(t *testing.T) {
+			r := &Report{
+				Assessments: []RuntimeAssessment{{Name: AssessmentSourceFreshness, Status: status}},
+				InputResolutions: []backend.InputResolution{{
+					RuleID: "candidate", Status: backend.ResolutionResolved, ResolvedSources: []string{"SecurityEvent"},
+				}},
+			}
+			if got := r.CandidateExitCode(); got != ExitError {
+				t.Fatalf("candidate exit = %d, want error", got)
+			}
+		})
+	}
+
+	r := &Report{
+		Assessments:      []RuntimeAssessment{{Name: AssessmentSourceFreshness, Status: backend.EvidenceUnavailable}},
+		InputResolutions: []backend.InputResolution{{RuleID: "candidate", Status: backend.ResolutionEmpty}},
+	}
+	if got := r.CandidateExitCode(); got != ExitHealthy {
+		t.Fatalf("disconnected candidate exit = %d, want existing finding policy to decide", got)
 	}
 }
 
@@ -781,9 +1142,9 @@ func TestWriteHTML(t *testing.T) {
 		"producer deadair 1.2.3",
 		"Elastic Security 8.17.4 (elastic)",
 		"recognized versions 8.x",
-		"rule_inventory=supported",
-		"remote=listed-only",
-		"Partial input coverage",
+		"Rule inventory",
+		"Listed only",
+		"Partial rule inputs",
 		"Migrating input",
 		"logs-legacy-*",
 	} {
@@ -801,10 +1162,104 @@ func TestWriteHTML(t *testing.T) {
 	if strings.Contains(string(data), ">disconnected<") || strings.Contains(string(data), ">starved<") {
 		t.Fatalf("html report exposes machine reason codes:\n%s", data)
 	}
+	if !strings.Contains(string(data), ".metric:nth-last-child(2):nth-child(odd)") {
+		t.Fatal("html report does not preserve the final mobile divider for an odd metric count")
+	}
 	for lineNo, line := range strings.Split(string(data), "\n") {
 		if strings.TrimRight(line, " \t") != line {
 			t.Errorf("html report line %d has trailing whitespace", lineNo+1)
 		}
+	}
+}
+
+func TestHTMLUsesCandidateGateDecision(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		summary Summary
+		want    []string
+		reject  []string
+	}{
+		{
+			name: "candidate passes despite unrelated degraded source",
+			summary: Summary{
+				EnabledRules: 1, Sources: 1, DegradedSources: 1,
+			},
+			want:   []string{`class="gate gate-passed">Gate passed`, "Candidate rule passed"},
+			reject: []string{"Gate failed", "Scan incomplete"},
+		},
+		{
+			name: "candidate assessment incomplete",
+			summary: Summary{
+				EnabledRules: 1, UnmappedRules: 1,
+			},
+			want:   []string{`class="gate gate-incomplete">Scan incomplete`, "Candidate assessment is incomplete"},
+			reject: []string{"Gate passed", "Gate failed"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Report{
+				SchemaVersion: ReportSchemaVersion,
+				GeneratedAt:   now,
+				Backend:       "sentinel",
+				Producer:      producer("test"),
+				BackendMetadata: BackendMetadata{
+					Name: "sentinel", Product: "Microsoft Sentinel",
+				},
+				Scope:   ScanScope{Mode: "candidate"},
+				Summary: tt.summary,
+			}
+			path := filepath.Join(t.TempDir(), "candidate.html")
+			if err := r.WriteHTML(path); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			html := string(data)
+			for _, want := range tt.want {
+				if !strings.Contains(html, want) {
+					t.Errorf("candidate HTML missing %q", want)
+				}
+			}
+			for _, reject := range tt.reject {
+				if strings.Contains(html, reject) {
+					t.Errorf("candidate HTML contains contradictory result %q", reject)
+				}
+			}
+		})
+	}
+}
+
+func TestWriteHTMLUsesStoredUnusedTelemetryExplanationWithLegacyFallback(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		detail string
+		want   string
+	}{
+		{name: "legacy report", want: unresolvedUnusedTelemetryDetail},
+		{name: "backend detail", detail: "backend inventory is unavailable", want: "backend inventory is unavailable"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Report{Summary: Summary{
+				UnusedTelemetryAssessment:       UnusedAssessmentUnavailable,
+				UnusedTelemetryAssessmentDetail: tt.detail,
+			}}
+			path := filepath.Join(t.TempDir(), "report.html")
+			if err := r.WriteHTML(path); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), tt.want) {
+				t.Fatalf("HTML missing unused-telemetry explanation %q:\n%s", tt.want, data)
+			}
+		})
 	}
 }
 
@@ -877,6 +1332,9 @@ func TestNativeResolutionOnlyEmptyCanDisconnect(t *testing.T) {
 		t.Fatalf("unused telemetry must stay unassessed when a local input is uncertain: %+v / %+v",
 			r.Summary, r.UnusedTelemetry)
 	}
+	if got := r.Summary.UnusedTelemetryAssessmentDetail; got != unresolvedUnusedTelemetryDetail {
+		t.Fatalf("unused telemetry detail = %q, want unresolved-input explanation", got)
+	}
 
 	r.Redact()
 	encoded, err := json.Marshal(r)
@@ -938,11 +1396,15 @@ func TestPartialInputCoverageUsesOnlyDiagnosticEmptyEvidence(t *testing.T) {
 		Selector: "logs-legacy-*", Expression: "logs-legacy-*,-logs-old-*",
 		Status: backend.ResolutionUnavailable, Detail: "resolver unavailable",
 	})
-	if len(incomplete.PartialInputCoverage) != 0 || len(incomplete.Findings) != 0 || len(incomplete.UnmappedRules) != 0 {
+	if len(incomplete.PartialInputCoverage) != 0 || len(incomplete.Findings) != 0 || len(incomplete.UnmappedRules) != 1 ||
+		incomplete.UnmappedRules[0].AssessmentStatus != backend.ResolutionUnavailable {
 		t.Fatalf("unavailable diagnostic became a finding: %+v", incomplete)
 	}
 	if incomplete.Summary.InputResolution != (InputResolutionSummary{Resolved: 1}) {
 		t.Fatalf("unavailable diagnostic changed primary summary: %+v", incomplete.Summary.InputResolution)
+	}
+	if incomplete.Summary.UnusedTelemetryAssessment != UnusedAssessmentUnavailable {
+		t.Fatalf("unavailable diagnostic left unused telemetry assessed: %+v", incomplete.Summary)
 	}
 
 	redacted := partial
