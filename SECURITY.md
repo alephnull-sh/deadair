@@ -8,8 +8,8 @@ Do not open a public issue for a security report.
 
 ## What is in scope
 
-deadair holds SIEM credentials and produces reports that map detection blind spots. Treat these
-areas as security-sensitive:
+deadair handles SIEM credentials and produces reports that map detection blind spots. Security
+issues in scope include:
 
 - any path that lets a deadair credential write to the monitored SIEM
 - any required privilege broader than the documented least-privilege roles

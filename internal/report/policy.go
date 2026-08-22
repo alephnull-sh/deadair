@@ -172,6 +172,14 @@ func (p *Policy) maxStale(source string, fallback time.Duration) time.Duration {
 	return fallback
 }
 
+// MaxStaleFor returns the effective freshness threshold for a source. Runtime
+// evidence collectors use the same value as report evaluation so a bounded
+// observation cannot be called complete under one threshold and unknown under
+// another.
+func (p *Policy) MaxStaleFor(source string, fallback time.Duration) time.Duration {
+	return p.maxStale(source, fallback)
+}
+
 func (p *Policy) apply(findings []Finding) PolicySummary {
 	summary := PolicySummary{
 		Version: p.Version, SeverityThreshold: p.SeverityThreshold,

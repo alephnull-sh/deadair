@@ -2,16 +2,17 @@
 
 deadair needs read access to three things:
 
-1. Elastic Security detection-rule metadata through Kibana
-2. Data-view metadata through Kibana when a rule uses a data view
-3. Elasticsearch native index/alias/data-stream resolution, source inventory, freshness, and optional field metadata
+1. Elastic Security detection-rule metadata through Kibana.
+2. Data-view metadata through Kibana when a rule uses a data view.
+3. Elasticsearch index, alias, and data-stream resolution, plus source inventory, freshness, and
+   optional field metadata.
 
 It does not need document writes, rule writes, index management, cluster admin, or Kibana write
 privileges.
 
-Status: the trusted integration matrix tests Elastic 8.19.19 and 9.4.4. Each lane scans with only
-this role, exercises native input resolution, and verifies representative writes are rejected with
-403.
+Live integration tests cover Elastic 8.19.19 and 9.4.4. Each version is scanned with only this role.
+The tests exercise native input resolution and require representative write attempts to return
+`403`.
 
 ## Create the role
 
@@ -46,8 +47,8 @@ Privilege notes:
 | `feature_siem.read`, `feature_siemV2.read` | read detection rules through Kibana |
 | `feature_indexPatterns.read` | read Data View Management objects referenced by detection rules |
 
-Scope `indices.names` tighter than `"*"` if telemetry is under known patterns such as `logs-*`,
-`winlogbeat-*`, or `audit-*`. deadair only reports on sources the role can see.
+Narrow `indices.names` from `"*"` when telemetry follows known patterns such as `logs-*`,
+`winlogbeat-*`, or `audit-*`. deadair can report only on sources visible to its role.
 
 That visibility affects verdicts. If an enabled rule expects `winlogbeat-*` but the role can read
 only `logs-*`, deadair sees no matching source even if Winlogbeat indices exist. `deadair check`
@@ -92,7 +93,7 @@ deadair check
 deadair scan
 ```
 
-For a daemon, prefer a file:
+For a long-running service, keep the API key in a file with `0600` permissions:
 
 ```sh
 install -m 0600 /dev/null /etc/deadair/api-key
@@ -114,7 +115,8 @@ deadair serve \
 - `GET /_cat/indices`
 - `POST /<index>/_search` with a `size: 0` aggregation for freshness
 - `POST /<index>/_search` for up to 500 recent events, limited to paired `event.ingested` and `@timestamp` fields, when an enabled rule can be affected by lag
-- `POST /<index>/_field_caps` for targeted declared-field checks, with a full `fields=*` snapshot read by `GET` only when `--schema` is enabled
+- `POST /<index>/_field_caps` for targeted declared-field checks; when `--schema` is enabled,
+  deadair also reads a full `fields=*` snapshot with `GET`
 
 If an audit shows deadair requesting a write API or broader privileges than this document, treat
 that as a bug.

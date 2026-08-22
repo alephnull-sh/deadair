@@ -37,7 +37,7 @@ func (b *stateIsolationBackend) Schemas(context.Context, []backend.Source) (map[
 	return map[string]backend.Schema{b.source.Name: b.schema}, nil
 }
 
-func (b *stateIsolationBackend) ParseCandidates([]byte) ([]backend.Rule, error) {
+func (b *stateIsolationBackend) ParseCandidates(context.Context, []byte) ([]backend.Rule, error) {
 	return []backend.Rule{{
 		ID: "candidate-rule", Name: "Candidate rule", Enabled: true,
 		Severity: "high", Patterns: []string{"missing-*"},

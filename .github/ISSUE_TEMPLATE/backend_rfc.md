@@ -5,33 +5,34 @@ title: "Backend RFC: "
 labels: enhancement
 ---
 
-## Operator need
+## What problem does this solve?
 
-Which backend, deployment shape, and detection-coverage problem does this address? Link public API
-documentation where possible.
+Name the backend and deployment model, then describe the detection-coverage problem. Link to public
+API documentation where possible.
 
-## Compatibility target
+## Compatibility
 
-List the exact product versions and hosted/self-managed variants in scope. Say what is explicitly
-out of scope.
+Which exact product versions and hosted or self-managed variants are in scope? What is out of
+scope?
 
-## Read-only API plan
+## Read-only API
 
-List every endpoint and HTTP method the production client would call, the minimum permissions each
-call needs, and how a live test will prove representative writes are rejected. Production backend
-code must not create, update, or delete monitored-SIEM objects.
+List every endpoint and HTTP method the production client would call, along with the minimum
+permission for each call. Explain how a live test will show that representative writes are
+rejected. Production code must not create, update, or delete anything in the monitored SIEM.
 
-## Normalized model and capability gaps
+## Model and gaps
 
 Map rules, sources, schedules, lookbacks, timestamps, schema information, and unavailable inputs to
-deadair's backend/report contracts. Call out any best-effort fields or unsupported checks.
+deadair's backend and report contracts. Note any best-effort fields or unsupported checks.
 
-## Credential and integration proof
+## Credentials and live proof
 
-Describe the least-privilege credential guide, synthetic fixtures, container or hosted test path,
-cleanup, tested-version matrix, and failure cases. Do not attach credentials, customer exports,
-or unredacted SOC artifacts.
+Describe the least-privilege credential, synthetic fixtures, container or hosted test path,
+cleanup, tested versions, and failure cases. Do not attach credentials, customer exports, or
+unredacted SOC artifacts.
 
-## Report compatibility and rollout
+## Reports and fallback
 
-Describe report-schema changes, test evidence, documentation, and a safe removal or fallback plan.
+Describe any report-schema changes, the tests and documentation needed, and how the change can be
+removed or disabled safely.

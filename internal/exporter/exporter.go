@@ -102,15 +102,19 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 				{"unavailable", counts.Unavailable},
 				{"remote", counts.Remote},
 				{"ambiguous", counts.Ambiguous},
+				{"incompatible", counts.Incompatible},
 			}
 			for _, item := range values {
 				fmt.Fprintf(&b, "deadair_input_resolutions{instance=%s,status=%q} %d\n", label(r.Instance), item.status, item.value)
 			}
 		}
 
-		fmt.Fprintf(&b, "# HELP deadair_source_freshness_seconds Seconds since the last event arrived in the source.\n# TYPE deadair_source_freshness_seconds gauge\n")
+		fmt.Fprintf(&b, "# HELP deadair_source_freshness_seconds Seconds since the exact last event observed in the source; lower-bound ages are omitted.\n# TYPE deadair_source_freshness_seconds gauge\n")
 		for _, r := range f.Instances {
 			for _, src := range r.Sources {
+				if src.AgeLowerBound {
+					continue
+				}
 				// maintenance carries a real age too; dropping it would trip
 				// absent() alerts for every declared window.
 				if src.Status == "ok" || src.Status == "stale" || src.Status == "maintenance" {

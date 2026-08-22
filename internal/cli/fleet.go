@@ -12,6 +12,7 @@ import (
 	backendpkg "github.com/alephnull-sh/deadair/internal/backend"
 	"github.com/alephnull-sh/deadair/internal/backend/elastic"
 	"github.com/alephnull-sh/deadair/internal/backend/opensearch"
+	"github.com/alephnull-sh/deadair/internal/backend/sentinel"
 	"github.com/alephnull-sh/deadair/internal/report"
 )
 
@@ -22,19 +23,24 @@ type fleetConfig struct {
 }
 
 type instanceSpec struct {
-	Name          string `json:"name"`
-	Backend       string `json:"backend"` // elastic | opensearch
-	ESURL         string `json:"es_url"`
-	KibanaURL     string `json:"kibana_url"`
-	OpenSearchURL string `json:"opensearch_url"`
-	Username      string `json:"username"`
-	APIKeyEnv     string `json:"api_key_env"`
-	APIKeyFile    string `json:"api_key_file"`
-	PasswordEnv   string `json:"password_env"`
-	PasswordFile  string `json:"password_file"`
-	Space         string `json:"space"`
-	CACert        string `json:"ca_cert"`
-	Insecure      bool   `json:"insecure_skip_verify"`
+	Name             string                     `json:"name"`
+	Backend          string                     `json:"backend"` // elastic | opensearch | sentinel
+	ESURL            string                     `json:"es_url"`
+	KibanaURL        string                     `json:"kibana_url"`
+	OpenSearchURL    string                     `json:"opensearch_url"`
+	Subscription     string                     `json:"azure_subscription_id"`
+	ResourceGroup    string                     `json:"azure_resource_group"`
+	Workspace        string                     `json:"sentinel_workspace"`
+	WorkspaceID      string                     `json:"sentinel_workspace_id"`
+	RemoteWorkspaces []sentinel.RemoteWorkspace `json:"sentinel_remote_workspaces,omitempty"`
+	Username         string                     `json:"username"`
+	APIKeyEnv        string                     `json:"api_key_env"`
+	APIKeyFile       string                     `json:"api_key_file"`
+	PasswordEnv      string                     `json:"password_env"`
+	PasswordFile     string                     `json:"password_file"`
+	Space            string                     `json:"space"`
+	CACert           string                     `json:"ca_cert"`
+	Insecure         bool                       `json:"insecure_skip_verify"`
 }
 
 // fleetInstance is one resolved scan target.
@@ -68,7 +74,17 @@ func canonicalTargetPart(part string) string {
 	return strings.TrimRight(parsed.String(), "/")
 }
 
-func assessmentConfigurationID(o connOpts) (string, error) {
+func sentinelTargetID(subscription, resourceGroup, workspace string, remotes ...sentinel.RemoteWorkspace) string {
+	parts := []string{
+		strings.ToLower(strings.TrimSpace(subscription)),
+		strings.ToLower(strings.TrimSpace(resourceGroup)),
+		strings.ToLower(strings.TrimSpace(workspace)),
+	}
+	parts = append(parts, sentinel.RemoteWorkspaceIdentitySet(remotes)...)
+	return backendTargetID("sentinel", parts...)
+}
+
+func assessmentConfigurationID(o connOpts, scanBackend backendpkg.Backend) (string, error) {
 	h := sha256.New()
 	fmt.Fprintf(h, "max-stale=%s\nstateful=%t\nschema=%t\nvolume-warmup=%s\nvolume-hysteresis=%d\nvolume-min-samples=%d\nvolume-z-threshold=%g\n",
 		o.maxStale, o.stateFile != "", o.schemaTrack, o.volumeWarmup, o.volumeHysteresis, o.volumeMinSamples, o.volumeZThreshold)
@@ -87,6 +103,12 @@ func assessmentConfigurationID(o connOpts) (string, error) {
 		}
 		digest := sha256.Sum256(data)
 		fmt.Fprintf(h, "%x\n", digest[:])
+	}
+	fmt.Fprintln(h, "sentinel-remotes=")
+	if client, ok := scanBackend.(*sentinel.Client); ok {
+		for _, identity := range sentinel.RemoteWorkspaceIdentitySet(client.RemoteWorkspaces) {
+			fmt.Fprintf(h, "%x\n", sha256.Sum256([]byte(identity)))
+		}
 	}
 	return fmt.Sprintf("config-%x", h.Sum(nil)[:10]), nil
 }
@@ -140,6 +162,22 @@ func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
 			URL: s.OpenSearchURL, Username: s.Username, Password: password, APIKey: key,
 			HTTP: hc, Concurrency: o.concurrency,
 		}}, nil
+	case "sentinel":
+		client, err := sentinel.NewClient(sentinel.Config{
+			SubscriptionID:   s.Subscription,
+			ResourceGroup:    s.ResourceGroup,
+			WorkspaceName:    s.Workspace,
+			WorkspaceID:      s.WorkspaceID,
+			RemoteWorkspaces: s.RemoteWorkspaces,
+			HTTP:             hc,
+			Concurrency:      o.concurrency,
+		})
+		if err != nil {
+			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
+		}
+		return fleetInstance{
+			name: s.Name, targetID: sentinelTargetID(s.Subscription, s.ResourceGroup, s.Workspace, s.RemoteWorkspaces...), backend: client,
+		}, nil
 	default:
 		return fleetInstance{}, fmt.Errorf("instance %q: unknown backend %q", s.Name, s.Backend)
 	}
@@ -163,8 +201,17 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 			targetID = backendTargetID(c.Name(), o.esURL, o.kibanaURL, o.kibanaSpace)
 		case "opensearch":
 			targetID = backendTargetID(c.Name(), o.opensearchURL)
+		case "sentinel":
+			client, ok := c.(*sentinel.Client)
+			if !ok {
+				return nil, fmt.Errorf("internal error: Sentinel backend has type %T", c)
+			}
+			targetID = sentinelTargetID(o.azureSubscriptionID, o.azureResourceGroup, o.sentinelWorkspace, client.RemoteWorkspaces...)
 		}
 		return []fleetInstance{{name: name, targetID: targetID, backend: c}}, nil
+	}
+	if o.sentinelRemotesFile != "" {
+		return nil, fmt.Errorf("--sentinel-remotes applies to a single Sentinel target; put sentinel_remote_workspaces on each fleet instance")
 	}
 	data, err := os.ReadFile(o.fleetFile)
 	if err != nil {

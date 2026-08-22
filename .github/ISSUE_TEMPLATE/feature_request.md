@@ -4,9 +4,12 @@ about: A check, backend, or workflow deadair should support
 labels: enhancement
 ---
 
-**Problem** (what silent failure or operator workflow this addresses):
+**What problem would this solve?**
 
-**Proposed behavior:**
+Describe the silent failure or operator workflow, with an example if possible.
 
-**Notes.** Scope guardrails live in docs/architecture.md. Requests inside those boundaries are
-welcome; requests against the non-goals need a strong case.
+**What should deadair do?**
+
+See the [architecture guide](https://github.com/alephnull-sh/deadair/blob/main/docs/architecture.md)
+for the project's scope and non-goals. If the request falls outside them, explain why it belongs in
+deadair.

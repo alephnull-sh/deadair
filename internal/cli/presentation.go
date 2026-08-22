@@ -30,6 +30,7 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 	}
 	context = append(context, r.GeneratedAt.UTC().Format("15:04 UTC"))
 	fmt.Fprintln(w, color(w, "2", strings.Join(context, "  ·  ")))
+	printVisualGateStatus(w, r)
 
 	fmt.Fprintln(w)
 	printMetricRow(w, []visualMetric{
@@ -71,6 +72,7 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 	if len(r.InputResolutions) > 0 {
 		appendInput(s.InputResolution.Resolved, "resolved input", "resolved inputs", "32")
 		appendInput(s.InputResolution.Empty, "missing input", "missing inputs", "31")
+		appendInput(s.InputResolution.Incompatible, "incompatible input", "incompatible inputs", "33")
 		appendInput(s.InputResolution.Unsupported, "unsupported input", "unsupported inputs", "33")
 		appendInput(s.InputResolution.Unavailable, "unavailable input", "unavailable inputs", "33")
 		appendInput(s.InputResolution.Remote, "remote input", "remote inputs", "36")
@@ -83,7 +85,10 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 		printMetricRow(w, inputHealth)
 	}
 	if checks := unassessedChecks(r); len(checks) > 0 {
-		fmt.Fprintf(w, "%s  %s\n", color(w, "33;1", "CHECK COVERAGE"), color(w, "2", strings.Join(checks, "  ·  ")))
+		fmt.Fprintln(w, color(w, "33;1", "CHECK COVERAGE"))
+		for _, check := range checks {
+			fmt.Fprintf(w, "  %s\n", color(w, "2", check))
+		}
 	}
 	if r.Policy != nil {
 		fmt.Fprintf(w, "%s  %d gate  ·  %d accepted  ·  %d expired\n",
@@ -158,8 +163,11 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 		}
 	}
 
+	printVisualSentinelSignals(w, r)
+
 	if s.UnusedTelemetryAssessment == report.UnusedAssessmentUnavailable {
 		visualHeading(w, "33;1", "UNUSED NOT ASSESSED", 0)
+		fmt.Fprintf(w, "  %s\n", color(w, "2", s.UnusedTelemetryExplanation()))
 	} else if len(r.UnusedTelemetry) > 0 {
 		visualHeading(w, "36;1", "UNUSED", len(r.UnusedTelemetry))
 		for i, u := range r.UnusedTelemetry {
@@ -176,14 +184,54 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 		}
 	}
 
-	if s.UnusedTelemetryAssessment == report.UnusedAssessmentNotApplicable &&
-		r.CandidateExitCode() == report.ExitHealthy {
-		fmt.Fprintf(w, "\n%s\n", color(w, "32;1", "PASS"))
-		fmt.Fprintln(w, color(w, "2", "Candidate inputs are available."))
-	} else if s.UnusedTelemetryAssessment != report.UnusedAssessmentNotApplicable &&
-		r.ExitCode() == report.ExitHealthy && len(r.UnmappedRules)+len(r.RemoteRules) == 0 {
-		fmt.Fprintf(w, "\n%s\n", color(w, "32;1", "HEALTHY"))
-		fmt.Fprintln(w, color(w, "2", "No dead detections or degraded sources."))
+}
+
+func printVisualGateStatus(w io.Writer, r *report.Report) {
+	switch terminalGateExitCode(r) {
+	case report.ExitHealthy:
+		fmt.Fprintf(w, "\n%s\n", color(w, "32;1", "GATE PASSED"))
+		if count := sentinelSignalCount(r); count > 0 {
+			fmt.Fprintln(w, color(w, "2", fmt.Sprintf("No gated findings. Review %s below.", countLabel(count, "Sentinel signal", "Sentinel signals"))))
+			return
+		}
+		fmt.Fprintln(w, color(w, "2", "No gated findings."))
+	case report.ExitFindings:
+		fmt.Fprintf(w, "\n%s\n", color(w, "31;1", "GATE FAILED"))
+		fmt.Fprintln(w, color(w, "2", "One or more findings require attention."))
+	default:
+		fmt.Fprintf(w, "\n%s\n", color(w, "33;1", "SCAN INCOMPLETE"))
+		fmt.Fprintln(w, color(w, "2", "The gate could not be evaluated safely."))
+	}
+}
+
+func printVisualSentinelSignals(w io.Writer, r *report.Report) {
+	freshness := ruleSourceFreshnessWarnings(r)
+	summaryRuns := summaryRuleRunWarnings(r)
+	if len(freshness)+len(summaryRuns) == 0 {
+		return
+	}
+	visualHeading(w, "33;1", "SENTINEL SIGNALS", len(freshness)+len(summaryRuns))
+	fmt.Fprintln(w, color(w, "2", "Advisory evidence only. Gate unchanged."))
+	shown := 0
+	for _, item := range freshness {
+		if shown >= 10 {
+			visualMore(w, len(freshness)+len(summaryRuns)-shown)
+			return
+		}
+		shown++
+		fmt.Fprintf(w, "  %s\n", color(w, "1", "FILTERED DATA  "+ruleSourceLabel(item)))
+		fmt.Fprintf(w, "  %s\n", color(w, "2", filteredFreshnessDetail(item)))
+		fmt.Fprintln(w, color(w, "2", "  Review this rule's filter and matching connector."))
+	}
+	for _, item := range summaryRuns {
+		if shown >= 10 {
+			visualMore(w, len(freshness)+len(summaryRuns)-shown)
+			return
+		}
+		shown++
+		fmt.Fprintf(w, "  %s\n", color(w, "1", "SUMMARY PIPELINE  "+summaryRuleLabel(item)))
+		fmt.Fprintf(w, "  %s\n", color(w, "2", summaryRunDetail(r, item)))
+		fmt.Fprintln(w, color(w, "2", "  Open the summary rule run history in Sentinel."))
 	}
 }
 
@@ -255,6 +303,9 @@ func visualImpairmentEvidence(d report.ImpairedDetection) []string {
 			fmt.Sprintf("p95 %s (max %s) ingest lag exceeds window in %s",
 				humanDuration(d.P95LagSeconds), humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
 	}
+	if len(d.IncompatibleSources) > 0 {
+		parts = append(parts, incompatibleSourceDetail(d.IncompatibleSources))
+	}
 	if len(parts) == 0 {
 		for _, reason := range d.Reasons {
 			parts = append(parts, strings.ReplaceAll(reason, "-", " "))
@@ -267,12 +318,44 @@ func unassessedChecks(r *report.Report) []string {
 	var checks []string
 	for _, assessment := range r.Assessments {
 		if assessment.Status == "assessed" ||
-			(assessment.Name == report.AssessmentCandidateParsing && assessment.Status == "disabled") {
+			(assessment.Name == report.AssessmentCandidateParsing && assessment.Status == "disabled") ||
+			expectedPredicateFreshnessDisabled(assessment) {
 			continue
 		}
 		checks = append(checks, strings.ReplaceAll(assessment.Name, "_", " ")+" "+string(assessment.Status))
 	}
 	return checks
+}
+
+func expectedPredicateFreshnessDisabled(assessment report.RuntimeAssessment) bool {
+	if assessment.Name != report.AssessmentPredicateFreshness || assessment.Status != "disabled" {
+		return false
+	}
+	detail := strings.ToLower(assessment.Detail)
+	return strings.Contains(detail, "no enabled, fully resolved rule") ||
+		strings.Contains(detail, "no eligible fully resolved rule")
+}
+
+func ruleSourceFreshnessWarnings(r *report.Report) []report.RuleSourceFreshness {
+	items := make([]report.RuleSourceFreshness, 0, len(r.RuleSourceFreshness))
+	for _, item := range r.RuleSourceFreshness {
+		if item.FreshnessStatus == "ok" || item.FreshnessStatus == "maintenance" {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func summaryRuleRunWarnings(r *report.Report) []report.SummaryRuleRun {
+	items := make([]report.SummaryRuleRun, 0, len(r.SummaryRuleRuns))
+	for _, item := range r.SummaryRuleRuns {
+		if item.Status == "assessed" && strings.EqualFold(item.RunStatus, "Succeeded") {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func countLabel(n int, singular, plural string) string {

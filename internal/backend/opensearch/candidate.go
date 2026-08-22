@@ -2,6 +2,7 @@ package opensearch
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -31,7 +32,7 @@ func (d detectorCandidate) fields() detectorFields {
 // ParseCandidates implements backend.CandidateParser for OpenSearch Security
 // Analytics detector request objects, get responses, and individual search
 // hits. Candidate detectors are assessed as enabled without being installed.
-func (c *Client) ParseCandidates(data []byte) ([]backend.Rule, error) {
+func (c *Client) ParseCandidates(_ context.Context, data []byte) ([]backend.Rule, error) {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {
 		return nil, fmt.Errorf("detector file is empty")

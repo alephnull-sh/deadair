@@ -331,7 +331,8 @@ func isRuleExportDetails(raw json.RawMessage) (bool, error) {
 
 // ParseCandidates implements backend.CandidateParser for Elastic rule
 // objects, arrays, and ndjson exports.
-func (c *Client) ParseCandidates(data []byte) ([]backend.Rule, error) {
+
+func (c *Client) ParseCandidates(_ context.Context, data []byte) ([]backend.Rule, error) {
 	return ParseRuleFile(data)
 }
 
