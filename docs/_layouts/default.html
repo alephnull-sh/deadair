@@ -31,6 +31,7 @@
     {% if page.hero_image %}<meta property="og:image" content="{{ page.hero_image | absolute_url }}?v={{ site.github.build_revision | default: 'local' }}">{% endif %}
     <link rel="canonical" href="{{ page.url | absolute_url }}">
     <link rel="author" href="https://github.com/alephnull-sh">
+    <link rel="icon" href="{{ '/assets/favicon.svg' | relative_url }}" type="image/svg+xml">
     <link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}">
     {% if page.date %}
     <script type="application/ld+json">
@@ -40,6 +41,7 @@
         "headline": {{ page.title | jsonify }},
         "description": {{ page.description | jsonify }},
         "datePublished": {{ page.date | date_to_xmlschema | jsonify }},
+        "dateModified": {{ page.updated | default: page.date | date_to_xmlschema | jsonify }},
         "author": {
           "@type": "Person",
           "name": {{ page.author | default: site.author | jsonify }},
@@ -71,7 +73,7 @@
           <p class="cover-kicker">Detection engineering · write-up</p>
           <h1>{{ page.title }}</h1>
           <p class="cover-deck">{{ page.description }}</p>
-          <p class="cover-byline">By <a rel="author" href="https://github.com/alephnull-sh">{{ page.author | default: site.author }}</a> · {{ page.date | date: "%B %Y" }}</p>
+          <p class="cover-byline">By <a rel="author" href="https://github.com/alephnull-sh">{{ page.author | default: site.author }}</a> · {{ page.date | date: "%B %Y" }}{% if page.updated %} · updated {{ page.updated | date: "%B %Y" }}{% endif %}</p>
           <p class="cover-support">Read-only coverage checks for Elastic Security, OpenSearch Security Analytics, and Microsoft Sentinel.</p>
           <a class="cover-cta" href="https://github.com/alephnull-sh/deadair">deadair on GitHub →</a>
         </div>
