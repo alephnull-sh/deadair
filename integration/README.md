@@ -340,9 +340,6 @@ make mssp-lab
 The lab starts both throwaway stacks, seeds them, runs a five-instance fleet, scrapes the exporter,
 writes redacted artifacts to `integration/mssp-lab-out/`, and tears everything down.
 
-The MSSP guide uses [docs/assets/mssp-lab.gif](../docs/assets/mssp-lab.gif), recorded from these
-generated artifacts.
-
 Lab instances:
 
 | Instance | Purpose |
@@ -377,8 +374,8 @@ make mssp-lab-down
 MSSP_LAB_OUT=/tmp/deadair-lab make mssp-lab
 ```
 
-The lab validates the MSSP operator path in Docker. It does not replace testing against real client
-fleets.
+The lab validates the MSSP operator path in Docker. Validate source cadence separately in each
+client fleet.
 
 ## Notes
 

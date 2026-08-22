@@ -94,15 +94,14 @@ saved functions, ASIM parsers, mapped workspaces, and summary-table lineage. Whe
 enough evidence, deadair can show that one filtered slice of a shared table has gone quiet or that a
 summary pipeline has fallen behind. Those two checks are advisory; they do not change the gate.
 The [usage guide](docs/usage.md#microsoft-sentinel) describes the evidence rules, and the
-[validation record](docs/validation.md#sentinel-live-conformance) says exactly what was exercised
-in Azure.
+[validation record](docs/validation.md#sentinel-live-conformance) records the live test coverage.
 
 <p align="center">
-  <img alt="deadair scan of a disposable Microsoft Sentinel lab showing missing, stale, late, and incompatible telemetry" src="docs/assets/sentinel-lab.gif" width="860">
+  <a href="docs/assets/sentinel-lab.gif"><img alt="deadair scan of a disposable Microsoft Sentinel lab showing missing, stale, late, and incompatible telemetry" src="docs/assets/sentinel-lab.png" width="860"></a>
 </p>
 
 <p align="center">
-  <sub>Live scan of a disposable Sentinel lab seeded with missing, stale, late, and incompatible telemetry. See the <a href="docs/validation.md#sentinel-live-conformance">separate Azure conformance record</a> for the read-only and write-denial tests.</sub>
+  <sub>Live scan of a disposable Sentinel lab seeded with missing, stale, late, and incompatible telemetry. Open the image for the short replay. See the <a href="docs/validation.md#sentinel-live-conformance">separate Azure conformance record</a> for the read-only and write-denial tests.</sub>
 </p>
 
 deadair checks whether a detection's telemetry is present and healthy. It does not validate rule

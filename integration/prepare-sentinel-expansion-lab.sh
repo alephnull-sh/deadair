@@ -22,14 +22,14 @@ watchlist_source=deadair-privileged-accounts.csv
 remote_table=RegionalRemoteAccess_CL
 summary_rule=firewall-deny-summary
 summary_table=FirewallDenySummary_CL
-summary_display='[lab] Summarize denied firewall connections'
+summary_display='Summarize denied firewall connections'
 summary_query='FirewallTrafficRaw_CL | where DeviceAction == "Deny" | summarize DeniedConnections=count() by DeviceVendor, DeviceProduct'
 summary_diagnostic_setting=firewall-deny-summary-runtime
 fixture_marker=deadair-sentinel-expansion-validation
 base_fixture_marker=deadair-sentinel-base-validation
 summary_table_description="$fixture_marker:$summary_table"
 nrt_rule_id=78888888-8888-4888-8888-888888888888
-nrt_display='[lab] Suspicious interactive sign-in (NRT)'
+nrt_display='Suspicious interactive sign-in (NRT)'
 nrt_description='Disposable Sentinel lab rule for deadair conformance testing.'
 nrt_query='WorkforceSignIn_CL | where TimeGenerated < datetime(1900-01-01)'
 nrt_suppression=PT1H
@@ -40,16 +40,16 @@ parameterized_function_body='WorkforceSignIn_CL | where UserPrincipalName == use
 parameterized_function_parameters=userPrincipalName:string
 
 watchlist_rule_id=79911111-1111-4111-8111-111111111111
-watchlist_rule_display='[lab] Privileged account activity'
+watchlist_rule_display='Privileged account activity'
 watchlist_rule_query='_GetWatchlist("PrivilegedAccounts") | project UserPrincipalName, Role | take 0'
 asim_rule_id=79922222-2222-4222-8222-222222222222
-asim_rule_display='[lab] ASIM authentication activity'
+asim_rule_display='ASIM authentication activity'
 asim_rule_query='_Im_Authentication(starttime=ago(1d),endtime=now()) | take 0'
 remote_rule_id=79933333-3333-4333-8333-333333333333
-remote_rule_display='[lab] Regional VPN authentication'
+remote_rule_display='Regional VPN authentication'
 remote_rule_query="workspace(\"$remote_workspace\").$remote_table | take 0"
 summary_consumer_rule_id=79944444-4444-4444-8444-444444444444
-summary_consumer_rule_display='[lab] Firewall deny volume from summary data'
+summary_consumer_rule_display='Firewall deny volume from summary data'
 summary_consumer_rule_query="$summary_table | where TimeGenerated > ago(30m) | project TimeGenerated, DeviceVendor, DeviceProduct, DeniedConnections"
 
 case "$mode" in
@@ -184,7 +184,7 @@ watchlist_matches() {
 		(((.type // "") | ascii_downcase) == "microsoft.securityinsights/watchlists") and
 		(if (.properties | type) == "object" then
 			(.properties.watchlistAlias == $alias) and
-			(.properties.displayName == "[lab] Privileged accounts") and
+			(.properties.displayName == "Privileged accounts") and
 			(.properties.provider == "deadair") and
 			(.properties.source == $source) and
 			(.properties.sourceType == "Local") and
@@ -477,7 +477,7 @@ run_predicate_tests() {
 		--arg marker "$fixture_marker" --arg source "$watchlist_source" '{
 		id: $id, name: $alias, type: "Microsoft.SecurityInsights/watchlists",
 		properties: {
-			watchlistAlias: $alias, displayName: "[lab] Privileged accounts",
+			watchlistAlias: $alias, displayName: "Privileged accounts",
 			provider: "deadair", source: $source, sourceType: "Local", description: $marker,
 			itemsSearchKey: "UserPrincipalName", isDeleted: false
 		}
@@ -1465,29 +1465,29 @@ verify_base_prerequisites() {
 		add_prerequisite_issue "removed-table fixture PartnerSSOAuth_CL must be absent"
 	fi
 
-	verify_base_rule 11111111-1111-4111-8111-111111111111 '[lab] Suspicious interactive sign-in' \
+	verify_base_rule 11111111-1111-4111-8111-111111111111 'Suspicious interactive sign-in' \
 		'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult' PT5M PT30M
-	verify_base_rule 22222222-2222-4222-8222-222222222222 '[lab] VPN password spray' \
+	verify_base_rule 22222222-2222-4222-8222-222222222222 'VPN password spray' \
 		'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult' PT5M PT30M
-	verify_base_rule 33333333-3333-4333-8333-333333333333 '[lab] Cloud sign-in impossible travel' \
+	verify_base_rule 33333333-3333-4333-8333-333333333333 'Cloud sign-in impossible travel' \
 		'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName' PT5M PT10M
-	verify_base_rule 44444444-4444-4444-8444-444444444444 '[lab] Partner SSO telemetry missing' \
+	verify_base_rule 44444444-4444-4444-8444-444444444444 'Partner SSO telemetry missing' \
 		'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName' PT5M PT30M
-	verify_base_rule 55555555-5555-4555-8555-555555555555 '[lab] Sign-ins across primary and partner IdPs' \
+	verify_base_rule 55555555-5555-4555-8555-555555555555 'Sign-ins across primary and partner IdPs' \
 		'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult' PT5M PT30M
-	verify_base_rule 66666666-6666-4666-8666-666666666666 '[lab] Interactive sign-in followed by cloud app access' \
+	verify_base_rule 66666666-6666-4666-8666-666666666666 'Interactive sign-in followed by cloud app access' \
 		'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult' PT5M PT30M
-	verify_base_rule 71111111-1111-4111-8111-111111111111 '[lab] Recent identity sign-ins via saved function' \
+	verify_base_rule 71111111-1111-4111-8111-111111111111 'Recent identity sign-ins via saved function' \
 		'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName' PT5M PT30M
-	verify_base_rule 72222222-2222-4222-8222-222222222222 '[lab] Recent identity sign-ins via function call' \
+	verify_base_rule 72222222-2222-4222-8222-222222222222 'Recent identity sign-ins via function call' \
 		'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName' PT5M PT30M
-	verify_base_rule 73333333-3333-4333-8333-333333333333 '[lab] High-risk account sign-in' \
+	verify_base_rule 73333333-3333-4333-8333-333333333333 'High-risk account sign-in' \
 		'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName' PT5M PT30M
-	verify_base_rule 74444444-4444-4444-8444-444444444444 '[lab] Privileged identity operations in archive' \
+	verify_base_rule 74444444-4444-4444-8444-444444444444 'Privileged identity operations in archive' \
 		'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result' PT5M PT30M
-	verify_base_rule 76666666-6666-4666-8666-666666666666 '[lab] Cloud audit activity stopped' \
+	verify_base_rule 76666666-6666-4666-8666-666666666666 'Cloud audit activity stopped' \
 		'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName' PT5M PT30M
-	verify_base_rule 77777777-7777-4777-8777-777777777777 '[lab] Palo Alto firewall telemetry stopped' \
+	verify_base_rule 77777777-7777-4777-8777-777777777777 'Palo Alto firewall telemetry stopped' \
 		"PerimeterSecurity_CL | where DeviceVendor == 'Palo Alto Networks' and DeviceProduct == 'PAN-OS' | project TimeGenerated, SessionId, DeviceVendor, DeviceProduct, SourceIpAddress, DestinationIpAddress, DestinationPort, DeviceAction" PT5M PT3H
 	fusion=$(collection_resource "BuiltInFusion provenance rule" "$alert_rule_collection_uri" BuiltInFusion)
 	if [ -z "$fusion" ]; then
@@ -1652,7 +1652,7 @@ if [ "$mode" = apply ]; then
 
 	jq -n --arg source "$watchlist_source" --arg marker "$fixture_marker" '{
 		properties: {
-			displayName: "[lab] Privileged accounts",
+			displayName: "Privileged accounts",
 			source: $source,
 			sourceType: "Local",
 			provider: "deadair",

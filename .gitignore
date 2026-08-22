@@ -10,6 +10,5 @@ deadair-report*.json
 deadair-state*.json
 *.state.json
 deadair-redaction*.key
-integration/ci-out/
 integration/scan-lab-out/
 integration/mssp-lab-out/
