@@ -2012,6 +2012,7 @@ func (c *Client) ReadinessEvidence(ctx context.Context, rules []backend.Rule, so
 	if err != nil {
 		return backend.ReadinessEvidence{}, err
 	}
+	c.primeRemoteAliasProofs(ctx, rules)
 	dependencyAttempts := 0
 	dependencyInventoryAssessments := 0
 	var dependencyBlocker *backend.ReadinessEvidence
@@ -2073,7 +2074,7 @@ func (c *Client) ReadinessEvidence(ctx context.Context, rules []backend.Rule, so
 				if catalogErr != nil {
 					return backend.ReadinessEvidence{Status: backend.EvidenceUnavailable, Attempted: true, Detail: "configured remote workspace table inventory could not be read"}, nil
 				}
-				_, proof := c.validateRemoteAlias(ctx, state, dependency.Scope, remoteCatalog)
+				_, proof := c.validateRemoteAlias(ctx, state, dependency.Scope, remoteCatalog, []string{dependency.Name})
 				if proof.status != backend.EvidenceAssessed {
 					return backend.ReadinessEvidence{Status: proof.status, Attempted: true, Detail: proof.detail}, nil
 				}
@@ -2163,6 +2164,7 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 	if err != nil {
 		return nil, err
 	}
+	c.primeRemoteAliasProofs(ctx, rules)
 	outcomesByRule := make(map[string][]sentinelSelectorOutcome, len(rules))
 	probeSet := make(map[string]bool)
 	for _, rule := range rules {
@@ -2379,7 +2381,7 @@ func (c *Client) initialRuleOutcomes(ctx context.Context, rule backend.Rule, loc
 		aliasProofTable := ""
 		if remoteScopeNeedsAliasProof(dependency.Scope) {
 			var proof tablePermissionEvidence
-			aliasProofTable, proof = c.validateRemoteAlias(ctx, state, dependency.Scope, catalog)
+			aliasProofTable, proof = c.validateRemoteAlias(ctx, state, dependency.Scope, catalog, []string{dependency.Name})
 			if proof.status != backend.EvidenceAssessed {
 				outcome.status = backend.ResolutionUnavailable
 				outcome.detail = proof.detail

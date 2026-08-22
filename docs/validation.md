@@ -20,7 +20,7 @@ conformance test is opt-in and does not run on a schedule.
 | Sentinel live path | opt-in read-only conformance test against a pre-seeded disposable workspace |
 | Sentinel GitHub Action | local wrapper tests cover input mapping, argument ownership, environment isolation, report production, job-summary content, and gate behavior; the GitHub-hosted OIDC path has not yet had a live conformance run |
 | native input resolution | index/alias/data-stream cases plus Sentinel KQL table, closed scalar function, literal watchlist, ASIM, remote workspace, plan, and permission outcomes |
-| Sentinel enrichment | structural summary lineage exercised in the live lab; fixture tests for narrow filtered source activity, bounded `LASummaryLogs` latest-completed-run evidence, and exact-ID native template and Content Hub provenance; advisory evidence does not change findings or gates |
+| Sentinel enrichment | the live lab covers narrow filtered source activity, structural summary lineage, a bounded successful `LASummaryLogs` run, and its matching Basic-to-Analytics output bin; exact-ID native template and Content Hub provenance also has fixture coverage; advisory evidence does not change findings or gates |
 | Sentinel execution identity | fixture tests require an exact successful `SentinelHealth` event after the latest rule change and no older than the rule cadence plus the documented scheduling delay; other execution-identity cases remain unassessed |
 | write safety | live Elastic and OpenSearch tests require representative writes to be rejected; separate Sentinel lab probes confirmed its scan identity could not delete rules or tables or retrieve shared keys |
 | candidate-rule checks | backend-native `scan --rule` parser and gate tests; Sentinel covers direct ARM JSON, one Azure-Sentinel analytic-rule YAML document, and deployment templates whose rule values resolve from literals, defaults, or simple variables |
@@ -48,6 +48,9 @@ The live workspace covers:
   onboarding before remote table or Logs evidence;
 - a native ASIM call whose semantic `PartialError` remains deliberately unassessed;
 - structural Basic-table to Analytics-summary-table to analytics-rule lineage;
+- a closed literal vendor filter with current predicate-qualified freshness evidence;
+- a successful native summary run after the current ARM definition became visible, plus an exact
+  20-minute Basic-source to Analytics-output bin and count match;
 - rule-aware zero-row table permission probes;
 - Scheduled event-time freshness, NRT ingestion-time freshness, and paired
   `TimeGenerated`/`ingestion_time()` lag samples;
@@ -55,7 +58,7 @@ The live workspace covers:
 - missing, stale, bounded-empty, Basic-plan, and Auxiliary-plan table cases; and
 - the exact empty installed-package and no-positive-template-link provenance path.
 
-This is the scope of the recorded 2026-08-21 live pass. The certificate-backed scanner also passed
+This is the scope of the recorded 2026-08-22 live pass. The certificate-backed scanner also passed
 separate exact `403` checks for alert-rule DELETE, table DELETE, and shared-key POST. The native ASIM
 case intentionally remains unassessed on `PartialError`. The empty Content Hub inventory proves the
 no-link path only; it does not prove a positive installed-package association.
@@ -106,19 +109,25 @@ no tenant, subscription, workspace ID, or credential is embedded in the test.
   Tabular or runtime parameters, dynamic table/watchlist/workspace selection, external data,
   `app()`, `resource()`, ADX/cluster, and ARG remain unassessed. A native ASIM `PartialError` is
   unassessed.
-- Filtered source activity is fixture-tested only. It requires one direct local Analytics table
+- Filtered source activity was exercised against a current row in the live lab. It requires one direct local Analytics table
   followed by a closed, parser-supported literal filter. Escaped and verbatim literals fail closed
   because their exact KQL value cannot be reconstructed safely. The bounded result is
   informational and does not replace table-wide health or create a finding. The per-scan query cap
   is 20.
-- Summary-rule lineage remains structural ARM metadata. A separate fixture-tested path reads the
+- Summary-rule lineage remains structural ARM metadata. A separate path reads the
   latest completed `LASummaryLogs` run in a bounded seven-day window for relevant active summary
-  rules, capped at 50 rules per scan. Fixtures reject missing or malformed ARM revision timestamps,
-  runs from an older rule revision, invalid provisioning, and invalid schedules. A successful run
+  rules, capped at 50 rules per scan. Fixtures reject missing or malformed ARM modification times,
+  runs that predate the current ARM definition, inconsistent native timestamps, invalid
+  provisioning, and invalid schedules. A successful run
   becomes incomplete once it exceeds its cadence and delay plus the documented eight-hour retry
-  allowance. Native failed runs stay informational. Structural lineage was tested in the live lab;
-  the `LASummaryLogs` runtime path has fixture coverage only.
-  Structural `binDelay` follows the 2025-07-01 REST/Bicep schema and is measured in seconds.
+  allowance. Native failed runs stay informational. The live lab proved structural lineage, a
+  successful bounded runtime record, and the matching source/output bin under the scanner identity.
+  Azure advanced `LASummaryLogs.RuleLastModifiedTime` between bins while the ARM definition stayed
+  unchanged, so deadair does not present that field as an exact revision ID. It requires the run to
+  start after the ARM modification time and rejects native timestamps that are too old or later
+  than the run.
+  `binDelay` is measured in minutes, matching Azure Monitor's summary-rule scheduling model and
+  the Sentinel portal.
 - Native-template and Content Hub provenance uses exact IDs and versions and is informational.
   A positive installed-package association has not been tested in a live lab.
 - The configured cross-workspace lab uses two workspaces in one subscription. Cross-tenant Azure

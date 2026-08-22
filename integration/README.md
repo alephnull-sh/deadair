@@ -52,8 +52,8 @@ or call Azure write APIs. It accepts only a certificate-backed scanner service p
 identity contract before contacting the workspace and never prints credential values or certificate
 paths.
 
-The full base and expansion setup, scanner test, denial test, and cleanup path ran in disposable UK
-South workspaces on 2026-08-21. That result applies to the named workspaces and identity. It does
+The full base and expansion setup, scanner test, and denial test ran in disposable UK South
+workspaces on 2026-08-22. That result applies to the named workspaces and identity. It does
 not cover every tenant, region, RBAC layout, or KQL construct.
 
 ```sh
@@ -80,14 +80,15 @@ HTTP 403 responses for both DELETE requests and the workspace shared-keys POST. 
 successful shared-keys response body. A 2xx response fails the test.
 
 The home workspace must contain the `DeadairFresh_CL`, `DeadairLag_CL`,
-`DeadairStale_CL`, `DeadairUnused_CL`, `DeadairBasic_CL`, `DeadairAuxiliary_CL`, and
-`DeadairEmptyAnalytics_CL` tables, the saved `DeadairLabSource` and closed scalar
-`DeadairLabParameterized` functions, and the matching deadair lab rules. The removed-table fixture
-must stay absent. The disabled NRT rule
+`DeadairStale_CL`, `DeadairUnused_CL`, `DeadairPredicate_CL`, `DeadairBasic_CL`,
+`DeadairAuxiliary_CL`, and `DeadairEmptyAnalytics_CL` tables; the saved `DeadairLabSource` and
+closed-scalar `DeadairLabParameterized` functions; and the matching deadair lab rules. The
+removed-table fixture must stay absent. The disabled NRT rule
 `78888888-8888-4888-8888-888888888888` is part of the base fixture and remains disabled throughout
 the test. The expansion fixtures add the `DeadairVIPs` watchlist, a second workspace with
 `DeadairRemote_CL`, and the `deadair-basic-summary` summary rule whose pre-created, independently
-marked Analytics destination is `DeadairBasicSummary_CL`. Four owned, disabled Scheduled rules
+marked Analytics destination is `DeadairBasicSummary_CL`. Its workspace diagnostic setting routes
+only the Summary Logs category to `LASummaryLogs`. Four owned, disabled Scheduled rules
 consume the literal watchlist, native ASIM parser, remote table, and summary destination. The live
 test reads their KQL dependencies through the normal Sentinel inventory and enables only in-memory
 copies for evidence collection; the Azure rules remain disabled. Sentinel must be deployed on the
@@ -96,12 +97,13 @@ it. The test covers GA and preview NRT inventory, table-plan
 compatibility, saved-function expansion, literal-watchlist proof, configured literal `workspace()`
 proof, an intentionally unassessed native-ASIM `PartialError`, structural summary lineage, mixed
 present/missing inputs, Scheduled event-time freshness, NRT ingestion-time freshness, mixed timing,
-and paired ingest-lag evidence. Readiness runs once with the literal watchlist, native ASIM, remote
-workspace, and the in-memory enabled copy of the NRT rule; a second pass without the intentionally
-limited ASIM result covers the watchlist, local-table, NRT, and remote-table read paths without the
-known ASIM limitation.
-The Azure NRT rule stays disabled. Summary `binDelay` follows the 2025-07-01 REST/Bicep schema and
-is measured in seconds.
+predicate-qualified freshness, a successful native summary execution, the matching
+Basic-to-Analytics bin and count, and paired ingest-lag evidence. Readiness runs once with the
+literal watchlist, native ASIM, remote workspace, and the in-memory enabled copy of the NRT rule. A
+second pass without the intentionally limited ASIM result covers the watchlist, local-table, NRT,
+and remote-table read paths without the known ASIM limitation.
+The Azure NRT rule stays disabled. Summary `binDelay` is measured in minutes, matching Azure
+Monitor's summary-rule scheduling model and the Sentinel portal.
 
 ### Prepare a disposable lab
 
@@ -110,7 +112,7 @@ already onboarded to Sentinel. Register `Microsoft.OperationalInsights`,
 `Microsoft.SecurityInsights`, and `Microsoft.Insights`, and put a small subscription budget and
 alert in place before provisioning fixtures. The provisioner needs permission to manage workspace
 tables and saved searches, Sentinel alert rules, and a resource-group-scoped data collection rule.
-It also needs `Monitoring Metrics Publisher` at the resource-group scope for the four Logs
+It also needs `Monitoring Metrics Publisher` at the resource-group scope for the six Logs
 Ingestion API calls; assign that before `apply`, because the DCR does not exist yet. The script also
 runs a bounded `print ... | take 1` capability probe before its first write, so the provisioner must
 be allowed to execute Log Analytics queries on the workspace.
@@ -122,15 +124,16 @@ workspace name and independently supplied customer UUID, verifies Sentinel onboa
 relevant ARM inventories, and rejects collisions in resource IDs, function names, or rule
 inventory. It waits for owned tables and the DCR to reach a successful stable state, then checks
 their full definitions again before using them. It creates only the named child fixtures and adds
-four rows on every apply. It also creates `DeadairEmptyAnalytics_CL` as an empty Analytics table and
+six rows on every apply, including current predicate and Basic summary-source rows. It also creates
+`DeadairEmptyAnalytics_CL` as an empty Analytics table and
 removes `DeadairRemoved_CL` after the DCR and missing/partial rules exist. Row evidence expires after
-24 hours. Running `apply` again refreshes it by adding four more rows. The empty Analytics table
+24 hours. Running `apply` again refreshes it by adding six more rows. The empty Analytics table
 receives no rows and validates assessed-empty freshness for a resolved rule input.
 
 Azure retains deleted Log Analytics tables and their data for 15 days for name reservation and
 recovery. Treat base cleanup as a terminal or cooling-off operation. For an immediate clean rerun,
 use a fresh workspace; otherwise, wait for the retention window to expire. Cleanup does not
-immediately purge the four retained rows. An interrupted apply can resume only while visible owned
+immediately purge the retained rows. An interrupted apply can resume only while visible owned
 resources still match their exact definitions. The full create, ingest, and exact cleanup path ran
 through this script on 2026-08-21.
 
@@ -173,11 +176,13 @@ environment, and confirmation value. `apply` completes the preflight and every c
 before its first write.
 
 The preflight checks exact table plans and schemas, exact base rule and function definitions,
-`BuiltInFusion`, and a bounded aggregate proving recent nonempty Fresh, Lag, Stale, and Unused rows
+`BuiltInFusion`, a current predicate row, a current Basic summary-source row through the Basic Logs
+search endpoint, and a bounded aggregate proving recent nonempty Fresh, Lag, Stale, and Unused rows
 with Fresh < Lag < Stale paired ingest lag. It returns aggregate flags and lag seconds, never source
-records. It does not create or repair base fixtures. `apply` and `cleanup` touch only the named
-disposable expansion fixtures and require the explicit confirmation value printed by the script.
-Authenticate with Azure CLI first, then run:
+records. After waiting for a native summary run, `apply` checks the current base rows again before
+calling the lab ready. It does not create or repair base fixtures. `apply` and `cleanup` touch only
+the named disposable expansion fixtures and require the explicit confirmation value printed by the
+script. Authenticate with Azure CLI first, then run:
 
 ```sh
 DEADAIR_AZURE_SUBSCRIPTION_ID=... \
@@ -216,10 +221,12 @@ response `contentType` only when every other identity and ownership field matche
 onboarding likewise accepts an omitted default `customerManagedKey`, but rejects explicit `true`.
 
 The summary destination includes mandatory `TimeGenerated` and is created before the rule with an
-exact schema-description ownership marker. Cleanup checks the marker independently, deletes the
-rule first, and can resume with only the table left after an interrupted deletion. The four disabled
-Scheduled rules are checked for collisions before the first write, polled until their exact
-definitions are readable, and deleted before their watchlist, remote-workspace, or summary
+exact schema-description ownership marker. The Summary Logs diagnostic setting is matched by exact
+workspace destination and category; `apply` waits for a successful one-result execution after the
+ARM definition became visible. Cleanup checks each resource again immediately before deletion,
+deletes the rule first, and can resume with only the table left after an interrupted deletion. The
+four disabled Scheduled rules are checked for collisions before the first write, polled until their
+exact definitions are readable, and deleted before their watchlist, remote-workspace, or summary
 dependencies. A missing or changed marker always fails closed. Every mode rejects identical home
 and remote workspace names.
 
@@ -234,11 +241,16 @@ When `BuiltInFusion` exposes an exact native template ID and installed version, 
 assessed evidence for that template and version. If the tenant does not expose those fields, the test
 records positive native-template provenance as pending rather than claiming live validation.
 
+The 2026-08-22 run also proved a current literal vendor predicate and a Basic-plan source row flowing
+through a successful summary execution to the matching Analytics destination bin and count.
+`LASummaryLogs.RuleLastModifiedTime` advanced between completed bins while the ARM definition stayed
+unchanged, so deadair treats it as a timestamp sanity check and lower bound. It does not claim that
+the field identifies the exact ARM revision.
+
 A successful run proves only the named workspaces and scanner identity. It does not prove:
 
 - cross-tenant Azure Lighthouse;
 - cross-subscription or cross-tenant creator-credential execution;
-- summary-rule run health; or
 - a positive installed Content Hub package association.
 
 Same-subscription mapped evidence remains conclusive for source availability. Cross-subscription

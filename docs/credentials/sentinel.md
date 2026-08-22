@@ -27,9 +27,10 @@ and Content Hub enrichment.
 
 A recorded UK South lab pass used a workspace-scoped custom role limited to the read and query
 operations listed below. It covered local and mapped-remote tables, literal watchlists, bounded
-native-ASIM `PartialError` handling, saved functions, and summary lineage. Positive native-ASIM
-resolution remains fixture-tested. Rule deletion, table deletion, and shared-key retrieval all
-returned `403`.
+native-ASIM `PartialError` handling, saved functions, predicate-qualified freshness, summary
+lineage, a successful `LASummaryLogs` execution, and the matching Basic-source to Analytics-output
+bin. Positive native-ASIM resolution remains fixture-tested. Rule deletion, table deletion, and
+shared-key retrieval all returned `403`.
 
 The test did not prove a positive installed Content Hub package association. It is opt-in and does
 not run in scheduled CI.
@@ -249,16 +250,16 @@ unused mappings are not touched. Summary and provenance permissions remain optio
 not part of readiness. Same-subscription mapped sources can resolve conclusively. An eligible
 installed rule that references another subscription needs an exact successful matching
 `SentinelHealth` event after the latest rule change and within its expected run cadence to
-corroborate execution identity. Candidate and absent, old,
-mismatched, or non-successful evidence remains unassessed. Tenant topology is not identified
+corroborate execution identity. Candidate scans and absent, old, mismatched, or non-successful
+evidence remain unassessed. Tenant topology is not identified
 separately.
 
 Filtered source activity is limited to one direct local Analytics table followed by a closed,
 parser-supported literal filter. Remote, joined, unioned, dynamic, escaped-literal, and function-backed
 sources do not qualify. The bounded result is informational and cannot create a finding. Summary
 runtime evidence is likewise informational, bounded to seven days, and capped at 50 relevant active
-summary rules per scan. These predicate-freshness, summary-runtime, and `SentinelHealth` paths are
-fixture-tested but have not been exercised by the recorded live lab.
+summary rules per scan. Predicate freshness and summary runtime were exercised by the recorded live
+lab. Cross-subscription `SentinelHealth` corroboration remains fixture-tested.
 
 Enable [Sentinel auditing and health monitoring](https://learn.microsoft.com/en-us/azure/sentinel/enable-monitoring)
 before using the `_SentinelHealth()` path. For summary runtime, enable the

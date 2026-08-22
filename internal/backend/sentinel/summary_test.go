@@ -276,6 +276,22 @@ func TestSummaryRuleRunEvidenceWarnsWhenLatestSuccessExceedsScheduleAndRetryAllo
 	}
 }
 
+func TestSummaryRunOverdueTreatsBinDelayAsMinutesAndKeepsRetryAllowance(t *testing.T) {
+	rule := summaryLogJSON{}
+	rule.Properties.RuleDefinition.BinSize = 60
+	rule.Properties.RuleDefinition.BinDelay = 10
+	runAt := time.Date(2026, time.August, 20, 0, 0, 0, 0, time.UTC)
+
+	// A seconds-based delay would already call this overdue. Sentinel's
+	// 10-minute delay keeps it inside the 60m schedule plus 8h retry allowance.
+	if summaryRunIsOverdue(rule, runAt.Add(9*time.Hour+time.Minute), runAt) {
+		t.Fatal("10-minute bin delay was treated as seconds")
+	}
+	if !summaryRunIsOverdue(rule, runAt.Add(9*time.Hour+10*time.Minute+time.Nanosecond), runAt) {
+		t.Fatal("run beyond bin size, bin delay, and retry allowance was not overdue")
+	}
+}
+
 func TestSummaryRuleRunEvidenceRejectsMalformedAndAmbiguousNativeEvidence(t *testing.T) {
 	t.Run("malformed row", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -366,7 +382,7 @@ func TestSummaryRuleRunEvidenceRequiresCurrentARMRevision(t *testing.T) {
 			logRuleModifiedAt:  armModifiedAt.Add(-time.Hour),
 			wantLogsRequests:   1,
 			wantStatus:         backend.EvidenceIncomplete,
-			wantDetail:         "latest LASummaryLogs execution predates the current ARM summary-rule revision",
+			wantDetail:         "latest LASummaryLogs execution could not be linked to the current ARM summary-rule definition",
 			wantRuntimeCleared: true,
 		},
 		{
@@ -376,11 +392,49 @@ func TestSummaryRuleRunEvidenceRequiresCurrentARMRevision(t *testing.T) {
 			logRuleModifiedAt:  armModifiedAt.Add(-time.Minute),
 			wantLogsRequests:   1,
 			wantStatus:         backend.EvidenceIncomplete,
-			wantDetail:         "latest LASummaryLogs execution predates the current ARM summary-rule revision",
+			wantDetail:         "latest LASummaryLogs execution could not be linked to the current ARM summary-rule definition",
 			wantRuntimeCleared: true,
 		},
 		{
-			name:              "current revision",
+			name:              "native timestamp within ARM settle tolerance",
+			armModified:       armModifiedAt.Format(time.RFC3339Nano),
+			runAt:             armModifiedAt.Add(time.Minute),
+			logRuleModifiedAt: armModifiedAt.Add(-summaryRuleTimestampTolerance),
+			wantLogsRequests:  1,
+			wantStatus:        backend.EvidenceAssessed,
+			wantDetail:        "latest completed native summary-rule execution observed",
+		},
+		{
+			name:              "later native execution timestamp while ARM definition is unchanged",
+			armModified:       armModifiedAt.Format(time.RFC3339Nano),
+			runAt:             armModifiedAt.Add(21 * time.Minute),
+			logRuleModifiedAt: armModifiedAt.Add(20 * time.Minute),
+			wantLogsRequests:  1,
+			wantStatus:        backend.EvidenceAssessed,
+			wantDetail:        "latest completed native summary-rule execution observed",
+		},
+		{
+			name:               "native timestamp beyond ARM settle tolerance",
+			armModified:        armModifiedAt.Format(time.RFC3339Nano),
+			runAt:              armModifiedAt.Add(time.Minute),
+			logRuleModifiedAt:  armModifiedAt.Add(-summaryRuleTimestampTolerance - time.Nanosecond),
+			wantLogsRequests:   1,
+			wantStatus:         backend.EvidenceIncomplete,
+			wantDetail:         "latest LASummaryLogs execution could not be linked to the current ARM summary-rule definition",
+			wantRuntimeCleared: true,
+		},
+		{
+			name:               "native timestamp after execution",
+			armModified:        armModifiedAt.Format(time.RFC3339Nano),
+			runAt:              armModifiedAt.Add(time.Minute),
+			logRuleModifiedAt:  armModifiedAt.Add(2 * time.Minute),
+			wantLogsRequests:   1,
+			wantStatus:         backend.EvidenceIncomplete,
+			wantDetail:         "latest LASummaryLogs execution could not be linked to the current ARM summary-rule definition",
+			wantRuntimeCleared: true,
+		},
+		{
+			name:              "execution after current ARM definition",
 			armModified:       armModifiedAt.Format(time.RFC3339Nano),
 			runAt:             armModifiedAt.Add(time.Minute),
 			logRuleModifiedAt: armModifiedAt,
@@ -698,7 +752,7 @@ func TestLineageEvidenceIncludesOnlySummaryRulesConsumedByEnabledDetections(t *t
 			item.Input.Kind != "telemetry_table" || item.Output.Name != "RawSummary_CL" ||
 			item.Output.Kind != "telemetry_table" || !item.Output.Monitorable ||
 			item.Status != backend.EvidenceAssessed || item.Method != "arm-summary-rule-kql" ||
-			item.Detail != "bin 60m; delay 10s" {
+			item.Detail != "bin 60m; delay 10m" {
 			t.Errorf("assessed summary lineage = %+v", item)
 		}
 	}

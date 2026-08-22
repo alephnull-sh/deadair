@@ -126,8 +126,8 @@ Sentinel uses ARM metadata plus bounded Logs queries:
 | remote Sentinel onboarding | exact GA `onboardingStates/default` resource | missing, denied, malformed, or mismatched evidence is unavailable; no table or Logs probe follows |
 | configured literal `workspace()` table | remote workspace/table GETs and workspace-scoped Logs evidence | textual aliases require catalog plus original-literal Logs proof; verified GUID and canonical ARM-ID mappings do not |
 | cross-workspace limits | verified workspace IDs and ARM locations | home workspace is counted; more than 20 workspaces or 20 or more regions is incompatible; missing location evidence is unavailable; Microsoft's lower performance warnings remain guidance |
-| summary lineage | Log Analytics `summaryLogs` and table GETs for outputs consumed by enabled detections | ARM-only structure; `binDelay` is seconds in the 2025-07-01 schema |
-| summary-rule runtime | bounded seven-day `LASummaryLogs` latest-completed-run query for relevant active, successfully provisioned summary rules, capped at 50 rules per scan | accepts only runs from the current rule revision; failures stay informational, and old successes become incomplete against cadence, delay, and retry allowance; separate from lineage and gates |
+| summary lineage | Log Analytics `summaryLogs` and table GETs for outputs consumed by enabled detections | ARM-only structure; `binDelay` follows Azure Monitor's minute-based schedule |
+| summary-rule runtime | bounded seven-day `LASummaryLogs` latest-completed-run query for relevant active, successfully provisioned summary rules, capped at 50 rules per scan | accepts only runs observed after the current ARM definition became visible; failures stay informational, and old successes become incomplete against cadence, delay, and retry allowance; separate from lineage and gates |
 | native template and Content Hub provenance | exact-ID Sentinel template/package GETs | informational; no display-name guessing or expanded package content |
 
 Summary-lineage, summary-runtime, and provenance rights are optional scan enrichment. `check` does

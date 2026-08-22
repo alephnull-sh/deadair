@@ -91,23 +91,25 @@ Exit codes are stable: `0` passes the configured gate, `1` means gated findings,
 
 On Sentinel, deadair can also report when the filtered data used by one rule has gone quiet or a
 summary pipeline feeding a detection has failed or fallen behind. Both checks are advisory and do
-not affect findings, gates, or exit codes. The disposable lab had no eligible filtered query or
-`LASummaryLogs` rows, so both have only been tested with fixtures.
+not affect findings, gates, or exit codes. The disposable lab exercised both against Azure: a
+literal vendor filter over current Analytics data, and a successful Summary Logs run whose Basic
+source count matched the materialized Analytics output.
 
 Sentinel JSON and HTML reports also retain non-telemetry dependency evidence, structural lineage
 for summary tables consumed by enabled detections, and exact-ID rule-template and Content Hub
 provenance. Dependency evidence can explain a rule assessment. Lineage and provenance are
 informational. The filtered-data check runs only when deadair can prove a closed literal filter over
 one local Analytics table. Summary runtime comes from the latest completed bounded
-`LASummaryLogs` run for the current rule revision; an overdue success stays incomplete rather than
-being treated as current. Structural summary lineage was exercised in the disposable Sentinel lab.
+`LASummaryLogs` run observed after the current ARM definition became visible; an overdue success
+stays incomplete rather than being treated as current. Structural summary lineage was exercised
+in the disposable Sentinel lab.
 
 <p align="center">
   <img alt="deadair readiness check and scan of a disposable Microsoft Sentinel lab" src="docs/assets/sentinel-lab.gif" width="860">
 </p>
 
 <p align="center">
-  <sub>Read-only scan of the disposable Sentinel lab after its short-lived telemetry expired. The stale, missing, incompatible, partial, and unsupported cases are deliberate. Re-record it from the <a href="integration/README.md#microsoft-sentinel">documented disposable lab</a> with <code>make record-sentinel-lab</code>.</sub>
+  <sub>Read-only v0.7.0 scan of the disposable Sentinel lab. The lab cases are deliberate; the same live pass also verified predicate freshness and the Basic-to-Analytics summary path. Re-record it from the <a href="integration/README.md#microsoft-sentinel">documented disposable lab</a> with <code>make record-sentinel-lab</code>.</sub>
 </p>
 
 deadair checks whether a detection's telemetry is present and healthy. It does not validate rule
@@ -233,12 +235,12 @@ to test in your own environment.
 | OpenSearch Security Analytics | trusted CI on 2.19.6 and 3.7.0 |
 | Microsoft Sentinel | recorded opt-in conformance in disposable UK South workspaces; see the exact cases and gaps below |
 
-The Sentinel run covered watchlists, the native-ASIM `PartialError` fail-closed path,
-same-subscription cross-workspace queries, summary lineage, an empty Content Hub, and representative
-write denials. Positive native-ASIM resolution remains fixture-tested, and the live run did not
-prove installed-package provenance. Filtered source activity, `SentinelHealth` execution
-corroboration, and `LASummaryLogs` runtime evidence are fixture-tested, not live-validated. The
-Sentinel run is not part of scheduled CI. See
+The 2026-08-22 Sentinel run covered watchlists, the native-ASIM `PartialError` fail-closed path,
+same-subscription cross-workspace queries, predicate-qualified freshness, summary lineage, a
+successful native summary run, the matching Basic-to-Analytics output bin, an empty Content Hub,
+and representative write denials. Positive native-ASIM resolution and installed-package
+provenance remain fixture-tested. `SentinelHealth` execution corroboration also remains
+fixture-tested because the lab uses one subscription. The Sentinel run is not part of scheduled CI. See
 [validation status](docs/validation.md) for the full test boundary.
 
 ## Security model

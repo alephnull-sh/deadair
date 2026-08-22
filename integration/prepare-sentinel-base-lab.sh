@@ -31,6 +31,10 @@ nrt_rule_id=78888888-8888-4888-8888-888888888888
 nrt_display='deadair lab - nrt dependency'
 nrt_query='DeadairFresh_CL | where TimeGenerated < datetime(1900-01-01)'
 
+predicate_rule_id=77777777-7777-4777-8777-777777777777
+predicate_rule_display='deadair lab - predicate freshness'
+predicate_rule_query="DeadairPredicate_CL | where DeviceVendor == 'Deadair Labs' | project TimeGenerated, EventId, DeviceVendor"
+
 case "$mode" in
 plan|apply|cleanup) ;;
 *)
@@ -100,11 +104,11 @@ print_plan() {
 	echo "  existing resource group: /subscriptions/$subscription_id/resourceGroups/$resource_group"
 	echo "  existing Sentinel workspace: $workspace_path"
 	echo "  expected workspace customer ID: $workspace_id"
-	echo "  create seven final tables; create then remove DeadairRemoved_CL"
+	echo "  create eight final tables; create then remove DeadairRemoved_CL"
 	echo "  create two saved workspace functions"
 	echo "  create one tagged direct-ingestion DCR: $dcr_path"
-	echo "  ingest four one-row samples (fresh, 45m lag, 90m stale, unused; evidence lasts 24h)"
-	echo "  create eleven Scheduled rules and one disabled NRT rule"
+	echo "  ingest six one-row samples (fresh, 45m lag, 90m stale, unused, predicate, Basic summary source)"
+	echo "  create twelve Scheduled rules and one disabled NRT rule"
 	echo "  create DeadairEmptyAnalytics_CL directly as an empty Analytics table"
 	echo "  cleanup starts Azure's 15-day deleted-table recovery/name-reservation window"
 	echo "  apply/cleanup confirmation: DEADAIR_SENTINEL_BASE_LAB_CONFIRM=$expected_confirmation"
@@ -321,6 +325,11 @@ table_matches() {
 			any(.properties.schema.columns[]?; .name == "EventId" and (.type | ascii_downcase) == "string") and
 			any(.properties.schema.columns[]?; .name == "Marker" and (.type | ascii_downcase) == "string") and
 			any(.properties.schema.columns[]?; .name == "ExpectedField" and (.type | ascii_downcase) == "string")
+		elif $shape == "predicate" then
+			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 3 and
+			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
+			any(.properties.schema.columns[]?; .name == "EventId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DeviceVendor" and (.type | ascii_downcase) == "string")
 		else
 			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 2 and
 			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
@@ -431,6 +440,17 @@ dcr_owned() {
 dcr_matches() {
 	printf '%s' "$1" | jq -e --arg marker "$fixture_marker" --arg workspace "$workspace_path" --arg destination "$dcr_destination" \
 		--arg resource "$dcr_path" --arg name "$dcr_name" --arg location "$workspace_location" '
+		def columns($stream):
+			[.properties.streamDeclarations[$stream].columns[]? |
+				{name, type: (.type | ascii_downcase)}] | sort_by(.name);
+		def standard_columns:
+			[{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
+			 {name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}] | sort_by(.name);
+		def predicate_columns:
+			[{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
+			 {name: "DeviceVendor", type: "string"}] | sort_by(.name);
+		def summary_source_columns:
+			[{name: "TimeGenerated", type: "datetime"}, {name: "Marker", type: "string"}] | sort_by(.name);
 		((.name // "") | ascii_downcase) == ($name | ascii_downcase) and
 		((.id // "") | ascii_downcase) == ($resource | ascii_downcase) and
 		((.type // "") | ascii_downcase) == "microsoft.insights/datacollectionrules" and
@@ -443,24 +463,25 @@ dcr_matches() {
 		([.properties.destinations.logAnalytics[]?] | length) == 1 and
 		([.properties.destinations.logAnalytics[]? |
 			select(.name == $destination and ((.workspaceResourceId | ascii_downcase) == ($workspace | ascii_downcase)))] | length) == 1 and
-		([.properties.streamDeclarations | keys[] |
-			select(. == "Custom-DeadairFresh" or . == "Custom-DeadairStale" or
-				. == "Custom-DeadairLag" or . == "Custom-DeadairUnused" or
-				. == "Custom-DeadairRemoved")] | length) == 5 and
-		([.properties.streamDeclarations | keys[]] | length) == 5 and
-		all(.properties.streamDeclarations[];
-			(.columns | length) == 4 and
-			any(.columns[]; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
-			any(.columns[]; .name == "EventId" and (.type | ascii_downcase) == "string") and
-			any(.columns[]; .name == "Marker" and (.type | ascii_downcase) == "string") and
-			any(.columns[]; .name == "ExpectedField" and (.type | ascii_downcase) == "string")) and
+		([.properties.streamDeclarations | keys[]] | sort) == ([
+			"Custom-DeadairFresh", "Custom-DeadairStale", "Custom-DeadairLag",
+			"Custom-DeadairUnused", "Custom-DeadairRemoved", "Custom-DeadairPredicate",
+			"Custom-DeadairBasic"] | sort) and
+		columns("Custom-DeadairFresh") == standard_columns and
+		columns("Custom-DeadairStale") == standard_columns and
+		columns("Custom-DeadairLag") == standard_columns and
+		columns("Custom-DeadairUnused") == standard_columns and
+		columns("Custom-DeadairRemoved") == standard_columns and
+		columns("Custom-DeadairPredicate") == predicate_columns and
+		columns("Custom-DeadairBasic") == summary_source_columns and
 		([.properties.dataFlows[]? |
 			select(.destinations == [$destination] and .transformKql == "source" and
 				(.streams | length) == 1 and .outputStream == (.streams[0] + "_CL") and
-				((.captureOverflow // false) == false) and ((.builtInTransform // "") == ""))] | length) == 5 and
+				((.captureOverflow // false) == false) and ((.builtInTransform // "") == ""))] | length) == 7 and
 		([.properties.dataFlows[]?.outputStream] | sort) == ([
 			"Custom-DeadairFresh_CL", "Custom-DeadairStale_CL", "Custom-DeadairLag_CL",
-			"Custom-DeadairUnused_CL", "Custom-DeadairRemoved_CL"] | sort)' >/dev/null
+			"Custom-DeadairUnused_CL", "Custom-DeadairRemoved_CL", "Custom-DeadairPredicate_CL",
+			"Custom-DeadairBasic_CL"] | sort)' >/dev/null
 }
 
 verify_provider() {
@@ -646,6 +667,7 @@ run_collision_preflight() {
 	preflight_table DeadairStale_CL Analytics four
 	preflight_table DeadairLag_CL Analytics four
 	preflight_table DeadairUnused_CL Analytics four
+	preflight_table DeadairPredicate_CL Analytics predicate
 	preflight_table DeadairBasic_CL Basic two
 	preflight_table DeadairAuxiliary_CL Auxiliary two
 	preflight_table DeadairEmptyAnalytics_CL Analytics two
@@ -665,6 +687,7 @@ run_collision_preflight() {
 	preflight_scheduled_rule 73333333-3333-4333-8333-333333333333 'deadair lab - parameterized function' PT5M PT30M 'DeadairLabParameterized("fresh") | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
 	preflight_scheduled_rule 74444444-4444-4444-8444-444444444444 'deadair lab - auxiliary table dependency' PT5M PT30M 'DeadairAuxiliary_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
 	preflight_scheduled_rule 76666666-6666-4666-8666-666666666666 'deadair lab - empty analytics table' PT5M PT30M 'DeadairEmptyAnalytics_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
+	preflight_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT30M "$predicate_rule_query"
 	preflight_nrt_rule
 
 	preflight_removed=$(collection_resource "table DeadairRemoved_CL" "$table_collection_uri" DeadairRemoved_CL)
@@ -689,6 +712,14 @@ create_table_body() {
 				{name: "EventId", type: "string"},
 				{name: "Marker", type: "string"},
 				{name: "ExpectedField", type: "string"}
+			]}}
+		}'
+	elif [ "$create_table_shape" = predicate ]; then
+		jq -n --arg name "$create_table_name" --arg plan "$create_table_plan" --arg marker "$fixture_marker" '{
+			properties: {plan: $plan, schema: {name: $name, description: $marker, columns: [
+				{name: "TimeGenerated", type: "dateTime"},
+				{name: "EventId", type: "string"},
+				{name: "DeviceVendor", type: "string"}
 			]}}
 		}'
 	else
@@ -772,7 +803,12 @@ ensure_dcr() {
 					{name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}]},
 				"Custom-DeadairRemoved": {columns: [
 					{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
-					{name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}]}
+					{name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}]},
+				"Custom-DeadairPredicate": {columns: [
+					{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
+					{name: "DeviceVendor", type: "string"}]},
+				"Custom-DeadairBasic": {columns: [
+					{name: "TimeGenerated", type: "datetime"}, {name: "Marker", type: "string"}]}
 			},
 			destinations: {logAnalytics: [{workspaceResourceId: $workspace, name: $destination}]},
 			dataFlows: [
@@ -780,7 +816,9 @@ ensure_dcr() {
 				{streams: ["Custom-DeadairStale"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairStale_CL"},
 				{streams: ["Custom-DeadairLag"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairLag_CL"},
 				{streams: ["Custom-DeadairUnused"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairUnused_CL"},
-				{streams: ["Custom-DeadairRemoved"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairRemoved_CL"}
+				{streams: ["Custom-DeadairRemoved"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairRemoved_CL"},
+				{streams: ["Custom-DeadairPredicate"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairPredicate_CL"},
+				{streams: ["Custom-DeadairBasic"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairBasic_CL"}
 			]
 		}
 	}' >"$tmp_dir/dcr.json"
@@ -873,6 +911,27 @@ wait_for_ingested_row() {
 	return 1
 }
 
+wait_for_basic_ingested_row() {
+	wait_marker=$1
+	wait_attempt=0
+	jq -n --arg query "DeadairBasic_CL | where Marker == '$wait_marker' | take 1" \
+		'{query: $query}' >"$tmp_dir/search-DeadairBasic_CL.json"
+	while [ "$wait_attempt" -lt 120 ]; do
+		if wait_response=$(az rest --only-show-errors --method post --resource https://api.loganalytics.io \
+			--uri "https://api.loganalytics.io/v1/workspaces/$workspace_id/search?timespan=PT30M" \
+			--body "@$tmp_dir/search-DeadairBasic_CL.json" --output json 2>/dev/null); then
+			wait_rows=$(printf '%s' "$wait_response" | jq '[.tables[0].rows[]?] | length')
+			if [ "$wait_rows" -gt 0 ]; then
+				return 0
+			fi
+		fi
+		wait_attempt=$((wait_attempt + 1))
+		sleep 5
+	done
+	echo "ingested marker did not become searchable in DeadairBasic_CL" >&2
+	return 1
+}
+
 ingest_base_rows() {
 	dcr_resource=$(stable_resource_json "$dcr_uri" "DCR $dcr_name")
 	if ! dcr_matches "$dcr_resource"; then
@@ -930,6 +989,8 @@ ingest_base_rows() {
 	lag_event_id="lag-$ingest_epoch"
 	stale_event_id="stale-$ingest_epoch"
 	unused_event_id="unused-$ingest_epoch"
+	predicate_event_id="predicate-$ingest_epoch"
+	basic_marker="summary-source-$ingest_epoch"
 	fresh_time=$(utc_minutes_ago 0)
 	lag_time=$(utc_minutes_ago 45)
 	stale_time=$(utc_minutes_ago 90)
@@ -938,12 +999,16 @@ ingest_base_rows() {
 	jq -n --arg time "$lag_time" --arg id "$lag_event_id" '[{TimeGenerated: $time, EventId: $id, Marker: "lag", ExpectedField: "join-key"}]' >"$tmp_dir/ingest-lag.json"
 	jq -n --arg time "$stale_time" --arg id "$stale_event_id" '[{TimeGenerated: $time, EventId: $id, Marker: "stale", ExpectedField: "join-key"}]' >"$tmp_dir/ingest-stale.json"
 	jq -n --arg time "$fresh_time" --arg id "$unused_event_id" '[{TimeGenerated: $time, EventId: $id, Marker: "unused", ExpectedField: "unused"}]' >"$tmp_dir/ingest-unused.json"
+	jq -n --arg time "$fresh_time" --arg id "$predicate_event_id" '[{TimeGenerated: $time, EventId: $id, DeviceVendor: "Deadair Labs"}]' >"$tmp_dir/ingest-predicate.json"
+	jq -n --arg time "$fresh_time" --arg marker "$basic_marker" '[{TimeGenerated: $time, Marker: $marker}]' >"$tmp_dir/ingest-basic.json"
 
 	for ingest_spec in \
 		"DeadairFresh_CL:$tmp_dir/ingest-fresh.json" \
 		"DeadairLag_CL:$tmp_dir/ingest-lag.json" \
 		"DeadairStale_CL:$tmp_dir/ingest-stale.json" \
-		"DeadairUnused_CL:$tmp_dir/ingest-unused.json"; do
+		"DeadairUnused_CL:$tmp_dir/ingest-unused.json" \
+		"DeadairPredicate_CL:$tmp_dir/ingest-predicate.json" \
+		"DeadairBasic_CL:$tmp_dir/ingest-basic.json"; do
 		ingest_stream=${ingest_spec%%:*}
 		ingest_file=${ingest_spec#*:}
 		ingest_input=${ingest_stream%_CL}
@@ -959,6 +1024,8 @@ ingest_base_rows() {
 	wait_for_ingested_row DeadairLag_CL "$lag_event_id"
 	wait_for_ingested_row DeadairStale_CL "$stale_event_id"
 	wait_for_ingested_row DeadairUnused_CL "$unused_event_id"
+	wait_for_ingested_row DeadairPredicate_CL "$predicate_event_id"
+	wait_for_basic_ingested_row "$basic_marker"
 }
 
 apply_fixtures() {
@@ -966,6 +1033,7 @@ apply_fixtures() {
 	ensure_table DeadairStale_CL Analytics four
 	ensure_table DeadairLag_CL Analytics four
 	ensure_table DeadairUnused_CL Analytics four
+	ensure_table DeadairPredicate_CL Analytics predicate
 	ensure_table DeadairBasic_CL Basic two
 	ensure_table DeadairAuxiliary_CL Auxiliary two
 	ensure_table DeadairEmptyAnalytics_CL Analytics two
@@ -989,6 +1057,7 @@ apply_fixtures() {
 	ensure_scheduled_rule 73333333-3333-4333-8333-333333333333 'deadair lab - parameterized function' PT5M PT30M 'DeadairLabParameterized("fresh") | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
 	ensure_scheduled_rule 74444444-4444-4444-8444-444444444444 'deadair lab - auxiliary table dependency' PT5M PT30M 'DeadairAuxiliary_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
 	ensure_scheduled_rule 76666666-6666-4666-8666-666666666666 'deadair lab - empty analytics table' PT5M PT30M 'DeadairEmptyAnalytics_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
+	ensure_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT30M "$predicate_rule_query"
 	ensure_nrt_rule
 
 	removed_resource=$(collection_resource "table DeadairRemoved_CL" "$table_collection_uri" DeadairRemoved_CL)
@@ -1125,6 +1194,7 @@ cleanup_fixtures() {
 	delete_scheduled_rule 73333333-3333-4333-8333-333333333333 'deadair lab - parameterized function' PT5M PT30M 'DeadairLabParameterized("fresh") | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
 	delete_scheduled_rule 74444444-4444-4444-8444-444444444444 'deadair lab - auxiliary table dependency' PT5M PT30M 'DeadairAuxiliary_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
 	delete_scheduled_rule 76666666-6666-4666-8666-666666666666 'deadair lab - empty analytics table' PT5M PT30M 'DeadairEmptyAnalytics_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
+	delete_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT30M "$predicate_rule_query"
 	delete_nrt_rule
 	delete_dcr
 	delete_function "$base_function_id" "$base_function" "$base_function_body" ""
@@ -1133,6 +1203,7 @@ cleanup_fixtures() {
 	delete_table DeadairStale_CL Analytics four
 	delete_table DeadairLag_CL Analytics four
 	delete_table DeadairUnused_CL Analytics four
+	delete_table DeadairPredicate_CL Analytics predicate
 	delete_table DeadairBasic_CL Basic two
 	delete_table DeadairAuxiliary_CL Auxiliary two
 	delete_table DeadairEmptyAnalytics_CL Analytics two

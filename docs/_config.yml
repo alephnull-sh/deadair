@@ -1,6 +1,6 @@
 title: deadair
 author: Nikhil Satyakrishna
-description: SIEM detection coverage health for Elastic Security and OpenSearch Security Analytics.
+description: SIEM detection coverage health for Elastic Security, OpenSearch Security Analytics, and Microsoft Sentinel.
 url: "https://alephnull-sh.github.io"
 baseurl: "/deadair"
 

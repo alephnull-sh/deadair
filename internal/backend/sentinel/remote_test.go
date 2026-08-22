@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -51,6 +52,49 @@ func TestQualifiedRemoteSourceKeepsLocalAndRemoteTablesDistinct(t *testing.T) {
 	gotResource, gotTable, ok := parseQualifiedRemoteSource(qualified)
 	if !ok || gotResource != resourceID || gotTable != "SecurityEvent" {
 		t.Fatalf("parseQualifiedRemoteSource(%q) = %q, %q, %t", qualified, gotResource, gotTable, ok)
+	}
+}
+
+func TestResolveRemoteWorkspaceRequiresExactTextualAlias(t *testing.T) {
+	const remoteWorkspaceID = "11111111-1111-1111-1111-111111111111"
+	remote := RemoteWorkspace{
+		Alias: "soc", SubscriptionID: "remote-sub", ResourceGroup: "remote-rg", WorkspaceName: "remote-law", WorkspaceID: remoteWorkspaceID,
+	}
+	resourceID := canonicalWorkspaceResourceID(remote.SubscriptionID, remote.ResourceGroup, remote.WorkspaceName)
+	state := &remoteWorkspaceState{
+		config: remote, resourceID: resourceID, validated: true, workspaceID: remoteWorkspaceID, location: "remote-region",
+	}
+	client := &Client{remoteStates: map[string]*remoteWorkspaceState{
+		"alias:soc":                      state,
+		"alias:soc ":                     state,
+		"alias:soc/":                     state,
+		"resource:" + resourceID:         state,
+		"workspace:" + remoteWorkspaceID: state,
+	}}
+
+	tests := []struct {
+		name  string
+		scope string
+		want  bool
+	}{
+		{name: "exact alias", scope: "soc", want: true},
+		{name: "case folded alias", scope: "SOC", want: true},
+		{name: "trailing alias whitespace", scope: "soc ", want: false},
+		{name: "leading alias whitespace", scope: "\tsoc", want: false},
+		{name: "trailing alias slash", scope: "soc/", want: false},
+		{name: "canonical ARM identity", scope: " " + strings.ToUpper(resourceID) + "/ ", want: true},
+		{name: "workspace customer ID", scope: " " + strings.ToUpper(remoteWorkspaceID) + "/ ", want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := client.resolveRemoteWorkspace(context.Background(), test.scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got == state) != test.want {
+				t.Fatalf("resolveRemoteWorkspace(%q) mapped = %t, want %t", test.scope, got == state, test.want)
+			}
+		})
 	}
 }
 
@@ -561,6 +605,348 @@ func TestConfiguredAliasMustResolveToVerifiedWorkspace(t *testing.T) {
 	}
 	if queryCalls != 1 {
 		t.Fatalf("alias proof queries = %d, want one cached bounded query", queryCalls)
+	}
+}
+
+func TestConfiguredAliasProofPrefersTheReferencedTable(t *testing.T) {
+	const remoteWorkspaceID = "11111111-1111-1111-1111-111111111111"
+	remoteResourceID := canonicalWorkspaceResourceID("remote-sub", "remote-rg", "remote-law")
+	queryCalls := 0
+	queryText := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == remoteResourceID:
+			fmt.Fprintf(w, `{"id":%q,"location":"remote-region","properties":{"customerId":%q}}`, remoteResourceID, remoteWorkspaceID)
+		case r.URL.Path == remoteOnboardingResourceID(remoteResourceID):
+			writeRemoteOnboarding(w, remoteResourceID)
+		case r.URL.Path == remoteResourceID+"/tables":
+			fmt.Fprint(w, `{"value":[`+
+				`{"name":"AStandardTable","properties":{"plan":"Analytics","provisioningState":"Succeeded","schema":{"standardColumns":[]}}},`+
+				`{"name":"DeadairRemote_CL","properties":{"plan":"Analytics","provisioningState":"Succeeded","schema":{"standardColumns":[]}}}`+
+				`]}`)
+		case strings.HasSuffix(r.URL.Path, "/tables"):
+			fmt.Fprint(w, `{"value":[]}`)
+		case strings.HasSuffix(r.URL.Path, "/query"):
+			queryCalls++
+			var request logsQueryRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			queryText = request.Query
+			if !strings.HasPrefix(request.Query, "workspace('soc').DeadairRemote_CL | take 0") {
+				http.Error(w, "the scanner cannot query unrelated standard tables", http.StatusForbidden)
+				return
+			}
+			fmt.Fprintf(w, `{"tables":[{"name":"PrimaryResult","columns":[],"rows":[]}],`+
+				`"permissions":{"dataSources":[{"resourceId":%q,"allowTables":["DeadairRemote_CL"]}]},`+
+				`"dataSources":[{"resourceId":%q,"tables":["DeadairRemote_CL"]}]}`, remoteResourceID, remoteResourceID)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := remoteFixtureClient(server.URL, &recordingCredential{})
+	client.RemoteWorkspaces = []RemoteWorkspace{{
+		Alias: "soc", SubscriptionID: "remote-sub", ResourceGroup: "remote-rg", WorkspaceName: "remote-law",
+	}}
+	rules := []backend.Rule{{
+		ID: "remote-rule", Enabled: true,
+		Dependencies: []backend.DependencyRef{{
+			Name: "DeadairRemote_CL", Kind: "sentinel_workspace_table", Scope: "soc", Monitorable: true, Required: true,
+		}},
+	}}
+	resolutions, err := client.ResolveInputs(context.Background(), rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resolution := range resolutions {
+		if resolution.RuleID == "remote-rule" && resolution.Status != backend.ResolutionResolved {
+			t.Fatalf("referenced-table alias proof = %+v, want resolved", resolution)
+		}
+	}
+	if queryCalls != 1 {
+		t.Fatalf("alias proof queries = %d, want one referenced-table query", queryCalls)
+	}
+	if !strings.HasPrefix(queryText, "workspace('soc').DeadairRemote_CL | take 0") {
+		t.Fatalf("alias proof did not use the referenced table: %q", queryText)
+	}
+}
+
+func TestConfiguredAliasProofUsesAllRuleReferencesBeforeCaching(t *testing.T) {
+	const remoteWorkspaceID = "11111111-1111-1111-1111-111111111111"
+	remoteResourceID := canonicalWorkspaceResourceID("remote-sub", "remote-rg", "remote-law")
+	tests := []struct {
+		name             string
+		firstTable       string
+		firstStatus      backend.ResolutionStatus
+		wantAliasQueries []string
+	}{
+		{
+			name:             "missing reference",
+			firstTable:       "MissingTable_CL",
+			firstStatus:      backend.ResolutionEmpty,
+			wantAliasQueries: []string{"ZPermitted_CL"},
+		},
+		{
+			name:             "denied reference",
+			firstTable:       "ADenied_CL",
+			firstStatus:      backend.ResolutionUnavailable,
+			wantAliasQueries: []string{"ADenied_CL", "ZPermitted_CL"},
+		},
+	}
+	for _, test := range tests {
+		for _, reverse := range []bool{false, true} {
+			name := test.name + "/forward"
+			if reverse {
+				name = test.name + "/reverse"
+			}
+			t.Run(name, func(t *testing.T) {
+				var mu sync.Mutex
+				var aliasQueries []string
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch {
+					case r.URL.Path == remoteResourceID:
+						fmt.Fprintf(w, `{"id":%q,"location":"remote-region","properties":{"customerId":%q}}`, remoteResourceID, remoteWorkspaceID)
+					case r.URL.Path == remoteOnboardingResourceID(remoteResourceID):
+						writeRemoteOnboarding(w, remoteResourceID)
+					case r.URL.Path == remoteResourceID+"/tables":
+						fmt.Fprint(w, `{"value":[`+
+							`{"name":"AStandardTable","properties":{"plan":"Analytics","provisioningState":"Succeeded","schema":{"standardColumns":[]}}},`+
+							`{"name":"ADenied_CL","properties":{"plan":"Analytics","provisioningState":"Succeeded","schema":{"standardColumns":[]}}},`+
+							`{"name":"ZPermitted_CL","properties":{"plan":"Analytics","provisioningState":"Succeeded","schema":{"standardColumns":[]}}}`+
+							`]}`)
+					case strings.HasSuffix(r.URL.Path, "/tables"):
+						fmt.Fprint(w, `{"value":[]}`)
+					case strings.HasSuffix(r.URL.Path, "/query"):
+						var request logsQueryRequest
+						if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+							t.Error(err)
+							http.Error(w, "bad request", http.StatusBadRequest)
+							return
+						}
+						table := ""
+						for _, candidate := range []string{"AStandardTable", "ADenied_CL", "ZPermitted_CL"} {
+							if strings.Contains(request.Query, "."+candidate+" | take 0") {
+								table = candidate
+								break
+							}
+						}
+						if strings.HasPrefix(request.Query, "workspace('soc').") {
+							mu.Lock()
+							aliasQueries = append(aliasQueries, table)
+							mu.Unlock()
+						}
+						switch table {
+						case "ADenied_CL":
+							fmt.Fprintf(w, `{"tables":[{"name":"PrimaryResult","columns":[],"rows":[]}],`+
+								`"permissions":{"dataSources":[{"resourceId":%q,"allowTables":[],"denyTables":["ADenied_CL"]}]},`+
+								`"dataSources":[{"resourceId":%q,"tables":["ADenied_CL"]}]}`, remoteResourceID, remoteResourceID)
+						case "ZPermitted_CL":
+							fmt.Fprintf(w, `{"tables":[{"name":"PrimaryResult","columns":[],"rows":[]}],`+
+								`"permissions":{"dataSources":[{"resourceId":%q,"allowTables":["ZPermitted_CL"]}]},`+
+								`"dataSources":[{"resourceId":%q,"tables":["ZPermitted_CL"]}]}`, remoteResourceID, remoteResourceID)
+						default:
+							http.Error(w, "unexpected unrelated alias proof", http.StatusForbidden)
+						}
+					default:
+						http.NotFound(w, r)
+					}
+				}))
+				defer server.Close()
+
+				first := backend.Rule{ID: "first", Enabled: true, Dependencies: []backend.DependencyRef{{
+					Name: test.firstTable, Kind: "sentinel_workspace_table", Scope: "soc", Monitorable: true, Required: true,
+				}}}
+				permitted := backend.Rule{ID: "permitted", Enabled: true, Dependencies: []backend.DependencyRef{{
+					Name: "ZPermitted_CL", Kind: "sentinel_workspace_table", Scope: "soc", Monitorable: true, Required: true,
+				}}}
+				rules := []backend.Rule{first, permitted}
+				if reverse {
+					rules[0], rules[1] = rules[1], rules[0]
+				}
+				client := remoteFixtureClient(server.URL, &recordingCredential{})
+				client.RemoteWorkspaces = []RemoteWorkspace{{
+					Alias: "soc", SubscriptionID: "remote-sub", ResourceGroup: "remote-rg", WorkspaceName: "remote-law",
+				}}
+				resolutions, err := client.ResolveInputs(context.Background(), rules)
+				if err != nil {
+					t.Fatal(err)
+				}
+				statuses := make(map[string]backend.ResolutionStatus)
+				for _, resolution := range resolutions {
+					if !resolution.Diagnostic {
+						statuses[resolution.RuleID] = resolution.Status
+					}
+				}
+				if statuses["first"] != test.firstStatus || statuses["permitted"] != backend.ResolutionResolved {
+					t.Fatalf("authoritative statuses = %+v, want first=%s permitted=%s", statuses, test.firstStatus, backend.ResolutionResolved)
+				}
+				mu.Lock()
+				gotAliasQueries := append([]string(nil), aliasQueries...)
+				mu.Unlock()
+				if fmt.Sprint(gotAliasQueries) != fmt.Sprint(test.wantAliasQueries) {
+					t.Fatalf("alias proof queries = %v, want %v", gotAliasQueries, test.wantAliasQueries)
+				}
+			})
+		}
+	}
+}
+
+func TestMalformedTextualAliasCannotReuseValidAliasProof(t *testing.T) {
+	const remoteWorkspaceID = "11111111-1111-1111-1111-111111111111"
+	remoteResourceID := canonicalWorkspaceResourceID("remote-sub", "remote-rg", "remote-law")
+	for _, reverse := range []bool{false, true} {
+		name := "valid-first"
+		if reverse {
+			name = "malformed-first"
+		}
+		t.Run(name, func(t *testing.T) {
+			var workspaceCalls, onboardingCalls, tableCalls, logsCalls atomic.Int32
+			var mu sync.Mutex
+			var queries []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == remoteResourceID:
+					workspaceCalls.Add(1)
+					fmt.Fprintf(w, `{"id":%q,"location":"remote-region","properties":{"customerId":%q}}`, remoteResourceID, remoteWorkspaceID)
+				case r.URL.Path == remoteOnboardingResourceID(remoteResourceID):
+					onboardingCalls.Add(1)
+					writeRemoteOnboarding(w, remoteResourceID)
+				case r.URL.Path == remoteResourceID+"/tables":
+					tableCalls.Add(1)
+					fmt.Fprint(w, `{"value":[{"name":"SecurityEvent","properties":{"plan":"Analytics","provisioningState":"Succeeded","schema":{"standardColumns":[]}}}]}`)
+				case strings.HasSuffix(r.URL.Path, "/tables"):
+					fmt.Fprint(w, `{"value":[]}`)
+				case strings.HasSuffix(r.URL.Path, "/query"):
+					logsCalls.Add(1)
+					var request logsQueryRequest
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Error(err)
+						http.Error(w, "bad request", http.StatusBadRequest)
+						return
+					}
+					mu.Lock()
+					queries = append(queries, request.Query)
+					mu.Unlock()
+					if request.Query != "workspace('soc').SecurityEvent | take 0" {
+						http.Error(w, "malformed alias reached Logs", http.StatusForbidden)
+						return
+					}
+					fmt.Fprintf(w, `{"tables":[{"name":"PrimaryResult","columns":[],"rows":[]}],`+
+						`"permissions":{"dataSources":[{"resourceId":%q,"allowTables":["SecurityEvent"]}]},`+
+						`"dataSources":[{"resourceId":%q,"tables":["SecurityEvent"]}]}`, remoteResourceID, remoteResourceID)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			valid := backend.Rule{ID: "valid", Enabled: true, Dependencies: []backend.DependencyRef{{
+				Name: "SecurityEvent", Kind: "sentinel_workspace_table", Scope: "soc", Monitorable: true, Required: true,
+			}}}
+			malformed := backend.Rule{ID: "malformed", Enabled: true, Dependencies: []backend.DependencyRef{{
+				Name: "SecurityEvent", Kind: "sentinel_workspace_table", Scope: "soc ", Monitorable: true, Required: true,
+			}}}
+			rules := []backend.Rule{valid, malformed}
+			if reverse {
+				rules[0], rules[1] = rules[1], rules[0]
+			}
+			client := remoteFixtureClient(server.URL, &recordingCredential{})
+			client.RemoteWorkspaces = []RemoteWorkspace{{
+				Alias: "soc", SubscriptionID: "remote-sub", ResourceGroup: "remote-rg", WorkspaceName: "remote-law",
+			}}
+			resolutions, err := client.ResolveInputs(context.Background(), rules)
+			if err != nil {
+				t.Fatal(err)
+			}
+			statuses := make(map[string]backend.ResolutionStatus)
+			for _, resolution := range resolutions {
+				if !resolution.Diagnostic {
+					statuses[resolution.RuleID] = resolution.Status
+				}
+			}
+			if statuses["valid"] != backend.ResolutionResolved || statuses["malformed"] != backend.ResolutionRemote {
+				t.Fatalf("authoritative statuses = %+v, want valid=resolved malformed=remote", statuses)
+			}
+			mu.Lock()
+			gotQueries := append([]string(nil), queries...)
+			mu.Unlock()
+			if fmt.Sprint(gotQueries) != "[workspace('soc').SecurityEvent | take 0]" {
+				t.Fatalf("Logs queries = %v, want only the exact configured alias proof", gotQueries)
+			}
+			if workspaceCalls.Load() != 1 || onboardingCalls.Load() != 1 || tableCalls.Load() != 1 || logsCalls.Load() != 1 {
+				t.Fatalf("workspace/onboarding/tables/Logs calls = %d/%d/%d/%d, want 1/1/1/1",
+					workspaceCalls.Load(), onboardingCalls.Load(), tableCalls.Load(), logsCalls.Load())
+			}
+		})
+	}
+}
+
+func TestReadinessPrimesAllConfiguredAliasReferencesOnFreshClient(t *testing.T) {
+	const remoteWorkspaceID = "11111111-1111-1111-1111-111111111111"
+	remoteResourceID := canonicalWorkspaceResourceID("remote-sub", "remote-rg", "remote-law")
+	var aliasCalls, canonicalCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == remoteResourceID:
+			fmt.Fprintf(w, `{"id":%q,"location":"remote-region","properties":{"customerId":%q}}`, remoteResourceID, remoteWorkspaceID)
+		case r.URL.Path == remoteOnboardingResourceID(remoteResourceID):
+			writeRemoteOnboarding(w, remoteResourceID)
+		case r.URL.Path == remoteResourceID+"/tables":
+			fmt.Fprint(w, `{"value":[`+
+				`{"name":"AStandardTable","properties":{"plan":"Analytics","provisioningState":"Succeeded","schema":{"standardColumns":[]}}},`+
+				`{"name":"ZPermitted_CL","properties":{"plan":"Analytics","provisioningState":"Succeeded","schema":{"standardColumns":[]}}}`+
+				`]}`)
+		case strings.HasSuffix(r.URL.Path, "/tables"):
+			fmt.Fprint(w, `{"value":[]}`)
+		case strings.HasSuffix(r.URL.Path, "/query"):
+			var request logsQueryRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			if strings.HasPrefix(request.Query, "workspace('soc').ZPermitted_CL | take 0") {
+				aliasCalls.Add(1)
+			} else if strings.Contains(request.Query, ".ZPermitted_CL | take 0") {
+				canonicalCalls.Add(1)
+			} else {
+				http.Error(w, "unexpected unrelated alias proof", http.StatusForbidden)
+				return
+			}
+			fmt.Fprintf(w, `{"tables":[{"name":"PrimaryResult","columns":[],"rows":[]}],`+
+				`"permissions":{"dataSources":[{"resourceId":%q,"allowTables":["ZPermitted_CL"]}]},`+
+				`"dataSources":[{"resourceId":%q,"tables":["ZPermitted_CL"]}]}`, remoteResourceID, remoteResourceID)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := remoteFixtureClient(server.URL, &recordingCredential{})
+	client.RemoteWorkspaces = []RemoteWorkspace{{
+		Alias: "soc", SubscriptionID: "remote-sub", ResourceGroup: "remote-rg", WorkspaceName: "remote-law",
+	}}
+	rules := []backend.Rule{
+		{ID: "missing", Enabled: true, Dependencies: []backend.DependencyRef{{
+			Name: "MissingTable_CL", Kind: "sentinel_workspace_table", Scope: "soc", Monitorable: true, Required: true,
+		}}},
+		{ID: "permitted", Enabled: true, Dependencies: []backend.DependencyRef{{
+			Name: "ZPermitted_CL", Kind: "sentinel_workspace_table", Scope: "soc", Monitorable: true, Required: true,
+		}}},
+	}
+	evidence, err := client.ReadinessEvidence(context.Background(), rules, []backend.Source{{
+		Name: qualifiedRemoteSource(remoteResourceID, "ZPermitted_CL"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Status != backend.EvidenceAssessed || !evidence.Attempted {
+		t.Fatalf("fresh-client readiness = %+v, want assessed", evidence)
+	}
+	if aliasCalls.Load() != 1 || canonicalCalls.Load() != 1 {
+		t.Fatalf("fresh-client alias/canonical queries = %d/%d, want 1/1", aliasCalls.Load(), canonicalCalls.Load())
 	}
 }
 

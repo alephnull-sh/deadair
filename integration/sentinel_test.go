@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -35,6 +36,7 @@ const (
 	sentinelParameterizedID     = "73333333-3333-4333-8333-333333333333"
 	sentinelAuxiliaryRuleID     = "74444444-4444-4444-8444-444444444444"
 	sentinelEmptyAnalyticsID    = "76666666-6666-4666-8666-666666666666"
+	sentinelPredicateRuleID     = "77777777-7777-4777-8777-777777777777"
 	sentinelNRTRuleID           = "78888888-8888-4888-8888-888888888888"
 	sentinelFreshTable          = "DeadairFresh_CL"
 	sentinelStaleTable          = "DeadairStale_CL"
@@ -44,6 +46,7 @@ const (
 	sentinelBasicTable          = "DeadairBasic_CL"
 	sentinelAuxiliaryTable      = "DeadairAuxiliary_CL"
 	sentinelEmptyAnalyticsTable = "DeadairEmptyAnalytics_CL"
+	sentinelPredicateTable      = "DeadairPredicate_CL"
 	sentinelWatchlistAlias      = "DeadairVIPs"
 	sentinelRemoteTable         = "DeadairRemote_CL"
 	sentinelSummaryRule         = "deadair-basic-summary"
@@ -52,6 +55,10 @@ const (
 	sentinelASIMRuleID          = "79922222-2222-4222-8222-222222222222"
 	sentinelRemoteRuleID        = "79933333-3333-4333-8333-333333333333"
 	sentinelSummaryRuleID       = "79944444-4444-4444-8444-444444444444"
+	sentinelSummaryOutputMarker = "deadair-summary-runtime"
+	sentinelSummarySourcePrefix = "summary-source-"
+	sentinelSummaryBinSize      = int64(20)
+	sentinelSummaryRevisionSkew = 30 * time.Second
 )
 
 // TestSentinelReadOnlyLab proves the Sentinel adapter against pre-seeded,
@@ -65,11 +72,12 @@ func TestSentinelReadOnlyLab(t *testing.T) {
 	credential := sentinelScannerCredential(t)
 	subscriptionID := requiredSentinelEnv(t, "DEADAIR_AZURE_SUBSCRIPTION_ID")
 	resourceGroup := requiredSentinelEnv(t, "DEADAIR_AZURE_RESOURCE_GROUP")
+	workspace := requiredSentinelEnv(t, "DEADAIR_SENTINEL_WORKSPACE")
 	remoteWorkspace := requiredSentinelEnv(t, "DEADAIR_SENTINEL_REMOTE_WORKSPACE")
 	client, err := sentinel.NewClient(sentinel.Config{
 		SubscriptionID: subscriptionID,
 		ResourceGroup:  resourceGroup,
-		WorkspaceName:  requiredSentinelEnv(t, "DEADAIR_SENTINEL_WORKSPACE"),
+		WorkspaceName:  workspace,
 		WorkspaceID:    os.Getenv("DEADAIR_SENTINEL_WORKSPACE_ID"),
 		RemoteWorkspaces: []sentinel.RemoteWorkspace{{
 			Alias: remoteWorkspace, SubscriptionID: subscriptionID, ResourceGroup: resourceGroup,
@@ -116,6 +124,7 @@ func TestSentinelReadOnlyLab(t *testing.T) {
 		requireSentinelRule(t, rulesByID, sentinelParameterizedID),
 		requireSentinelRule(t, rulesByID, sentinelAuxiliaryRuleID),
 		requireSentinelRule(t, rulesByID, sentinelEmptyAnalyticsID),
+		requireSentinelRule(t, rulesByID, sentinelPredicateRuleID),
 		nrtRule,
 		{ID: "deadair-live-basic-plan", Enabled: true, Patterns: []string{sentinelBasicTable}},
 		watchlistRule,
@@ -123,6 +132,15 @@ func TestSentinelReadOnlyLab(t *testing.T) {
 		remoteRule,
 		summaryConsumerRule,
 	}
+	// Remote source inventory is intentionally reference-driven. Resolve the
+	// in-memory-enabled fixtures first so Sources contacts only workspaces used
+	// by this exact rule set.
+	resolutions, err := client.ResolveInputs(ctx, resolutionRules)
+	if err != nil {
+		t.Fatalf("resolve Sentinel rule inputs: %v", err)
+	}
+	assertSentinelResolutions(t, resolutions, remoteSource, remoteWorkspace)
+	assertSentinelDependencyEvidence(t, resolutions, remoteSource)
 
 	sources, err := client.Sources(ctx)
 	if err != nil {
@@ -137,6 +155,7 @@ func TestSentinelReadOnlyLab(t *testing.T) {
 		sentinelBasicTable,
 		sentinelAuxiliaryTable,
 		sentinelEmptyAnalyticsTable,
+		sentinelPredicateTable,
 	} {
 		if _, ok := sourcesByName[name]; !ok {
 			t.Errorf("table inventory does not contain %s", name)
@@ -180,18 +199,21 @@ func TestSentinelReadOnlyLab(t *testing.T) {
 	if queryReadiness.Status != backend.EvidenceAssessed || !queryReadiness.Attempted || queryReadiness.Limited {
 		t.Fatalf("Sentinel table, watchlist, and remote readiness = %+v, want fully assessed evidence", queryReadiness)
 	}
-	resolutions, err := client.ResolveInputs(ctx, resolutionRules)
-	if err != nil {
-		t.Fatalf("resolve Sentinel rule inputs: %v", err)
-	}
-	assertSentinelResolutions(t, resolutions, remoteSource, remoteWorkspace)
-	assertSentinelDependencyEvidence(t, resolutions, remoteSource)
+	assertSentinelPredicateFreshness(ctx, t, client, rulesByID, sourcesByName)
 
 	lineage, err := client.LineageEvidence(ctx, resolutionRules)
 	if err != nil {
 		t.Fatalf("read Sentinel summary-rule lineage: %v", err)
 	}
 	assertSentinelSummaryLineage(t, lineage, resolutions)
+	workspaceCustomerID, summaryARMModifiedAt := sentinelSummaryRuntimePrerequisites(ctx, t, credential,
+		subscriptionID, resourceGroup, workspace)
+	summaryRuns, err := client.SummaryRuleRunEvidence(ctx, resolutionRules)
+	if err != nil {
+		t.Fatalf("read Sentinel summary-rule runtime evidence: %v", err)
+	}
+	assertSentinelSummaryRun(t, summaryRuns, subscriptionID, resourceGroup, workspace, summaryARMModifiedAt)
+	assertSentinelSummaryOutput(ctx, t, credential, workspaceCustomerID, summaryARMModifiedAt)
 
 	provenanceExpectation := sentinelProvenancePrerequisites(ctx, t, credential, rulesByID)
 	provenance, err := client.ProvenanceEvidence(ctx, rules)
@@ -746,6 +768,17 @@ func assertSentinelRuleInventory(t *testing.T, rules map[string]backend.Rule, re
 	if fmt.Sprint(parameterized.Patterns) != "["+sentinelFreshTable+"]" || parameterized.InputStatus != "" {
 		t.Errorf("parameterized function rule = %+v, want resolved %s input", parameterized, sentinelFreshTable)
 	}
+	predicate := requireSentinelRule(t, rules, sentinelPredicateRuleID)
+	if predicate.RuleType != "scheduled" || !predicate.Enabled || predicate.Name != "deadair lab - predicate freshness" ||
+		fmt.Sprint(predicate.Patterns) != "["+sentinelPredicateTable+"]" || len(predicate.PredicateFreshness) != 1 {
+		t.Errorf("predicate freshness rule = %+v", predicate)
+	} else {
+		selector := predicate.PredicateFreshness[0]
+		if selector.Source != sentinelPredicateTable || selector.Expression != "DeviceVendor == 'Deadair Labs'" ||
+			fmt.Sprint(selector.Fields) != "[DeviceVendor]" {
+			t.Errorf("predicate freshness selector = %+v", selector)
+		}
+	}
 	for _, id := range []string{sentinelStaleRuleID, sentinelLagRuleID, sentinelLetJoinRuleID, sentinelEmptyAnalyticsID} {
 		requireSentinelRule(t, rules, id)
 	}
@@ -832,6 +865,7 @@ func assertSentinelResolutions(t *testing.T, resolutions []backend.InputResoluti
 	assert(sentinelAuxiliaryRuleID, "", false, backend.ResolutionIncompatible)
 	assert(sentinelAuxiliaryRuleID, sentinelAuxiliaryTable, true, backend.ResolutionIncompatible)
 	assert(sentinelEmptyAnalyticsID, "", false, backend.ResolutionResolved, sentinelEmptyAnalyticsTable)
+	assert(sentinelPredicateRuleID, "", false, backend.ResolutionResolved, sentinelPredicateTable)
 	assert("deadair-live-basic-plan", "", false, backend.ResolutionIncompatible)
 	assert("deadair-live-basic-plan", sentinelBasicTable, true, backend.ResolutionIncompatible)
 	assert(sentinelWatchlistRuleID, "", false, backend.ResolutionUnsupported)
@@ -890,6 +924,280 @@ func assertSentinelSummaryLineage(t *testing.T, evidence []backend.LineageEviden
 		}
 	}
 	t.Fatalf("summary lineage does not contain %s -> %s: %+v", sentinelBasicTable, sentinelSummaryTable, evidence)
+}
+
+func assertSentinelPredicateFreshness(ctx context.Context, t *testing.T, client *sentinel.Client,
+	rules map[string]backend.Rule, sources map[string]backend.Source) {
+	t.Helper()
+	rule := requireSentinelRule(t, rules, sentinelPredicateRuleID)
+	if len(rule.PredicateFreshness) != 1 {
+		t.Fatalf("predicate rule exposes %d selectors, want exactly one", len(rule.PredicateFreshness))
+	}
+	source, ok := sources[sentinelPredicateTable]
+	if !ok {
+		t.Fatalf("table inventory does not contain predicate fixture %s", sentinelPredicateTable)
+	}
+	evidence, err := client.RulePredicateFreshnessEvidenceFor(ctx, []backend.RulePredicateFreshnessRequest{{
+		RuleID: rule.ID, BackendObjectID: rule.BackendObjectID, Source: source,
+		Basis: backend.FreshnessEventTime, Window: 30 * time.Minute, Selector: rule.PredicateFreshness[0],
+	}})
+	if err != nil {
+		t.Fatalf("read Sentinel predicate-qualified freshness evidence: %v", err)
+	}
+	if len(evidence) != 1 {
+		t.Fatalf("predicate-qualified freshness returned %d rows, want exactly one: %+v", len(evidence), evidence)
+	}
+	item := evidence[0]
+	if item.RuleID != sentinelPredicateRuleID || item.BackendObjectID != rule.BackendObjectID ||
+		item.Source != sentinelPredicateTable || fmt.Sprint(item.Fields) != "[DeviceVendor]" ||
+		item.Freshness.Status != backend.EvidenceAssessed ||
+		item.Freshness.Method != "bounded-predicate-max-event-time" ||
+		item.Freshness.Window != 24*time.Hour || item.Freshness.LastEvent.IsZero() || item.Freshness.Detail != "" {
+		t.Fatalf("predicate-qualified freshness = %+v, want assessed 24h bounded event-time evidence", item)
+	}
+	age := item.Freshness.ObservedAt.Sub(item.Freshness.LastEvent)
+	if age < -5*time.Minute || age > 30*time.Minute {
+		t.Fatalf("predicate-qualified freshness age = %s, want a current Deadair Labs row within the 30m freshness threshold", age)
+	}
+	serialized, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("serialize predicate freshness evidence: %v", err)
+	}
+	if strings.Contains(string(serialized), "Deadair Labs") {
+		t.Fatalf("predicate literal leaked into serialized rule-source freshness evidence: %s", serialized)
+	}
+}
+
+func assertSentinelSummaryRun(t *testing.T, evidence []backend.SummaryRuleRunEvidence,
+	subscriptionID, resourceGroup, workspace string, armModifiedAt time.Time) {
+	t.Helper()
+	workspaceID := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.OperationalInsights/workspaces/%s",
+		subscriptionID, resourceGroup, workspace)
+	expectedRuleID := workspaceID + "/summaryLogs/" + sentinelSummaryRule
+	expectedOutputID := workspaceID + "/tables/" + sentinelSummaryTable
+	matching := make([]backend.SummaryRuleRunEvidence, 0, 1)
+	for _, item := range evidence {
+		if strings.EqualFold(strings.TrimSpace(item.Rule.ID), expectedRuleID) &&
+			strings.EqualFold(strings.TrimSpace(item.Output.ID), expectedOutputID) {
+			matching = append(matching, item)
+		}
+	}
+	if len(matching) != 1 {
+		t.Fatalf("summary runtime evidence contains %d exact rows for rule %s and output %s, want one; SummaryLogs delivery may still be pending: %+v",
+			len(matching), expectedRuleID, expectedOutputID, evidence)
+	}
+	item := matching[0]
+	if item.Rule.Name != sentinelSummaryRule || item.Rule.Kind != "sentinel_summary_rule" ||
+		!strings.EqualFold(item.Rule.Scope, workspaceID) || item.Output.Name != sentinelSummaryTable ||
+		item.Output.Kind != "telemetry_table" || !strings.EqualFold(item.Output.Scope, workspaceID) ||
+		item.Status != backend.EvidenceAssessed || item.Method != "lasummarylogs-latest-7d" ||
+		item.Window != 7*24*time.Hour || !strings.EqualFold(item.RunStatus, "Succeeded") ||
+		item.QueryDurationMillis < 0 || item.ResultCount != 1 || item.RunAt.IsZero() ||
+		item.RuleModifiedAt.IsZero() || item.RunAt.Before(armModifiedAt) ||
+		item.RuleModifiedAt.After(item.RunAt) || item.RuleModifiedAt.Add(sentinelSummaryRevisionSkew).Before(armModifiedAt) ||
+		item.Error != "" ||
+		item.Detail != "latest completed native summary-rule execution observed" {
+		t.Fatalf("summary runtime evidence = %+v, want one successful native run observed after the current ARM definition became visible, with result count 1", item)
+	}
+}
+
+func sentinelSummaryRuntimePrerequisites(ctx context.Context, t *testing.T, credential azcore.TokenCredential,
+	subscriptionID, resourceGroup, workspace string) (string, time.Time) {
+	t.Helper()
+	token, err := credential.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{"https://management.azure.com/.default"}})
+	if err != nil {
+		t.Fatal("scanner EnvironmentCredential could not obtain an ARM token for summary verification")
+	}
+	workspacePath := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.OperationalInsights/workspaces/%s",
+		url.PathEscape(subscriptionID), url.PathEscape(resourceGroup), url.PathEscape(workspace))
+	var workspaceResource struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		Properties struct {
+			CustomerID string `json:"customerId"`
+		} `json:"properties"`
+	}
+	readSentinelARMResource(ctx, t, token.Token,
+		"https://management.azure.com"+workspacePath+"?api-version=2025-07-01",
+		"home Log Analytics workspace", &workspaceResource)
+	if !strings.EqualFold(workspaceResource.ID, workspacePath) || workspaceResource.Name != workspace ||
+		!strings.EqualFold(workspaceResource.Type, "Microsoft.OperationalInsights/workspaces") ||
+		strings.TrimSpace(workspaceResource.Properties.CustomerID) == "" {
+		t.Fatalf("home Log Analytics workspace does not expose the exact expected identity and customer ID")
+	}
+
+	summaryPath := workspacePath + "/summaryLogs/" + sentinelSummaryRule
+	var summaryResource struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		SystemData struct {
+			LastModifiedAt string `json:"lastModifiedAt"`
+		} `json:"systemData"`
+	}
+	readSentinelARMResource(ctx, t, token.Token,
+		"https://management.azure.com"+summaryPath+"?api-version=2025-07-01",
+		"summary rule", &summaryResource)
+	if !strings.EqualFold(summaryResource.ID, summaryPath) || summaryResource.Name != sentinelSummaryRule ||
+		(summaryResource.Type != "" && !strings.EqualFold(summaryResource.Type, "Microsoft.OperationalInsights/workspaces/summaryLogs")) {
+		t.Fatal("summary rule does not expose the exact expected ARM identity")
+	}
+	modifiedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(summaryResource.SystemData.LastModifiedAt))
+	if err != nil {
+		t.Fatal("summary rule does not expose a valid ARM modification time")
+	}
+	return strings.TrimSpace(workspaceResource.Properties.CustomerID), modifiedAt.UTC()
+}
+
+func readSentinelARMResource(ctx context.Context, t *testing.T, token, target, label string, destination any) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		t.Fatalf("create %s request: %v", label, err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("read %s: %v", label, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("%s returned HTTP %d", label, response.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(destination); err != nil {
+		t.Fatalf("decode %s response: %v", label, err)
+	}
+}
+
+func assertSentinelSummaryOutput(ctx context.Context, t *testing.T, credential azcore.TokenCredential,
+	workspaceCustomerID string, armModifiedAt time.Time) {
+	t.Helper()
+	token, err := credential.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{"https://api.loganalytics.io/.default"}})
+	if err != nil {
+		t.Fatal("scanner EnvironmentCredential could not obtain a Logs token for summary output verification")
+	}
+	queryTarget := "https://api.loganalytics.io/v1/workspaces/" + url.PathEscape(workspaceCustomerID) + "/query"
+	destinationQuery := fmt.Sprintf(`%s
+| where TimeGenerated between (ago(7d) .. now())
+| where _RuleName == %q and _BinSize == %d and Marker == %q and EventCount >= 1
+| summarize arg_max(TimeGenerated, EventCount, Marker, _RuleName, _RuleLastModifiedTime, _BinSize, _BinStartTime)
+| project TimeGenerated, EventCount, Marker, RuleName=_RuleName, RuleModifiedAt=_RuleLastModifiedTime, BinSize=_BinSize, BinStartTime=_BinStartTime`,
+		sentinelSummaryTable, sentinelSummaryRule, sentinelSummaryBinSize, sentinelSummaryOutputMarker)
+	destinationRow := readSentinelLogsRow(ctx, t, token.Token, queryTarget, destinationQuery,
+		"summary destination output", []sentinelLiveLogsColumn{
+			{Name: "TimeGenerated", Type: "datetime"}, {Name: "EventCount", Type: "long"},
+			{Name: "Marker", Type: "string"}, {Name: "RuleName", Type: "string"},
+			{Name: "RuleModifiedAt", Type: "datetime"}, {Name: "BinSize", Type: "long"},
+			{Name: "BinStartTime", Type: "datetime"},
+		})
+	var generatedAt, marker, ruleName, ruleModifiedAt, binStartAt string
+	var eventCount, binSize int64
+	for i, destination := range []any{&generatedAt, &eventCount, &marker, &ruleName, &ruleModifiedAt, &binSize, &binStartAt} {
+		if err := json.Unmarshal(destinationRow[i], destination); err != nil {
+			t.Fatalf("decode summary destination output cell %d: %v", i, err)
+		}
+	}
+	generated, generatedErr := time.Parse(time.RFC3339Nano, generatedAt)
+	nativeModified, modifiedErr := time.Parse(time.RFC3339Nano, ruleModifiedAt)
+	binStart, binStartErr := time.Parse(time.RFC3339Nano, binStartAt)
+	if generatedErr != nil || modifiedErr != nil || binStartErr != nil || generated.IsZero() || binStart.IsZero() ||
+		eventCount < 1 || marker != sentinelSummaryOutputMarker || ruleName != sentinelSummaryRule ||
+		binSize != sentinelSummaryBinSize || nativeModified.After(armModifiedAt.Add(sentinelSummaryRevisionSkew)) ||
+		nativeModified.Add(sentinelSummaryRevisionSkew).Before(armModifiedAt) {
+		t.Fatalf("summary destination output does not prove the strict fixture definition and bin: row=%v", destinationRow)
+	}
+
+	binEnd := binStart.Add(time.Duration(binSize) * time.Minute)
+	sourceQuery := fmt.Sprintf(`%s
+| where TimeGenerated >= datetime(%s) and TimeGenerated < datetime(%s)
+| summarize SourceEventCount=count(), arg_max(TimeGenerated, Marker)
+| project SourceEventCount, SourceMarker=Marker`, sentinelBasicTable,
+		binStart.UTC().Format(time.RFC3339Nano), binEnd.UTC().Format(time.RFC3339Nano))
+	searchTarget := "https://api.loganalytics.io/v1/workspaces/" + url.PathEscape(workspaceCustomerID) + "/search?timespan=P1D"
+	sourceRow := readSentinelLogsRow(ctx, t, token.Token, searchTarget, sourceQuery,
+		"Basic-plan summary source", []sentinelLiveLogsColumn{
+			{Name: "SourceEventCount", Type: "long"}, {Name: "SourceMarker", Type: "string"},
+		})
+	var sourceEventCount int64
+	var sourceMarker string
+	for i, destination := range []any{&sourceEventCount, &sourceMarker} {
+		if err := json.Unmarshal(sourceRow[i], destination); err != nil {
+			t.Fatalf("decode Basic-plan summary source cell %d: %v", i, err)
+		}
+	}
+	sourceMarkerSuffix := strings.TrimPrefix(sourceMarker, sentinelSummarySourcePrefix)
+	validSourceMarker := sourceMarkerSuffix != ""
+	for _, character := range sourceMarkerSuffix {
+		if character < '0' || character > '9' {
+			validSourceMarker = false
+			break
+		}
+	}
+	if !strings.HasPrefix(sourceMarker, sentinelSummarySourcePrefix) || !validSourceMarker ||
+		sourceEventCount < 1 || sourceEventCount != eventCount {
+		t.Fatalf("Basic-plan source does not match the exact materialized summary bin and count: source=%v destination=%v",
+			sourceRow, destinationRow)
+	}
+}
+
+type sentinelLiveLogsColumn struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+func readSentinelLogsRow(ctx context.Context, t *testing.T, token, target, query, label string,
+	expectedColumns []sentinelLiveLogsColumn) []json.RawMessage {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		Query string `json:"query"`
+	}{Query: query})
+	if err != nil {
+		t.Fatalf("encode %s query: %v", label, err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create %s query request: %v", label, err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("query %s: %v", label, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("%s query returned HTTP %d", label, response.StatusCode)
+	}
+	var result struct {
+		Error  json.RawMessage `json:"error"`
+		Tables []struct {
+			Name    string                   `json:"name"`
+			Columns []sentinelLiveLogsColumn `json:"columns"`
+			Rows    [][]json.RawMessage      `json:"rows"`
+		} `json:"tables"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
+		t.Fatalf("decode %s response: %v", label, err)
+	}
+	if len(result.Error) != 0 && string(result.Error) != "null" {
+		t.Fatalf("%s query returned partial or failed evidence", label)
+	}
+	if len(result.Tables) != 1 || result.Tables[0].Name != "PrimaryResult" ||
+		len(result.Tables[0].Columns) != len(expectedColumns) || len(result.Tables[0].Rows) != 1 {
+		t.Fatalf("%s has an unexpected table shape: %+v", label, result.Tables)
+	}
+	for i, expected := range expectedColumns {
+		actual := result.Tables[0].Columns[i]
+		if actual.Name != expected.Name || !strings.EqualFold(actual.Type, expected.Type) {
+			t.Fatalf("%s column %d = %+v, want %s %s", label, i, actual, expected.Name, expected.Type)
+		}
+	}
+	row := result.Tables[0].Rows[0]
+	if len(row) != len(expectedColumns) {
+		t.Fatalf("%s row has %d cells, want %d", label, len(row), len(expectedColumns))
+	}
+	return row
 }
 
 func assertSentinelEmptyContentHubPath(t *testing.T, evidence []backend.ProvenanceEvidence, expected sentinelRawProvenance) {

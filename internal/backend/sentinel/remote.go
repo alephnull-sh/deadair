@@ -124,10 +124,16 @@ func canonicalWorkspaceResourceID(subscription, resourceGroup, workspace string)
 }
 
 func canonicalRemoteScope(scope string) string {
-	scope = strings.TrimRight(strings.TrimSpace(scope), "/")
-	if strings.HasPrefix(scope, "/") {
-		return strings.ToLower(scope)
+	canonical := strings.TrimRight(strings.TrimSpace(scope), "/")
+	if strings.HasPrefix(canonical, "/") {
+		return strings.ToLower(canonical)
 	}
+	if looksLikeWorkspaceID(canonical) {
+		return canonical
+	}
+	// Textual aliases are rule literals, not native identifiers. Preserve their
+	// exact spelling here so only case folding, not whitespace or slash cleanup,
+	// can match a configured alias.
 	return scope
 }
 
@@ -266,6 +272,9 @@ func (c *Client) resolveRemoteWorkspace(ctx context.Context, scope string) (*rem
 		// not let an alias that merely looks like a GUID rewrite it.
 		state = states["workspace:"+strings.ToLower(scope)]
 	default:
+		if scope != strings.TrimSpace(scope) || strings.HasSuffix(scope, "/") {
+			return nil, nil
+		}
 		state = states["alias:"+strings.ToLower(scope)]
 	}
 	if state != nil {
@@ -299,24 +308,32 @@ func remoteScopeNeedsAliasProof(scope string) bool {
 }
 
 // validateRemoteAlias proves that Azure resolves the original literal alias
-// to the configured workspace. A config alias is not identity by itself. One
-// deterministic query-eligible table is enough for the response's scoped
-// permissions and dataSources to bind the alias to the verified ARM/customer
-// ID. The proof is cached for the scan and shares the global evidence/query
-// budgets with ordinary table probes.
-func (c *Client) validateRemoteAlias(ctx context.Context, state *remoteWorkspaceState, alias string, catalog map[string]tableInfo) (string, tablePermissionEvidence) {
+// to the configured workspace. A config alias is not identity by itself. The
+// referenced tables are tried first because least-privilege scanners may not
+// be able to query unrelated workspace tables. One unrelated eligible table
+// is retained as a bounded fallback. A failed proof is cached only after the
+// complete candidate set has been tried.
+func (c *Client) validateRemoteAlias(ctx context.Context, state *remoteWorkspaceState, alias string,
+	catalog map[string]tableInfo, referencedTables []string) (string, tablePermissionEvidence) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.aliasChecked {
 		return state.aliasTable, state.aliasProof
 	}
-	state.aliasChecked = true
-	state.aliasProof = tablePermissionEvidence{
+	proof := tablePermissionEvidence{
 		status: backend.EvidenceIncomplete,
 		detail: "configured workspace alias could not be verified by a workspace-scoped Logs query",
 	}
+	referenced := make(map[string]bool, len(referencedTables))
+	for _, table := range referencedTables {
+		referenced[table] = true
+	}
 	var tables []string
-	for table, info := range catalog {
+	for table := range referenced {
+		info, found := catalog[table]
+		if !found {
+			continue
+		}
 		if _, _, limited := tableResolutionLimitation(info); limited {
 			continue
 		}
@@ -325,32 +342,127 @@ func (c *Client) validateRemoteAlias(ctx context.Context, state *remoteWorkspace
 		}
 	}
 	sort.Strings(tables)
+	var fallbacks []string
+	for table, info := range catalog {
+		if referenced[table] {
+			continue
+		}
+		if _, _, limited := tableResolutionLimitation(info); limited {
+			continue
+		}
+		if _, ok := kqlTableReference(table); ok {
+			fallbacks = append(fallbacks, table)
+		}
+	}
+	if len(fallbacks) > 0 {
+		sort.Strings(fallbacks)
+		tables = append(tables, fallbacks[0])
+	}
 	if len(tables) == 0 {
-		state.aliasProof.detail = "configured workspace alias cannot be verified because its catalog has no query-eligible Analytics table"
-		return "", state.aliasProof
+		proof.detail = "configured workspace alias cannot be verified because its catalog has no query-eligible Analytics table"
+		state.aliasChecked = true
+		state.aliasProof = proof
+		return "", proof
 	}
-	table := tables[0]
-	state.aliasTable = table
-	sourceName := qualifiedRemoteSource(state.resourceID, table)
-	if !c.claimEvidenceSource(sourceName) {
-		state.aliasProof.detail = "per-scan source evidence budget was exhausted before the workspace alias could be verified"
+	budgetExhausted := false
+	var incompleteProof, unavailableProof *tablePermissionEvidence
+	for _, table := range tables {
+		if ctx.Err() != nil {
+			return "", proof
+		}
+		sourceName := qualifiedRemoteSource(state.resourceID, table)
+		if !c.claimEvidenceSource(sourceName) {
+			budgetExhausted = true
+			continue
+		}
+		tableRef, _ := kqlTableReference(table)
+		target := sentinelSourceTarget{
+			name: sourceName, table: table,
+			expectedResourceID: state.resourceID, expectedWorkspaceID: state.workspaceID,
+		}
+		query := "workspace(" + kqlStringLiteral(alias) + ")." + tableRef + " | take 0"
+		if _, err := c.queryLogsForSource(ctx, query, target); err != nil {
+			status, detail := evidenceFailure(err)
+			candidateProof := &tablePermissionEvidence{status: status, detail: detail}
+			if status == backend.EvidenceUnavailable {
+				unavailableProof = candidateProof
+			} else {
+				incompleteProof = candidateProof
+			}
+			continue
+		}
+		state.aliasChecked = true
+		state.aliasTable = table
+		state.aliasProof = tablePermissionEvidence{
+			status: backend.EvidenceAssessed,
+			detail: "original workspace() alias resolved to the configured remote workspace",
+		}
 		return table, state.aliasProof
 	}
-	tableRef, _ := kqlTableReference(table)
-	target := sentinelSourceTarget{
-		name: sourceName, table: table,
-		expectedResourceID: state.resourceID, expectedWorkspaceID: state.workspaceID,
+	if budgetExhausted {
+		proof = tablePermissionEvidence{
+			status: backend.EvidenceIncomplete,
+			detail: "per-scan source evidence budget was exhausted before the workspace alias could be verified",
+		}
+	} else if incompleteProof != nil {
+		proof = *incompleteProof
+	} else if unavailableProof != nil {
+		proof = *unavailableProof
 	}
-	query := "workspace(" + kqlStringLiteral(alias) + ")." + tableRef + " | take 0"
-	if _, err := c.queryLogsForSource(ctx, query, target); err != nil {
-		state.aliasProof.status, state.aliasProof.detail = evidenceFailure(err)
-		return table, state.aliasProof
+	state.aliasChecked = true
+	state.aliasProof = proof
+	return "", proof
+}
+
+type remoteAliasProofTarget struct {
+	state  *remoteWorkspaceState
+	alias  string
+	tables map[string]bool
+}
+
+// primeRemoteAliasProofs gathers every enabled rule reference before any
+// per-rule resolution can cache a failed alias proof from an incomplete view.
+func (c *Client) primeRemoteAliasProofs(ctx context.Context, rules []backend.Rule) {
+	targets := make(map[string]*remoteAliasProofTarget)
+	for _, rule := range rules {
+		if !rule.Enabled || rule.InputStatus != "" {
+			continue
+		}
+		for _, dependency := range rule.Dependencies {
+			if dependency.Kind != "sentinel_workspace_table" || !remoteScopeNeedsAliasProof(dependency.Scope) {
+				continue
+			}
+			state, err := c.resolveRemoteWorkspace(ctx, dependency.Scope)
+			if err != nil || state == nil {
+				continue
+			}
+			key := state.resourceID + "\x00" + strings.ToLower(strings.TrimSpace(dependency.Scope))
+			target := targets[key]
+			if target == nil {
+				target = &remoteAliasProofTarget{state: state, alias: dependency.Scope, tables: make(map[string]bool)}
+				targets[key] = target
+			}
+			target.tables[dependency.Name] = true
+		}
 	}
-	state.aliasProof = tablePermissionEvidence{
-		status: backend.EvidenceAssessed,
-		detail: "original workspace() alias resolved to the configured remote workspace",
+	keys := make([]string, 0, len(targets))
+	for key := range targets {
+		keys = append(keys, key)
 	}
-	return table, state.aliasProof
+	sort.Strings(keys)
+	for _, key := range keys {
+		target := targets[key]
+		catalog, err := c.remoteTables(ctx, target.state)
+		if err != nil {
+			continue
+		}
+		tables := make([]string, 0, len(target.tables))
+		for table := range target.tables {
+			tables = append(tables, table)
+		}
+		sort.Strings(tables)
+		c.validateRemoteAlias(ctx, target.state, target.alias, catalog, tables)
+	}
 }
 
 func looksLikeWorkspaceID(value string) bool {
@@ -435,8 +547,9 @@ func (c *Client) validateRemoteWorkspace(ctx context.Context, state *remoteWorks
 // targets whose identity or region cannot be verified stop as unavailable.
 func (c *Client) remoteWorkspaceLimitOutcomes(ctx context.Context, rule backend.Rule) ([]sentinelSelectorOutcome, bool) {
 	type aliasTarget struct {
-		state *remoteWorkspaceState
-		scope string
+		state  *remoteWorkspaceState
+		scope  string
+		tables []string
 	}
 	var dependencies []backend.DependencyRef
 	for _, dependency := range rule.Dependencies {
@@ -449,7 +562,7 @@ func (c *Client) remoteWorkspaceLimitOutcomes(ctx context.Context, rule backend.
 	}
 	states := make(map[string]*remoteWorkspaceState)
 	var aliases []aliasTarget
-	seenAlias := make(map[string]bool)
+	aliasIndexes := make(map[string]int)
 	for _, dependency := range dependencies {
 		state, err := c.resolveRemoteWorkspace(ctx, dependency.Scope)
 		if err != nil {
@@ -468,10 +581,13 @@ func (c *Client) remoteWorkspaceLimitOutcomes(ctx context.Context, rule backend.
 		states[state.resourceID] = state
 		if remoteScopeNeedsAliasProof(dependency.Scope) {
 			key := state.resourceID + "\x00" + strings.ToLower(strings.TrimSpace(dependency.Scope))
-			if !seenAlias[key] {
-				seenAlias[key] = true
+			index, found := aliasIndexes[key]
+			if !found {
+				index = len(aliases)
+				aliasIndexes[key] = index
 				aliases = append(aliases, aliasTarget{state: state, scope: dependency.Scope})
 			}
+			aliases[index].tables = append(aliases[index].tables, dependency.Name)
 		}
 	}
 	// A configured alias is not Azure identity by itself. Prove each original
@@ -481,7 +597,7 @@ func (c *Client) remoteWorkspaceLimitOutcomes(ctx context.Context, rule backend.
 		if err != nil {
 			return nil, false
 		}
-		_, proof := c.validateRemoteAlias(ctx, alias.state, alias.scope, catalog)
+		_, proof := c.validateRemoteAlias(ctx, alias.state, alias.scope, catalog, alias.tables)
 		if proof.status != backend.EvidenceAssessed {
 			return nil, false
 		}
