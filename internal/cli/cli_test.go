@@ -1114,7 +1114,7 @@ func TestCheck(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("check exit = %d; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
 	}
-	for _, want := range []string{"READY", "backend version 9.4.4", "detection rules readable (5 rules)", "source stats readable (3 sources)", "field mappings readable", "native input resolution readable (empty)", "next: deadair scan"} {
+	for _, want := range []string{"READY", "backend version 9.4.4", "detection rules readable (5 rules)", "source inventory readable (3 sources)", "source schemas readable", "native input resolution readable (missing sources can be proved)", "next: deadair scan"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("check output missing %q:\n%s", want, stdout.String())
 		}

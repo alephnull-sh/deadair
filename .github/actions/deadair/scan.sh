@@ -18,6 +18,11 @@ if [[ -n ${DEADAIR_ACTION_SCAN_ARGS:-} ]]; then
 		-es-url | -es-url=* | --es-url | --es-url=* | \
 		-kibana-url | -kibana-url=* | --kibana-url | --kibana-url=* | \
 		-opensearch-url | -opensearch-url=* | --opensearch-url | --opensearch-url=* | \
+		-azure-subscription | -azure-subscription=* | --azure-subscription | --azure-subscription=* | \
+		-azure-resource-group | -azure-resource-group=* | --azure-resource-group | --azure-resource-group=* | \
+		-sentinel-workspace | -sentinel-workspace=* | --sentinel-workspace | --sentinel-workspace=* | \
+		-sentinel-workspace-id | -sentinel-workspace-id=* | --sentinel-workspace-id | --sentinel-workspace-id=* | \
+		-sentinel-remotes | -sentinel-remotes=* | --sentinel-remotes | --sentinel-remotes=* | \
 		-api-key-file | -api-key-file=* | --api-key-file | --api-key-file=* | \
 		-opensearch-username | -opensearch-username=* | --opensearch-username | --opensearch-username=* | \
 		-opensearch-password-file | -opensearch-password-file=* | --opensearch-password-file | --opensearch-password-file=* | \

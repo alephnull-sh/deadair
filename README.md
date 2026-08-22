@@ -38,21 +38,23 @@
 
 ## Why deadair
 
-A rule can be enabled, scheduled, and error-free while the data it needs is gone. deadair reads the
-live rule inventory, resolves each rule's inputs using the backend's native semantics, and checks the
-concrete sources behind them.
+A rule can be enabled, scheduled, and error-free after the data it needs has disappeared. deadair
+reads the live rule inventory, resolves each rule's inputs using the backend's native semantics, and
+checks the concrete sources behind them.
 
 It catches:
 
 - rules whose index, alias, or data-stream selectors resolve to nothing;
 - mixed-selector rules where one declared input has disappeared while another still resolves;
 - rules whose matching sources are all stale or empty;
-- on Elastic, rules running with missing declared fields or an ingest-lag blind window;
-- healthy telemetry that no enabled detection reads.
+- on Elastic, rules running with missing declared fields;
+- on Elastic and eligible Sentinel Scheduled rules, an ingest-lag blind window;
+- on Sentinel, rules whose known sources use an incompatible Basic or Auxiliary table plan;
+- on Elastic and OpenSearch, healthy telemetry that no enabled detection reads.
 
-deadair currently works with Elastic Security and OpenSearch Security Analytics.
-OpenSearch does not expose the rule metadata needed for the required-field or ingest-lag checks, so
-reports mark those checks unavailable instead of guessing.
+deadair currently works with Elastic Security, OpenSearch Security Analytics, and Microsoft
+Sentinel. Backend-specific gaps stay marked unavailable or unassessed instead of being treated as
+healthy or dead.
 
 ## Quick start
 
@@ -78,9 +80,31 @@ Exit codes are stable: `0` passes the configured gate, `1` means gated findings,
 | Stage | What deadair does |
 |---|---|
 | Inventory | reads enabled detections and the inputs they declare |
-| Resolve | asks Elastic or OpenSearch to resolve index patterns, aliases, data streams, selectors, and remote inputs; direct ES\|QL `FROM` is supported |
-| Measure | checks document count, freshest event, storage, and schema history; Elastic also checks declared fields and paired recent-event ingest lag |
+| Resolve | uses native index resolution on Elastic and OpenSearch; on Sentinel, combines KQL analysis with table, watchlist, saved-function, ASIM, and mapped cross-workspace evidence |
+| Measure | checks source freshness, schema, storage, and timing where the backend provides authoritative evidence; exact document and storage totals are unavailable on Sentinel |
 | Report | emits terminal, JSON, HTML, fleet rollups, and Prometheus metrics with the evidence behind each verdict |
+
+On Sentinel, deadair can surface two quieter failures that table health alone misses: the filtered
+subset used by one rule has gone silent, or a summary pipeline feeding an enabled detection has
+failed or fallen behind. These are advisory signals. They stay visible without changing findings,
+the gate, or the exit code. The lab had no eligible filtered query and no `LASummaryLogs` rows, so
+both checks currently have fixture coverage only.
+
+Sentinel JSON and HTML reports also retain non-telemetry dependency evidence, structural lineage
+for summary tables consumed by enabled detections, and exact-ID rule-template and Content Hub
+provenance. Dependency evidence can explain a rule assessment. Lineage and provenance are
+informational. The filtered-data check runs only when deadair can prove a closed literal filter over
+one local Analytics table. Summary runtime comes from the latest completed bounded
+`LASummaryLogs` run for the current rule revision; an overdue success stays incomplete rather than
+being treated as current. Structural summary lineage was exercised in the disposable Sentinel lab.
+
+<p align="center">
+  <img alt="deadair readiness check and scan of a disposable Microsoft Sentinel lab" src="docs/assets/sentinel-lab.gif" width="860">
+</p>
+
+<p align="center">
+  <sub>Read-only scan of the disposable Sentinel lab after its short-lived telemetry expired. The stale, missing, incompatible, partial, and unsupported cases are deliberate. Re-record it from the <a href="integration/README.md#microsoft-sentinel">documented disposable lab</a> with <code>make record-sentinel-lab</code>.</sub>
+</p>
 
 deadair proves whether a detection's observable telemetry prerequisites are present and healthy. It
 does not prove that the rule logic is correct or that a simulated attack will produce an alert. Pair
@@ -90,13 +114,14 @@ it with static rule validation and end-to-end detection testing for those layers
 
 | Finding | Meaning | First check |
 |---|---|---|
-| no matching source | none of the rule's inputs resolve to a visible index or data stream | pattern changes, missing integrations, and credential scope |
+| no matching source | none of the rule's inputs resolve to a visible index, data stream, or Sentinel table | pattern changes, missing integrations, and credential scope |
 | all sources stale or empty | every resolved source is unusable right now | source cadence and the ingest path |
-| missing fields | a declared field is absent or non-searchable in one or more resolved sources after every source mapping was read | parser, package, and mapping changes |
+| missing fields | an Elastic rule-declared field is absent or non-searchable in one or more resolved sources after every source mapping was read | parser, package, and mapping changes |
 | lag blind window | paired-event p95 ingest lag exceeds the rule's lookback margin | rule interval, lookback, timestamp override, and pipeline delay |
 | partial input coverage | the complete expression resolves, but one positive selector within it resolves empty | migrations, fallback selectors, and expected alternatives; informational unless policy gates it |
+| source plan incompatible | a Sentinel rule depends on a Basic or Auxiliary table that is not eligible for the analytics-rule evidence path | table plan and rule type |
 | source degradation | a source is stale, empty, low-volume, or schema-drifted | source history and expected maintenance |
-| unused telemetry | data is being stored but no enabled local detection resolves to it | disabled rules and intentional collection |
+| unused telemetry | on Elastic or OpenSearch, data is being stored but no enabled local detection resolves to it | disabled rules and intentional collection |
 
 Every verdict is limited to what the configured credential can see. JSON reports include the
 configured expressions, resolved sources, resolution method, assessment status, backend metadata,
@@ -127,9 +152,37 @@ deadair check
 deadair scan
 ```
 
-Use the documented least-privilege roles for
-[Elastic](docs/credentials/elastic.md) or [OpenSearch](docs/credentials/opensearch.md). The trusted
-integration suite also proves that write attempts made with those credentials are rejected.
+Microsoft Sentinel:
+
+```sh
+az login --tenant <tenant-id>
+
+export DEADAIR_BACKEND=sentinel
+export DEADAIR_AZURE_SUBSCRIPTION_ID=<subscription-id>
+export DEADAIR_AZURE_RESOURCE_GROUP=<resource-group>
+export DEADAIR_SENTINEL_WORKSPACE=<workspace-resource-name>
+# Optional: JSON allowlist for literal workspace() targets.
+# export DEADAIR_SENTINEL_REMOTES=/restricted/path/sentinel-remotes.json
+
+deadair check
+deadair scan
+```
+
+Before deadair assesses a rule's mapped remote workspace, that workspace must have Sentinel
+deployed. deadair applies Microsoft's 20-workspace and 20-region query limits, counting the home
+workspace in both cases. Same-subscription mappings can prove source availability.
+For an eligible installed rule that references another subscription, deadair requires an exact
+successful `SentinelHealth` record after the rule's latest change and within its expected run
+cadence. Candidate, absent, stale, mismatched, or non-successful evidence remains unassessed.
+This `SentinelHealth` corroboration is fixture-tested and has not yet been observed in the live lab.
+deadair does not separately identify tenant boundaries, and Azure Lighthouse or other cross-tenant
+topology is not live-validated. See the
+[Sentinel usage details](docs/usage.md#microsoft-sentinel) for the evidence rules and Microsoft's
+lower performance recommendations.
+
+Use the documented read-only roles for
+[Elastic](docs/credentials/elastic.md), [OpenSearch](docs/credentials/opensearch.md), or
+[Microsoft Sentinel](docs/credentials/sentinel.md).
 
 ## CI, fleets, and monitoring
 
@@ -151,8 +204,10 @@ deadair serve --interval 5m
 works with redacted reports created with the same caller-held key. Fleet configuration references
 secrets through environment variables rather than storing secret values.
 
-The [official GitHub Action](docs/usage.md#gate-detection-changes) writes a job summary, uploads a
-redacted JSON report, and can apply a deadair policy without installing a rule.
+The [official GitHub Action](docs/usage.md#gate-detection-changes) wraps single-instance candidate
+gates for Elastic, OpenSearch, and Sentinel. It writes a job summary, uploads a redacted JSON
+report, and can apply a deadair policy without installing a rule. Sentinel workflows authenticate
+the runner to Azure first; the Action defines no Azure credential inputs.
 
 <p align="center">
   <img alt="deadair candidate-rule gate followed by a report diff" src="docs/assets/ci.gif" width="860">
@@ -168,21 +223,29 @@ to test in your own environment.
 
 ## Tested backends
 
-The integration workflow currently tests these exact versions:
-
-| Backend | Exact live-CI versions |
+| Backend | Live validation |
 |---|---|
-| Elastic Security | 8.19.19, 9.4.4 |
-| OpenSearch Security Analytics | 2.19.6, 3.7.0 |
+| Elastic Security | trusted CI on 8.19.19 and 9.4.4 |
+| OpenSearch Security Analytics | trusted CI on 2.19.6 and 3.7.0 |
+| Microsoft Sentinel | recorded opt-in conformance in disposable UK South workspaces; see the exact cases and gaps below |
 
-Other versions may work but are not covered by the current CI matrix.
+The Sentinel run covered watchlists, the native-ASIM `PartialError` fail-closed path,
+same-subscription cross-workspace queries, summary lineage, an empty Content Hub, and representative
+write denials. Positive native-ASIM resolution remains fixture-tested, and the live run did not
+prove installed-package provenance. Filtered source activity, `SentinelHealth` execution
+corroboration, and `LASummaryLogs` runtime evidence are fixture-tested, not live-validated. The
+Sentinel run is not part of scheduled CI. See
+[validation status](docs/validation.md) for the full test boundary.
 
 ## Security model
 
-- All backend access is read-only; trusted integration tests prove the documented credentials cannot write.
+- All adapter calls are read-only. Trusted Elastic and OpenSearch tests plus separate Sentinel lab
+  probes verify that the documented scan identities cannot perform representative writes.
 - Reports, HTML, state files, and fleet output are written `0600` on POSIX systems.
 - Credentials can come from environment variables or files, avoiding secrets in process arguments.
-- `--redact` replaces tenant, rule, source, pattern, and field names with keyed HMAC pseudonyms. A
+- `--redact` replaces tenant, rule, source, pattern, field, dependency, lineage, provenance,
+  workspace, watchlist, template, and package identifiers with keyed HMAC pseudonyms. Validated
+  dependency probe expressions and their KQL arguments are never serialized. A
   `--redact-key-file` generated from random bytes also enables redaction and keeps names stable
   across separate runs.
 - The exporter binds to loopback by default.

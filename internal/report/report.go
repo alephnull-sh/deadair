@@ -55,6 +55,25 @@ type Report struct {
 	// substantiate a disconnected finding; diagnostic empties describe partial
 	// coverage and uncertainty stays visible here instead.
 	InputResolutions []backend.InputResolution `json:"input_resolutions,omitempty"`
+	// DependencyEvidence retains assessed non-telemetry dependencies alongside
+	// the source graph. It is informational unless its corresponding input
+	// resolution independently contributes to an existing rule verdict.
+	DependencyEvidence []DependencyEvidence `json:"dependency_evidence,omitempty"`
+	// RuleProvenance records template, package, or other origin metadata made
+	// available by a backend. Provenance never creates a finding or gate.
+	RuleProvenance []RuleProvenance `json:"rule_provenance,omitempty"`
+	// SourceLineage records observed transformations such as raw table ->
+	// summary rule -> output table. Detection health remains tied to the
+	// concrete source read by the rule.
+	SourceLineage []SourceLineage `json:"source_lineage,omitempty"`
+	// RuleSourceFreshness keeps parser-proved, predicate-qualified observations
+	// separate from table-wide source health. These records are informational
+	// and do not create findings or gates.
+	RuleSourceFreshness []RuleSourceFreshness `json:"rule_source_freshness,omitempty"`
+	// SummaryRuleRuns records bounded LASummaryLogs observations for summary
+	// rules whose outputs feed enabled detections. Native failures remain
+	// informational evidence.
+	SummaryRuleRuns []SummaryRuleRun `json:"summary_rule_runs,omitempty"`
 	// RemoteRules query cross-cluster (cluster:pattern) inputs deadair cannot
 	// verify from this deployment. Listed, never called dead.
 	RemoteRules           []RuleRef                 `json:"remote_rules,omitempty"`
@@ -67,11 +86,13 @@ type Report struct {
 }
 
 const (
-	AssessmentSourceResolution = "source_resolution"
-	AssessmentRequiredFields   = "required_fields"
-	AssessmentIngestLag        = "ingest_lag"
-	AssessmentSchemaDrift      = "schema_drift"
-	AssessmentCandidateParsing = "candidate_parsing"
+	AssessmentSourceResolution   = "source_resolution"
+	AssessmentSourceFreshness    = "source_freshness"
+	AssessmentRequiredFields     = "required_fields"
+	AssessmentIngestLag          = "ingest_lag"
+	AssessmentPredicateFreshness = "predicate_freshness"
+	AssessmentSchemaDrift        = "schema_drift"
+	AssessmentCandidateParsing   = "candidate_parsing"
 )
 
 // RuntimeAssessment describes what this scan actually assessed. Static
@@ -80,6 +101,88 @@ type RuntimeAssessment struct {
 	Name   string                 `json:"name"`
 	Status backend.EvidenceStatus `json:"status"`
 	Detail string                 `json:"detail,omitempty"`
+}
+
+// DependencyEvidence is the report form of one backend dependency
+// observation. Dependencies that are not monitorable telemetry remain visible
+// here without being coerced into source-health findings.
+type DependencyEvidence struct {
+	RuleID           string                   `json:"rule_id"`
+	BackendObjectID  string                   `json:"backend_object_id,omitempty"`
+	RuleName         string                   `json:"rule_name,omitempty"`
+	Severity         string                   `json:"severity,omitempty"`
+	Dependency       backend.DependencyRef    `json:"dependency"`
+	Status           backend.ResolutionStatus `json:"status"`
+	ResolutionMethod string                   `json:"resolution_method"`
+	ObservedAt       time.Time                `json:"observed_at"`
+	Detail           string                   `json:"detail,omitempty"`
+}
+
+// RuleProvenance records a backend-reported rule origin. It is deliberately
+// evidence-only: a package or template mismatch is not a detection-health
+// verdict.
+type RuleProvenance struct {
+	RuleID          string                 `json:"rule_id"`
+	BackendObjectID string                 `json:"backend_object_id,omitempty"`
+	RuleName        string                 `json:"rule_name,omitempty"`
+	Provenance      backend.ProvenanceRef  `json:"provenance"`
+	Status          backend.EvidenceStatus `json:"status"`
+	Method          string                 `json:"method"`
+	ObservedAt      time.Time              `json:"observed_at"`
+	Detail          string                 `json:"detail,omitempty"`
+}
+
+// SourceLineage is the report form of an observed backend transformation.
+// It intentionally does not feed the rule-to-source health graph.
+type SourceLineage struct {
+	ID         string                 `json:"id,omitempty"`
+	Kind       string                 `json:"kind"`
+	Name       string                 `json:"name,omitempty"`
+	Input      backend.DependencyRef  `json:"input"`
+	Output     backend.DependencyRef  `json:"output"`
+	Status     backend.EvidenceStatus `json:"status"`
+	Method     string                 `json:"method"`
+	ObservedAt time.Time              `json:"observed_at"`
+	Detail     string                 `json:"detail,omitempty"`
+}
+
+// RuleSourceFreshness is the report form of one rule/source slice observation.
+// Predicate literal values and backend query text are deliberately omitted.
+type RuleSourceFreshness struct {
+	RuleID           string                 `json:"rule_id"`
+	BackendObjectID  string                 `json:"backend_object_id,omitempty"`
+	RuleName         string                 `json:"rule_name,omitempty"`
+	Source           string                 `json:"source"`
+	Fields           []string               `json:"fields,omitempty"`
+	Status           backend.EvidenceStatus `json:"status"`
+	Method           string                 `json:"method,omitempty"`
+	ObservedAt       time.Time              `json:"observed_at"`
+	WindowSeconds    float64                `json:"window_seconds,omitempty"`
+	LastEvent        *time.Time             `json:"last_event,omitempty"`
+	FreshnessStatus  string                 `json:"freshness_status"`
+	AgeSeconds       float64                `json:"age_seconds,omitempty"`
+	AgeLowerBound    bool                   `json:"age_lower_bound,omitempty"`
+	ExpectedDowntime bool                   `json:"expected_downtime,omitempty"`
+	Detail           string                 `json:"detail,omitempty"`
+}
+
+// SummaryRuleRun is the report form of the latest bounded completed runtime observation
+// for one relevant Log Analytics summary rule.
+type SummaryRuleRun struct {
+	ID                  string                 `json:"id,omitempty"`
+	Rule                backend.DependencyRef  `json:"rule"`
+	Output              backend.DependencyRef  `json:"output"`
+	Status              backend.EvidenceStatus `json:"status"`
+	Method              string                 `json:"method"`
+	ObservedAt          time.Time              `json:"observed_at"`
+	WindowSeconds       float64                `json:"window_seconds,omitempty"`
+	RunAt               *time.Time             `json:"run_at,omitempty"`
+	RunStatus           string                 `json:"run_status,omitempty"`
+	QueryDurationMillis *int64                 `json:"query_duration_millis,omitempty"`
+	ResultCount         *int64                 `json:"result_count,omitempty"`
+	RuleModifiedAt      *time.Time             `json:"rule_modified_at,omitempty"`
+	Error               string                 `json:"error,omitempty"`
+	Detail              string                 `json:"detail,omitempty"`
 }
 
 // RedactionMetadata identifies the keyed pseudonymization applied to a
@@ -112,6 +215,9 @@ type Summary struct {
 	// UnusedTelemetryAssessment says whether zero-consumer source findings are
 	// complete, based on legacy matching, unavailable, or intentionally skipped.
 	UnusedTelemetryAssessment UnusedTelemetryAssessment `json:"unused_telemetry_assessment"`
+	// UnusedTelemetryAssessmentDetail explains why the assessment is unavailable.
+	// It is additive and omitted for complete, legacy, and not-applicable reports.
+	UnusedTelemetryAssessmentDetail string `json:"unused_telemetry_assessment_detail,omitempty"`
 }
 
 // UnusedTelemetryAssessment describes the confidence behind unused telemetry.
@@ -124,6 +230,17 @@ const (
 	UnusedAssessmentNotApplicable UnusedTelemetryAssessment = "not-applicable"
 )
 
+const unresolvedUnusedTelemetryDetail = "one or more enabled local rule inputs could not be resolved safely"
+
+// UnusedTelemetryExplanation returns the stored explanation, or the historical
+// unresolved-input explanation when rendering an older unavailable report.
+func (s Summary) UnusedTelemetryExplanation() string {
+	if detail := strings.TrimSpace(s.UnusedTelemetryAssessmentDetail); detail != "" {
+		return detail
+	}
+	return unresolvedUnusedTelemetryDetail
+}
+
 // InputResolutionSummary counts native selector outcomes across the rule
 // inventory. Counts describe evidence, not findings or exit-code gates.
 type InputResolutionSummary struct {
@@ -133,15 +250,19 @@ type InputResolutionSummary struct {
 	Unavailable int `json:"unavailable"`
 	Remote      int `json:"remote"`
 	Ambiguous   int `json:"ambiguous"`
+	// Incompatible counts concrete incompatible inputs when per-input
+	// diagnostics are available, otherwise authoritative incompatible results.
+	Incompatible int `json:"incompatible"`
 }
 
 // SourceHealth is one source with its verdict and known blast-radius size.
 type SourceHealth struct {
-	Name       string  `json:"name"`
-	Status     string  `json:"status"`
-	AgeSeconds float64 `json:"age_seconds,omitempty"`
-	Docs       int64   `json:"docs"`
-	SizeBytes  int64   `json:"size_bytes"`
+	Name          string  `json:"name"`
+	Status        string  `json:"status"`
+	AgeSeconds    float64 `json:"age_seconds,omitempty"`
+	AgeLowerBound bool    `json:"age_lower_bound,omitempty"`
+	Docs          int64   `json:"docs"`
+	SizeBytes     int64   `json:"size_bytes"`
 	// ExpectedDowntime is true when an expected downtime window suppressed a
 	// stale or empty verdict for this source.
 	ExpectedDowntime bool             `json:"expected_downtime,omitempty"`
@@ -194,8 +315,9 @@ type FieldTypeChange struct {
 
 // Dead-reason values are stable machine-readable codes used in JSON reports.
 const (
-	ReasonDisconnected = "disconnected"
-	ReasonStarved      = "starved"
+	ReasonDisconnected           = "disconnected"
+	ReasonStarved                = "starved"
+	ReasonSourcePlanIncompatible = "source-plan-incompatible"
 )
 
 // DeadReasonLabel returns the plain-language label used in human reports.
@@ -205,6 +327,8 @@ func DeadReasonLabel(reason string) string {
 		return "no matching source"
 	case ReasonStarved:
 		return "all matching sources stale or empty"
+	case ReasonSourcePlanIncompatible:
+		return "source configuration is incompatible with this rule"
 	default:
 		return reason
 	}
@@ -223,7 +347,9 @@ type DeadDetection struct {
 	// intended for people.
 	Reason   string   `json:"reason"`
 	Patterns []string `json:"patterns"`
-	Sources  []string `json:"sources,omitempty"` // the degraded sources, when starved
+	// Sources contains the affected concrete sources when the reason is tied
+	// to known source state or configuration.
+	Sources []string `json:"sources,omitempty"`
 }
 
 // RuleRef identifies a rule whose inputs cannot be mapped from metadata.
@@ -267,8 +393,9 @@ type ImpairedDetection struct {
 	P95LagSeconds   float64  `json:"p95_lag_seconds,omitempty"`
 	// LagSources names the specific matched sources whose ingest lag exceeds
 	// the margin — a broad rule may read one laggy source and many healthy ones.
-	LagSources []string `json:"lag_sources,omitempty"`
-	Sources    []string `json:"sources,omitempty"`
+	LagSources          []string `json:"lag_sources,omitempty"`
+	IncompatibleSources []string `json:"incompatible_sources,omitempty"`
+	Sources             []string `json:"sources,omitempty"`
 }
 
 // RequiredFieldAssessment preserves field evidence per concrete source. A
@@ -344,6 +471,73 @@ func logicalInputResolutionRuleID(resolution backend.InputResolution) string {
 	return resolution.RuleID
 }
 
+func resolutionInputNames(resolution backend.InputResolution) []string {
+	if len(resolution.ResolvedSources) > 0 {
+		return append([]string(nil), resolution.ResolvedSources...)
+	}
+	if name := strings.TrimSpace(resolution.Selector); name != "" {
+		return []string{name}
+	}
+	if name := strings.TrimSpace(resolution.Expression); name != "" {
+		return []string{name}
+	}
+	return nil
+}
+
+func sortedUniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	sort.Strings(values)
+	out := values[:0]
+	for _, value := range values {
+		if value == "" || (len(out) > 0 && out[len(out)-1] == value) {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func incompatibleResolutionCount(resolutions []backend.InputResolution) int {
+	type ruleCount struct {
+		authoritative int
+		diagnostics   map[string]bool
+	}
+	byRule := make(map[string]*ruleCount)
+	for i, resolution := range resolutions {
+		if resolution.Status != backend.ResolutionIncompatible {
+			continue
+		}
+		ruleID := logicalInputResolutionRuleID(resolution)
+		count := byRule[ruleID]
+		if count == nil {
+			count = &ruleCount{diagnostics: make(map[string]bool)}
+			byRule[ruleID] = count
+		}
+		if !resolution.Diagnostic {
+			count.authoritative++
+			continue
+		}
+		names := resolutionInputNames(resolution)
+		if len(names) == 0 {
+			names = []string{fmt.Sprintf("diagnostic-%d", i)}
+		}
+		for _, name := range names {
+			count.diagnostics[name] = true
+		}
+	}
+	total := 0
+	for _, count := range byRule {
+		if len(count.diagnostics) > 0 {
+			total += len(count.diagnostics)
+		} else {
+			total += count.authoritative
+		}
+	}
+	return total
+}
+
 // BuildOptions carries optional report inputs beyond fixed freshness health.
 type BuildOptions struct {
 	Check                  health.Check
@@ -362,6 +556,18 @@ type BuildOptions struct {
 	SourceFields  map[string]map[string]bool
 	FieldEvidence map[string]backend.FieldEvidence
 	Assessments   []RuntimeAssessment
+	// DependencyEvidence, ProvenanceEvidence, LineageEvidence, predicate
+	// freshness, and summary runs are optional
+	// read-only backend observations. They are copied into additive report
+	// sections and never participate in findings or exit codes.
+	DependencyEvidence         []backend.DependencyEvidence
+	ProvenanceEvidence         []backend.ProvenanceEvidence
+	LineageEvidence            []backend.LineageEvidence
+	PredicateFreshnessEvidence []backend.RulePredicateFreshnessEvidence
+	SummaryRuleRunEvidence     []backend.SummaryRuleRunEvidence
+	// UnusedTelemetryUnavailableDetail forces installed zero-consumer findings
+	// unavailable when a backend lacks the inventory needed to assess them.
+	UnusedTelemetryUnavailableDetail string
 	// SkipUnused suppresses the unused-telemetry section; used in candidate
 	// mode where a single rule under test would mark everything unused.
 	SkipUnused bool
@@ -420,7 +626,19 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 			r.Summary.InputResolution.Ambiguous++
 		}
 	}
+	r.Summary.InputResolution.Incompatible = incompatibleResolutionCount(r.InputResolutions)
 	r.Summary.UnusedTelemetryAssessment = unusedTelemetryAssessment(g, opts.SkipUnused)
+	if detail := strings.TrimSpace(opts.UnusedTelemetryUnavailableDetail); detail != "" && !opts.SkipUnused {
+		r.Summary.UnusedTelemetryAssessment = UnusedAssessmentUnavailable
+		r.Summary.UnusedTelemetryAssessmentDetail = detail
+	} else if r.Summary.UnusedTelemetryAssessment == UnusedAssessmentUnavailable {
+		r.Summary.UnusedTelemetryAssessmentDetail = unresolvedUnusedTelemetryDetail
+	}
+	r.DependencyEvidence = buildDependencyEvidence(g.Rules, r.InputResolutions, opts.DependencyEvidence)
+	r.RuleProvenance = buildRuleProvenance(g.Rules, opts.ProvenanceEvidence, r.GeneratedAt)
+	r.SourceLineage = buildSourceLineage(opts.LineageEvidence)
+	r.RuleSourceFreshness = buildRuleSourceFreshness(g.Rules, opts.PredicateFreshnessEvidence, opts.Check, opts.Policy)
+	r.SummaryRuleRuns = buildSummaryRuleRuns(opts.SummaryRuleRunEvidence)
 
 	rulesByID := make(map[string]int, len(g.Rules))
 	for i, rule := range g.Rules {
@@ -466,6 +684,7 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 			Name:             s.Name,
 			Status:           string(a.Status),
 			AgeSeconds:       a.Age.Seconds(),
+			AgeLowerBound:    a.AgeLowerBound,
 			Docs:             s.Docs,
 			SizeBytes:        s.SizeBytes,
 			ExpectedDowntime: a.ExpectedDowntime,
@@ -532,6 +751,7 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 		r.Summary.EnabledRules++
 		matched := g.SourcesFor(rule.ID)
 		resolutions := g.ResolutionsFor(rule.ID)
+		var incompatibleSources []string
 		if g.NativeResolution {
 			if len(resolutions) == 0 {
 				r.UnmappedRules = append(r.UnmappedRules, RuleRef{
@@ -541,15 +761,27 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 				})
 				continue
 			}
-			var hasResolved, hasEmpty, uncertain, remote bool
+			var hasResolved, hasEmpty, hasIncompatible, uncertain, remote bool
 			var uncertainStatus backend.ResolutionStatus
 			var uncertainDetail string
 			var missingTargets []string
+			var authoritativeIncompatibleSources, diagnosticIncompatibleSources []string
 			var emptyDiagnostics []backend.InputResolution
 			for _, resolution := range resolutions {
 				if resolution.Diagnostic {
-					if resolution.Status == backend.ResolutionEmpty {
+					switch resolution.Status {
+					case backend.ResolutionEmpty:
 						emptyDiagnostics = append(emptyDiagnostics, resolution)
+					case backend.ResolutionIncompatible:
+						hasIncompatible = true
+						diagnosticIncompatibleSources = append(diagnosticIncompatibleSources, resolutionInputNames(resolution)...)
+					case backend.ResolutionRemote:
+						remote, uncertain = true, true
+					case backend.ResolutionUnsupported, backend.ResolutionUnavailable, backend.ResolutionAmbiguous:
+						uncertain = true
+						if uncertainStatus == "" {
+							uncertainStatus, uncertainDetail = resolution.Status, resolution.Detail
+						}
 					}
 					continue
 				}
@@ -563,6 +795,9 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 					}
 				case backend.ResolutionEmpty:
 					hasEmpty = true
+				case backend.ResolutionIncompatible:
+					hasIncompatible = true
+					authoritativeIncompatibleSources = append(authoritativeIncompatibleSources, resolutionInputNames(resolution)...)
 				case backend.ResolutionRemote:
 					remote, uncertain = true, true
 				case backend.ResolutionUnsupported, backend.ResolutionUnavailable, backend.ResolutionAmbiguous:
@@ -572,7 +807,14 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 					}
 				}
 			}
-			if hasResolved {
+			if len(missingTargets) > 0 {
+				uncertain = true
+				if uncertainStatus == "" {
+					uncertainStatus = backend.ResolutionAmbiguous
+					uncertainDetail = "one or more resolved targets were not present in the source inventory"
+				}
+			}
+			if hasResolved && !uncertain {
 				for _, diagnostic := range emptyDiagnostics {
 					r.PartialInputCoverage = append(r.PartialInputCoverage, PartialInputCoverage{
 						RuleID: rule.ID, BackendObjectID: rule.BackendObjectID,
@@ -582,12 +824,10 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 					})
 				}
 			}
-			if len(missingTargets) > 0 {
-				uncertain = true
-				if uncertainStatus == "" {
-					uncertainStatus = backend.ResolutionAmbiguous
-					uncertainDetail = "one or more resolved targets were not present in the source inventory"
-				}
+			if len(diagnosticIncompatibleSources) > 0 {
+				incompatibleSources = sortedUniqueStrings(diagnosticIncompatibleSources)
+			} else {
+				incompatibleSources = sortedUniqueStrings(authoritativeIncompatibleSources)
 			}
 			if remote {
 				r.RemoteRules = append(r.RemoteRules, RuleRef{
@@ -614,6 +854,12 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 						ID: legacyRuleID(rule), RuleID: rule.ID, BackendObjectID: rule.BackendObjectID, Name: rule.Name, Severity: rule.Severity,
 						AssessmentStatus: backend.ResolutionAmbiguous,
 						Detail:           "resolved targets were not present in the source inventory",
+					})
+					continue
+				case hasIncompatible:
+					r.DeadDetections = append(r.DeadDetections, DeadDetection{
+						ID: legacyRuleID(rule), RuleID: rule.ID, BackendObjectID: rule.BackendObjectID, Name: rule.Name, Severity: rule.Severity,
+						Reason: ReasonSourcePlanIncompatible, Patterns: rule.Patterns, Sources: incompatibleSources,
 					})
 					continue
 				case hasEmpty:
@@ -700,7 +946,19 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 		if fieldAssessment := requiredFieldAssessment(rule, matched, fieldEvidence); fieldAssessment != nil {
 			r.RequiredFieldEvidence = append(r.RequiredFieldEvidence, *fieldAssessment)
 		}
-		if imp, ok := impairment(rule, matched, srcByName, fieldEvidence); ok {
+		imp, impaired := impairment(rule, matched, srcByName, fieldEvidence)
+		if len(incompatibleSources) > 0 {
+			if !impaired {
+				imp = ImpairedDetection{
+					ID: legacyRuleID(rule), RuleID: rule.ID, BackendObjectID: rule.BackendObjectID,
+					Name: rule.Name, Severity: rule.Severity, Sources: append([]string(nil), matched...),
+				}
+			}
+			imp.Reasons = append(imp.Reasons, ReasonSourcePlanIncompatible)
+			imp.IncompatibleSources = append([]string(nil), incompatibleSources...)
+			impaired = true
+		}
+		if impaired {
 			r.ImpairedDetections = append(r.ImpairedDetections, imp)
 		}
 	}
@@ -783,6 +1041,232 @@ func preserveLegacyInputResolutionIDs(r *Report, rules []backend.Rule) {
 	}
 }
 
+func buildDependencyEvidence(rules []backend.Rule, resolutions []backend.InputResolution, supplied []backend.DependencyEvidence) []DependencyEvidence {
+	ruleByID := make(map[string]backend.Rule, len(rules))
+	for _, rule := range rules {
+		ruleByID[rule.ID] = rule
+	}
+	out := make([]DependencyEvidence, 0, len(supplied)+len(resolutions))
+	seen := make(map[string]bool, len(supplied)+len(resolutions))
+	appendEvidence := func(item DependencyEvidence) {
+		key := strings.Join([]string{item.RuleID, item.Dependency.ID, item.Dependency.Name,
+			item.Dependency.Kind, item.Dependency.Scope, string(item.Status), item.ResolutionMethod}, "\x00")
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, item)
+	}
+	for _, item := range supplied {
+		ruleID := logicalInputResolutionRuleID(backend.InputResolution{
+			RuleID: item.RuleID, BackendObjectID: item.BackendObjectID,
+		})
+		rule := ruleByID[ruleID]
+		if ruleID == "" {
+			ruleID = item.RuleID
+		}
+		backendObjectID := item.BackendObjectID
+		if backendObjectID == "" {
+			backendObjectID = rule.BackendObjectID
+		}
+		appendEvidence(DependencyEvidence{
+			RuleID: ruleID, BackendObjectID: backendObjectID, RuleName: rule.Name, Severity: rule.Severity,
+			Dependency: item.Dependency, Status: item.Status, ResolutionMethod: item.ResolutionMethod,
+			ObservedAt: item.ObservedAt, Detail: item.Detail,
+		})
+	}
+	for _, resolution := range resolutions {
+		if len(resolution.ResolvedDependencies) == 0 {
+			continue
+		}
+		ruleID := logicalInputResolutionRuleID(resolution)
+		rule := ruleByID[ruleID]
+		for _, dependency := range resolution.ResolvedDependencies {
+			appendEvidence(DependencyEvidence{
+				RuleID: ruleID, BackendObjectID: firstNonEmpty(resolution.BackendObjectID, rule.BackendObjectID),
+				RuleName: rule.Name, Severity: rule.Severity, Dependency: dependency,
+				Status: resolution.Status, ResolutionMethod: resolution.ResolutionMethod,
+				ObservedAt: resolution.ObservedAt, Detail: resolution.Detail,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.RuleID != b.RuleID {
+			return a.RuleID < b.RuleID
+		}
+		if a.Dependency.ID != b.Dependency.ID {
+			return a.Dependency.ID < b.Dependency.ID
+		}
+		if a.Dependency.Name != b.Dependency.Name {
+			return a.Dependency.Name < b.Dependency.Name
+		}
+		return a.ResolutionMethod < b.ResolutionMethod
+	})
+	return out
+}
+
+func buildRuleProvenance(rules []backend.Rule, supplied []backend.ProvenanceEvidence, observedAt time.Time) []RuleProvenance {
+	ruleByID := make(map[string]backend.Rule, len(rules))
+	for _, rule := range rules {
+		ruleByID[rule.ID] = rule
+	}
+	out := make([]RuleProvenance, 0, len(supplied)+len(rules))
+	seen := make(map[string]bool, len(supplied)+len(rules))
+	appendEvidence := func(item RuleProvenance) {
+		key := strings.Join([]string{item.RuleID, item.Provenance.ID, item.Provenance.Name,
+			item.Provenance.Kind, item.Provenance.Scope, string(item.Status), item.Method}, "\x00")
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, item)
+	}
+	for _, item := range supplied {
+		ruleID := logicalInputResolutionRuleID(backend.InputResolution{
+			RuleID: item.RuleID, BackendObjectID: item.BackendObjectID,
+		})
+		rule := ruleByID[ruleID]
+		if ruleID == "" {
+			ruleID = item.RuleID
+		}
+		appendEvidence(RuleProvenance{
+			RuleID: ruleID, BackendObjectID: firstNonEmpty(item.BackendObjectID, rule.BackendObjectID), RuleName: rule.Name,
+			Provenance: item.Provenance, Status: item.Status, Method: item.Method, ObservedAt: item.ObservedAt, Detail: item.Detail,
+		})
+	}
+	for _, rule := range rules {
+		for _, provenance := range rule.Provenance {
+			appendEvidence(RuleProvenance{
+				RuleID: rule.ID, BackendObjectID: rule.BackendObjectID, RuleName: rule.Name,
+				Provenance: provenance, Status: backend.EvidenceAssessed, Method: "rule_inventory", ObservedAt: observedAt,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.RuleID != b.RuleID {
+			return a.RuleID < b.RuleID
+		}
+		if a.Provenance.ID != b.Provenance.ID {
+			return a.Provenance.ID < b.Provenance.ID
+		}
+		if a.Provenance.Name != b.Provenance.Name {
+			return a.Provenance.Name < b.Provenance.Name
+		}
+		return a.Method < b.Method
+	})
+	return out
+}
+
+func buildSourceLineage(in []backend.LineageEvidence) []SourceLineage {
+	out := make([]SourceLineage, 0, len(in))
+	for _, item := range in {
+		out = append(out, SourceLineage{
+			ID: item.ID, Kind: item.Kind, Name: item.Name, Input: item.Input, Output: item.Output,
+			Status: item.Status, Method: item.Method, ObservedAt: item.ObservedAt, Detail: item.Detail,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.ID != b.ID {
+			return a.ID < b.ID
+		}
+		if a.Input.ID != b.Input.ID {
+			return a.Input.ID < b.Input.ID
+		}
+		return a.Output.ID < b.Output.ID
+	})
+	return out
+}
+
+func buildRuleSourceFreshness(rules []backend.Rule, in []backend.RulePredicateFreshnessEvidence, check health.Check, policy *Policy) []RuleSourceFreshness {
+	ruleByID := make(map[string]backend.Rule, len(rules))
+	for _, rule := range rules {
+		ruleByID[rule.ID] = rule
+	}
+	out := make([]RuleSourceFreshness, 0, len(in))
+	for _, item := range in {
+		rule := ruleByID[item.RuleID]
+		freshness := item.Freshness
+		assessmentCheck := check
+		if policy != nil {
+			assessmentCheck.MaxStale = policy.maxStale(item.Source, check.MaxStale)
+		}
+		source := backend.Source{Name: item.Source, Docs: -1, Freshness: freshness, LastEvent: freshness.LastEvent}
+		assessment := assessmentCheck.Evaluate(source)
+		var lastEvent *time.Time
+		if !freshness.LastEvent.IsZero() {
+			observed := freshness.LastEvent
+			lastEvent = &observed
+		}
+		out = append(out, RuleSourceFreshness{
+			RuleID: item.RuleID, BackendObjectID: firstNonEmpty(item.BackendObjectID, rule.BackendObjectID),
+			RuleName: rule.Name, Source: item.Source, Fields: append([]string(nil), item.Fields...),
+			Status: freshness.Status, Method: freshness.Method, ObservedAt: freshness.ObservedAt,
+			WindowSeconds: freshness.Window.Seconds(), LastEvent: lastEvent,
+			FreshnessStatus: string(assessment.Status), AgeSeconds: assessment.Age.Seconds(),
+			AgeLowerBound: assessment.AgeLowerBound, ExpectedDowntime: assessment.ExpectedDowntime,
+			Detail: freshness.Detail,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RuleID != out[j].RuleID {
+			return out[i].RuleID < out[j].RuleID
+		}
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		return strings.Join(out[i].Fields, "\x00") < strings.Join(out[j].Fields, "\x00")
+	})
+	return out
+}
+
+func buildSummaryRuleRuns(in []backend.SummaryRuleRunEvidence) []SummaryRuleRun {
+	out := make([]SummaryRuleRun, 0, len(in))
+	for _, item := range in {
+		var runAt, modifiedAt *time.Time
+		var queryDurationMillis, resultCount *int64
+		if !item.RunAt.IsZero() {
+			value := item.RunAt
+			runAt = &value
+			durationValue := item.QueryDurationMillis
+			resultValue := item.ResultCount
+			queryDurationMillis = &durationValue
+			resultCount = &resultValue
+		}
+		if !item.RuleModifiedAt.IsZero() {
+			value := item.RuleModifiedAt
+			modifiedAt = &value
+		}
+		out = append(out, SummaryRuleRun{
+			ID: item.ID, Rule: item.Rule, Output: item.Output, Status: item.Status,
+			Method: item.Method, ObservedAt: item.ObservedAt, WindowSeconds: item.Window.Seconds(),
+			RunAt: runAt, RunStatus: item.RunStatus, QueryDurationMillis: queryDurationMillis,
+			ResultCount: resultCount, RuleModifiedAt: modifiedAt, Error: item.Error, Detail: item.Detail,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ID != out[j].ID {
+			return out[i].ID < out[j].ID
+		}
+		if out[i].Rule.ID != out[j].Rule.ID {
+			return out[i].Rule.ID < out[j].Rule.ID
+		}
+		return out[i].Output.ID < out[j].Output.ID
+	})
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func unusedTelemetryAssessment(g *graph.Graph, skip bool) UnusedTelemetryAssessment {
 	if skip {
 		return UnusedAssessmentNotApplicable
@@ -807,6 +1291,10 @@ func unusedTelemetryAssessment(g *graph.Graph, skip bool) UnusedTelemetryAssessm
 		authoritative := 0
 		for _, resolution := range resolutions {
 			if resolution.Diagnostic {
+				switch resolution.Status {
+				case backend.ResolutionUnsupported, backend.ResolutionUnavailable, backend.ResolutionRemote, backend.ResolutionAmbiguous:
+					return UnusedAssessmentUnavailable
+				}
 				continue
 			}
 			authoritative++
@@ -820,8 +1308,8 @@ func unusedTelemetryAssessment(g *graph.Graph, skip bool) UnusedTelemetryAssessm
 						return UnusedAssessmentUnavailable
 					}
 				}
-			case backend.ResolutionEmpty, backend.ResolutionRemote:
-				// Remote selectors cannot consume sources in this local inventory.
+			case backend.ResolutionEmpty, backend.ResolutionRemote, backend.ResolutionIncompatible:
+				// These inputs cannot consume a source in this local inventory.
 			default:
 				return UnusedAssessmentUnavailable
 			}
@@ -962,10 +1450,21 @@ func impairment(rule backend.Rule, matched []string, srcByName map[string]backen
 // CandidateExitCode gates on the rule under test only: pre-existing source
 // degradation elsewhere in the environment must not fail a rule's CI check.
 func (r *Report) CandidateExitCode() int {
+	resolvedSource := false
+	for _, resolution := range r.InputResolutions {
+		if !resolution.Diagnostic && resolution.Status == backend.ResolutionResolved && len(resolution.ResolvedSources) > 0 {
+			resolvedSource = true
+			break
+		}
+	}
 	for _, assessment := range r.Assessments {
 		switch assessment.Name {
 		case AssessmentSourceResolution:
 			if assessment.Status != backend.EvidenceAssessed {
+				return ExitError
+			}
+		case AssessmentSourceFreshness:
+			if resolvedSource && (assessment.Status == backend.EvidenceIncomplete || assessment.Status == backend.EvidenceUnavailable) {
 				return ExitError
 			}
 		case AssessmentRequiredFields, AssessmentIngestLag:
@@ -1092,6 +1591,9 @@ func (r *Report) RedactWith(redactor *redactpkg.Redactor) {
 		for j := range d.LagSources {
 			d.LagSources[j] = redactor.Value("src", d.LagSources[j])
 		}
+		for j := range d.IncompatibleSources {
+			d.IncompatibleSources[j] = redactor.Value("src", d.IncompatibleSources[j])
+		}
 		for j := range d.MissingFields {
 			d.MissingFields[j] = redactor.Value("field", d.MissingFields[j])
 		}
@@ -1155,11 +1657,87 @@ func (r *Report) RedactWith(redactor *redactpkg.Redactor) {
 		for j := range resolution.ResolvedSources {
 			resolution.ResolvedSources[j] = redactor.Value("src", resolution.ResolvedSources[j])
 		}
+		for j := range resolution.ResolvedDependencies {
+			redactDependencyRef(redactor, &resolution.ResolvedDependencies[j])
+		}
 		for j := range resolution.Aliases {
 			resolution.Aliases[j] = redactor.Value("alias", resolution.Aliases[j])
 		}
 		if resolution.Detail != "" {
 			resolution.Detail = redactor.Value("detail", resolution.Detail)
+		}
+	}
+	for i := range r.DependencyEvidence {
+		evidence := &r.DependencyEvidence[i]
+		evidence.RuleID = redactor.Value("rule", evidence.RuleID)
+		if evidence.BackendObjectID != "" {
+			evidence.BackendObjectID = redactor.Value("obj", evidence.BackendObjectID)
+		}
+		if evidence.RuleName != "" {
+			evidence.RuleName = redactor.Value("rule", evidence.RuleName)
+		}
+		redactDependencyRef(redactor, &evidence.Dependency)
+		if evidence.Detail != "" {
+			evidence.Detail = redactor.Value("detail", evidence.Detail)
+		}
+	}
+	for i := range r.RuleProvenance {
+		provenance := &r.RuleProvenance[i]
+		provenance.RuleID = redactor.Value("rule", provenance.RuleID)
+		if provenance.BackendObjectID != "" {
+			provenance.BackendObjectID = redactor.Value("obj", provenance.BackendObjectID)
+		}
+		if provenance.RuleName != "" {
+			provenance.RuleName = redactor.Value("rule", provenance.RuleName)
+		}
+		redactProvenanceRef(redactor, &provenance.Provenance)
+		if provenance.Detail != "" {
+			provenance.Detail = redactor.Value("detail", provenance.Detail)
+		}
+	}
+	for i := range r.SourceLineage {
+		lineage := &r.SourceLineage[i]
+		if lineage.ID != "" {
+			lineage.ID = redactor.Value("lineage", lineage.ID)
+		}
+		if lineage.Name != "" {
+			lineage.Name = redactor.Value("dep", lineage.Name)
+		}
+		redactDependencyRef(redactor, &lineage.Input)
+		redactDependencyRef(redactor, &lineage.Output)
+		if lineage.Detail != "" {
+			lineage.Detail = redactor.Value("detail", lineage.Detail)
+		}
+	}
+	for i := range r.RuleSourceFreshness {
+		evidence := &r.RuleSourceFreshness[i]
+		evidence.RuleID = redactor.Value("rule", evidence.RuleID)
+		if evidence.BackendObjectID != "" {
+			evidence.BackendObjectID = redactor.Value("obj", evidence.BackendObjectID)
+		}
+		if evidence.RuleName != "" {
+			evidence.RuleName = redactor.Value("rule", evidence.RuleName)
+		}
+		evidence.Source = redactor.Value("src", evidence.Source)
+		for j := range evidence.Fields {
+			evidence.Fields[j] = redactor.Value("field", evidence.Fields[j])
+		}
+		if evidence.Detail != "" {
+			evidence.Detail = redactor.Value("detail", evidence.Detail)
+		}
+	}
+	for i := range r.SummaryRuleRuns {
+		run := &r.SummaryRuleRuns[i]
+		if run.ID != "" {
+			run.ID = redactor.Value("summary-run", run.ID)
+		}
+		redactDependencyRef(redactor, &run.Rule)
+		redactDependencyRef(redactor, &run.Output)
+		if run.Error != "" {
+			run.Error = redactor.Value("detail", run.Error)
+		}
+		if run.Detail != "" {
+			run.Detail = redactor.Value("detail", run.Detail)
 		}
 	}
 	for i := range r.PartialInputCoverage {
@@ -1224,6 +1802,36 @@ func redactFindings(redactor *redactpkg.Redactor, findings []Finding) {
 		if finding.Accepted != nil && finding.Accepted.Reason != "" {
 			finding.Accepted.Reason = redactor.Value("detail", finding.Accepted.Reason)
 		}
+	}
+}
+
+func redactDependencyRef(redactor *redactpkg.Redactor, dependency *backend.DependencyRef) {
+	namespace := "dep"
+	if dependency.Monitorable {
+		// Monitorable dependencies are source identities. Keep their
+		// pseudonyms joinable with resolved_sources and source health.
+		namespace = "src"
+	}
+	if dependency.ID != "" {
+		dependency.ID = redactor.Value(namespace, dependency.ID)
+	}
+	if dependency.Name != "" {
+		dependency.Name = redactor.Value(namespace, dependency.Name)
+	}
+	if dependency.Scope != "" {
+		dependency.Scope = redactor.Value("workspace", dependency.Scope)
+	}
+}
+
+func redactProvenanceRef(redactor *redactpkg.Redactor, provenance *backend.ProvenanceRef) {
+	if provenance.ID != "" {
+		provenance.ID = redactor.Value("provenance", provenance.ID)
+	}
+	if provenance.Name != "" {
+		provenance.Name = redactor.Value("provenance", provenance.Name)
+	}
+	if provenance.Scope != "" {
+		provenance.Scope = redactor.Value("workspace", provenance.Scope)
 	}
 }
 

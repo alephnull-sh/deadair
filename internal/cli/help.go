@@ -29,11 +29,30 @@ func scanUsage(w io.Writer) {
 Run a live, read-only assessment. Exit 0 passes the configured gate, 1 means
 gated findings, and 2 means the scan could not complete.
 
+On Sentinel, deadair follows enabled Scheduled and NRT rules to local Analytics
+tables and explicitly mapped workspace targets. It also surfaces filtered data
+that has gone quiet and summary pipelines that failed or fell behind. Those
+runtime signals are advisory and do not change the gate.
+
+Dynamic and unmapped inputs stay unassessed. Mapped workspaces must have
+Sentinel deployed. Queries are limited to 20 workspaces and fewer than 20
+regions; missing location is unavailable. An eligible installed rule that
+references another subscription needs a matching Sentinel rule-health success
+after its latest change and within its expected run cadence, or its execution
+identity stays unassessed. Tenant boundaries are not detected separately.
+
 Connection:
-  --backend NAME              elastic or opensearch (default: elastic)
+  --backend NAME              elastic, opensearch, or sentinel (default: elastic)
   --es-url URL                Elasticsearch URL (DEADAIR_ES_URL)
   --kibana-url URL            Kibana URL (DEADAIR_KIBANA_URL)
   --opensearch-url URL        OpenSearch URL (DEADAIR_OPENSEARCH_URL)
+  --azure-subscription ID     Azure subscription (DEADAIR_AZURE_SUBSCRIPTION_ID)
+  --azure-resource-group NAME Azure resource group (DEADAIR_AZURE_RESOURCE_GROUP)
+  --sentinel-workspace NAME   Log Analytics workspace name (DEADAIR_SENTINEL_WORKSPACE)
+  --sentinel-workspace-id ID  optional customer ID override (normally discovered through ARM)
+  --sentinel-remotes FILE     JSON mappings for literal workspace() targets
+                              (DEADAIR_SENTINEL_REMOTES)
+                              Sentinel authentication uses DefaultAzureCredential
   --api-key-file FILE         read an API key from FILE instead of the environment
   --opensearch-username NAME  OpenSearch basic-auth username
   --opensearch-password-file FILE
@@ -58,7 +77,7 @@ Scope:
   --max-stale DURATION        source freshness window (default: 30m)
   --downtime-file FILE        expected source downtime windows
   --policy FILE               local freshness, acceptance, and gate policy
-  --rule FILE                 evaluate an Elastic rule or OpenSearch detector
+  --rule FILE                 evaluate one backend-native candidate file
 
 Fleet:
   --fleet FILE                scan instances listed in a fleet JSON file
@@ -80,11 +99,23 @@ func checkUsage(w io.Writer) {
 
 Verify that the configured credential can run a trustworthy live scan.
 
+Sentinel checks the core Scheduled/NRT rule, table, query, and explicitly mapped
+literal workspace() paths, including required remote Sentinel onboarding.
+Optional summary-lineage and Content Hub reads are scan enrichment and are not
+required for readiness.
+
 Connection:
-  --backend NAME              elastic or opensearch (default: elastic)
+  --backend NAME              elastic, opensearch, or sentinel (default: elastic)
   --es-url URL                Elasticsearch URL (DEADAIR_ES_URL)
   --kibana-url URL            Kibana URL (DEADAIR_KIBANA_URL)
   --opensearch-url URL        OpenSearch URL (DEADAIR_OPENSEARCH_URL)
+  --azure-subscription ID     Azure subscription (DEADAIR_AZURE_SUBSCRIPTION_ID)
+  --azure-resource-group NAME Azure resource group (DEADAIR_AZURE_RESOURCE_GROUP)
+  --sentinel-workspace NAME   Log Analytics workspace name (DEADAIR_SENTINEL_WORKSPACE)
+  --sentinel-workspace-id ID  optional customer ID override (normally discovered through ARM)
+  --sentinel-remotes FILE     JSON mappings for literal workspace() targets
+                              (DEADAIR_SENTINEL_REMOTES)
+                              Sentinel authentication uses DefaultAzureCredential
   --api-key-file FILE         read an API key from FILE instead of the environment
   --opensearch-username NAME  OpenSearch basic-auth username
   --opensearch-password-file FILE
@@ -129,6 +160,18 @@ func serveUsage(w io.Writer) {
 
 Run periodic live scans and expose the latest result as Prometheus metrics.
 
+On Sentinel, deadair follows enabled Scheduled and NRT rules to local Analytics
+tables and explicitly mapped workspace targets. It also surfaces filtered data
+that has gone quiet and summary pipelines that failed or fell behind. Those
+runtime signals are advisory and do not change the gate.
+
+Dynamic and unmapped inputs stay unassessed. Mapped workspaces must have
+Sentinel deployed. Queries are limited to 20 workspaces and fewer than 20
+regions; missing location is unavailable. An eligible installed rule that
+references another subscription needs a matching Sentinel rule-health success
+after its latest change and within its expected run cadence, or its execution
+identity stays unassessed. Tenant boundaries are not detected separately.
+
 Exporter:
   --bind ADDRESS              listen address (default: 127.0.0.1:9317)
   --interval DURATION         time between scans (default: 5m)
@@ -136,10 +179,17 @@ Exporter:
   --redact-key-file FILE      HMAC key for stable cross-run pseudonyms
 
 Connection and scan:
-  --backend NAME              elastic or opensearch (default: elastic)
+  --backend NAME              elastic, opensearch, or sentinel (default: elastic)
   --es-url URL                Elasticsearch URL (DEADAIR_ES_URL)
   --kibana-url URL            Kibana URL (DEADAIR_KIBANA_URL)
   --opensearch-url URL        OpenSearch URL (DEADAIR_OPENSEARCH_URL)
+  --azure-subscription ID     Azure subscription (DEADAIR_AZURE_SUBSCRIPTION_ID)
+  --azure-resource-group NAME Azure resource group (DEADAIR_AZURE_RESOURCE_GROUP)
+  --sentinel-workspace NAME   Log Analytics workspace name (DEADAIR_SENTINEL_WORKSPACE)
+  --sentinel-workspace-id ID  optional customer ID override (normally discovered through ARM)
+  --sentinel-remotes FILE     JSON mappings for literal workspace() targets
+                              (DEADAIR_SENTINEL_REMOTES)
+                              Sentinel authentication uses DefaultAzureCredential
   --api-key-file FILE         read an API key from FILE
   --ca-cert FILE              trust the PEM certificate authority in FILE
   --kibana-space NAME         Kibana space containing the rules

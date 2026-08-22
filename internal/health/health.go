@@ -33,8 +33,11 @@ func (s Status) Degraded() bool { return s == StatusStale || s == StatusEmpty }
 
 // Assessment is the evaluated health of a single source.
 type Assessment struct {
-	Status           Status
-	Age              time.Duration // time since last event; 0 when unknown
+	Status Status
+	Age    time.Duration // time since last event; 0 when unknown
+	// AgeLowerBound marks Age as the minimum age proved by a bounded empty
+	// freshness query, rather than an exact age derived from LastEvent.
+	AgeLowerBound    bool
 	ExpectedDowntime bool
 }
 
@@ -70,6 +73,20 @@ func (c Check) Evaluate(s backend.Source) Assessment {
 		return Assessment{Status: StatusEmpty}
 	}
 	if s.LastEvent.IsZero() {
+		freshness := s.Freshness
+		if freshness.Status == backend.EvidenceAssessed &&
+			freshness.LastEvent.IsZero() &&
+			!freshness.ObservedAt.IsZero() &&
+			freshness.Window > 0 &&
+			c.MaxStale > 0 && c.MaxStale <= freshness.Window {
+			if inDowntime {
+				return Assessment{
+					Status: StatusMaintenance, Age: freshness.Window,
+					AgeLowerBound: true, ExpectedDowntime: true,
+				}
+			}
+			return Assessment{Status: StatusStale, Age: freshness.Window, AgeLowerBound: true}
+		}
 		return Assessment{Status: StatusUnknown}
 	}
 	age := t.Sub(s.LastEvent)

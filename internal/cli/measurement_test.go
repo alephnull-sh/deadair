@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -18,6 +19,23 @@ type lagProbeBackend struct {
 	requestedFields []string
 	fields          map[string]backend.FieldEvidence
 	lags            map[string]backend.IngestLagEvidence
+}
+
+type freshnessProbeBackend struct {
+	lagProbeBackend
+	requestedFreshness []string
+	freshness          map[string]backend.FreshnessEvidence
+}
+
+func (b *freshnessProbeBackend) FreshnessEvidence(_ context.Context, sources []backend.Source) (map[string]backend.FreshnessEvidence, error) {
+	out := make(map[string]backend.FreshnessEvidence, len(sources))
+	for _, source := range sources {
+		b.requestedFreshness = append(b.requestedFreshness, source.Name)
+		if item, ok := b.freshness[source.Name]; ok {
+			out[source.Name] = item
+		}
+	}
+	return out, nil
 }
 
 func (b *lagProbeBackend) RequiredFieldEvidence(_ context.Context, sources []backend.Source, fields []string) (map[string]backend.FieldEvidence, error) {
@@ -58,6 +76,79 @@ func TestCollectRequiredFieldEvidenceAssessesAllResolvedSources(t *testing.T) {
 	}
 	if len(probe.requestedFields) != 2 || probe.requestedFields[0] != "host.name" || probe.requestedFields[1] != "process.name" || assessment.Status != backend.EvidenceAssessed {
 		t.Fatalf("fields/status = %v/%+v", probe.requestedFields, assessment)
+	}
+}
+
+func TestCollectFreshnessEvidenceUsesDedupedEnabledConcreteSources(t *testing.T) {
+	rules := []backend.Rule{
+		{ID: "one", Enabled: true},
+		{ID: "two", Enabled: true},
+		{ID: "disabled", Enabled: false},
+	}
+	sources := []backend.Source{{Name: "SecurityEvent"}, {Name: "SigninLogs"}, {Name: "Heartbeat"}, {Name: "unused"}}
+	resolutions := []backend.InputResolution{
+		{RuleID: "one", Status: backend.ResolutionResolved, ResolvedSources: []string{"SecurityEvent", "SigninLogs"}},
+		{RuleID: "two", Status: backend.ResolutionResolved, ResolvedSources: []string{"SigninLogs"}},
+		{RuleID: "disabled", Status: backend.ResolutionResolved, ResolvedSources: []string{"Heartbeat"}},
+	}
+	g := graph.BuildResolved(rules, sources, resolutions)
+	probe := &freshnessProbeBackend{freshness: map[string]backend.FreshnessEvidence{
+		"SecurityEvent": {Status: backend.EvidenceAssessed, LastEvent: time.Now().UTC()},
+	}}
+	evidence, assessment, err := collectFreshnessEvidence(context.Background(), probe, rules, g, sources, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := probe.requestedFreshness, []string{"SecurityEvent", "SigninLogs"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("freshness sources = %v, want %v", got, want)
+	}
+	if len(evidence) != 1 || assessment.Status != backend.EvidenceIncomplete || assessment.Name != report.AssessmentSourceFreshness {
+		t.Fatalf("freshness evidence/assessment = %+v / %+v", evidence, assessment)
+	}
+}
+
+func TestFreshnessRequestsKeepScheduledAndNRTClocksSeparate(t *testing.T) {
+	rules := []backend.Rule{
+		{ID: "scheduled", Enabled: true},
+		{ID: "nrt", Enabled: true, TimestampOverride: "ingestion_time()"},
+		{ID: "shared-scheduled", Enabled: true},
+		{ID: "shared-nrt", Enabled: true, TimestampOverride: "ingestion_time()"},
+	}
+	sources := []backend.Source{{Name: "ScheduledOnly"}, {Name: "NRTOnly"}, {Name: "Shared"}}
+	resolutions := []backend.InputResolution{
+		{RuleID: "scheduled", Status: backend.ResolutionResolved, ResolvedSources: []string{"ScheduledOnly"}},
+		{RuleID: "nrt", Status: backend.ResolutionResolved, ResolvedSources: []string{"NRTOnly"}},
+		{RuleID: "shared-scheduled", Status: backend.ResolutionResolved, ResolvedSources: []string{"Shared"}},
+		{RuleID: "shared-nrt", Status: backend.ResolutionResolved, ResolvedSources: []string{"Shared"}},
+	}
+	requests := freshnessRequests(rules, graph.BuildResolved(rules, sources, resolutions), sources, 30*time.Minute)
+	got := map[string]backend.FreshnessBasis{}
+	for _, request := range requests {
+		got[request.Source.Name] = request.Basis
+	}
+	want := map[string]backend.FreshnessBasis{
+		"ScheduledOnly": backend.FreshnessEventTime,
+		"NRTOnly":       backend.FreshnessIngestionTime,
+		"Shared":        backend.FreshnessMixed,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("freshness timing = %v, want %v", got, want)
+	}
+}
+
+func TestCollectFreshnessMarksShortEmptyWindowIncomplete(t *testing.T) {
+	rules := []backend.Rule{{ID: "candidate", Enabled: true, Patterns: []string{"SecurityEvent"}}}
+	sources := []backend.Source{{Name: "SecurityEvent"}}
+	g := graph.Build(rules, sources)
+	probe := &freshnessProbeBackend{freshness: map[string]backend.FreshnessEvidence{
+		"SecurityEvent": {Status: backend.EvidenceAssessed, Window: 24 * time.Hour},
+	}}
+	evidence, assessment, err := collectFreshnessEvidence(context.Background(), probe, rules, g, sources, 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.Status != backend.EvidenceIncomplete || evidence["SecurityEvent"].Status != backend.EvidenceIncomplete {
+		t.Fatalf("freshness evidence/assessment = %+v / %+v, want incomplete", evidence, assessment)
 	}
 }
 
@@ -125,6 +216,26 @@ func TestRuntimeAssessmentIgnoresDisabledRuleResolutionFailures(t *testing.T) {
 		{RuleID: "disabled", Status: backend.ResolutionUnsupported},
 	}
 	g := graph.BuildResolved(rules, []backend.Source{{Name: "logs-current"}}, resolutions)
+	assessments := runtimeAssessments(connOpts{}, g, g.Sources, nil,
+		report.RuntimeAssessment{Name: report.AssessmentRequiredFields, Status: backend.EvidenceDisabled},
+		report.RuntimeAssessment{Name: report.AssessmentIngestLag, Status: backend.EvidenceDisabled})
+	for _, assessment := range assessments {
+		if assessment.Name == report.AssessmentSourceResolution {
+			if assessment.Status != backend.EvidenceAssessed {
+				t.Fatalf("source resolution = %+v, want assessed", assessment)
+			}
+			return
+		}
+	}
+	t.Fatal("source-resolution assessment missing")
+}
+
+func TestRuntimeAssessmentTreatsIncompatibleResolutionAsAssessed(t *testing.T) {
+	rules := []backend.Rule{{ID: "enabled", Enabled: true}}
+	resolutions := []backend.InputResolution{{
+		RuleID: "enabled", Selector: "BasicTable", Status: backend.ResolutionIncompatible,
+	}}
+	g := graph.BuildResolved(rules, []backend.Source{{Name: "BasicTable"}}, resolutions)
 	assessments := runtimeAssessments(connOpts{}, g, g.Sources, nil,
 		report.RuntimeAssessment{Name: report.AssessmentRequiredFields, Status: backend.EvidenceDisabled},
 		report.RuntimeAssessment{Name: report.AssessmentIngestLag, Status: backend.EvidenceDisabled})

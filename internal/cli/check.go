@@ -18,6 +18,12 @@ import (
 // capability is tried and reported individually, so a role or network problem
 // points at itself instead of surfacing as a failed scan.
 func runCheck(args []string, stdout, stderr io.Writer) int {
+	return runCheckWithTargets(args, stdout, stderr, (*connOpts).resolveInstances)
+}
+
+type checkTargetResolver func(*connOpts, io.Writer) ([]fleetInstance, error)
+
+func runCheckWithTargets(args []string, stdout, stderr io.Writer, resolveTargets checkTargetResolver) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { checkUsage(stderr) }
@@ -30,7 +36,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "deadair: check does not accept positional arguments: %q\n", fs.Arg(0))
 		return report.ExitError
 	}
-	insts, err := o.resolveInstances(stderr)
+	insts, err := resolveTargets(&o, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
@@ -98,23 +104,44 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		sources, err := inst.backend.Sources(ctx)
 		if err != nil {
 			ready = false
-			fmt.Fprintf(&details, "  %s source stats not readable: %v\n", mark(stdout, false), err)
+			fmt.Fprintf(&details, "  %s source inventory not readable: %v\n", mark(stdout, false), err)
 			authHint(&details, err)
 		} else {
-			fmt.Fprintf(&details, "  %s source stats readable (%d sources)\n", mark(stdout, true), len(sources))
+			fmt.Fprintf(&details, "  %s source inventory readable (%d sources)\n", mark(stdout, true), len(sources))
+			if provider, available := inst.backend.(backendpkg.ReadinessProvider); available {
+				evidence, probeErr := provider.ReadinessEvidence(ctx, rules, sources)
+				switch {
+				case probeErr != nil:
+					ready = false
+					fmt.Fprintf(&details, "  %s runtime query path not readable: %v\n", mark(stdout, false), probeErr)
+					authHint(&details, probeErr)
+				case !evidence.Attempted:
+					limited = true
+					fmt.Fprintf(&details, "  - runtime query path not checked: %s\n", evidence.Detail)
+				case evidence.Status != backendpkg.EvidenceAssessed:
+					ready = false
+					fmt.Fprintf(&details, "  %s runtime query path not readable: %s\n", mark(stdout, false), evidence.Detail)
+					authHint(&details, fmt.Errorf("%s", evidence.Detail))
+				case evidence.Limited:
+					limited = true
+					fmt.Fprintf(&details, "  - runtime query path readable with limits: %s\n", evidence.Detail)
+				default:
+					fmt.Fprintf(&details, "  %s runtime query path readable for enabled-rule sources\n", mark(stdout, true))
+				}
+			}
 
 			// Optional capabilities: needed by specific flags, not by scan.
 			if len(sources) > 0 {
 				schemas, serr := inst.backend.Schemas(ctx, sources[:1])
 				if serr == nil && len(schemas) > 0 {
-					fmt.Fprintf(&details, "  %s field mappings readable\n", mark(stdout, true))
+					fmt.Fprintf(&details, "  %s source schemas readable\n", mark(stdout, true))
 				} else {
 					limited = true
-					fmt.Fprintln(&details, "  - field mappings not readable (optional; used by --schema)")
+					fmt.Fprintln(&details, "  - source schemas not readable (optional; used by --schema)")
 				}
 			} else {
 				limited = true
-				fmt.Fprintln(&details, "  - field mappings not checked because no sources were visible")
+				fmt.Fprintln(&details, "  - source schemas not checked because no sources were visible")
 			}
 		}
 
@@ -123,21 +150,16 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 			ready = false
 			fmt.Fprintf(&details, "  %s native input resolution unavailable\n", mark(stdout, false))
 		} else {
-			probe := backendpkg.Rule{ID: "deadair-resolution-probe", Patterns: []string{"deadair-resolution-probe-does-not-exist-*"}}
-			resolved, rerr := resolver.ResolveInputs(ctx, []backendpkg.Rule{probe})
-			if rerr != nil || len(resolved) != 1 || (resolved[0].Status != backendpkg.ResolutionResolved && resolved[0].Status != backendpkg.ResolutionEmpty) {
+			resolution, rerr := probeNativeInputResolution(ctx, resolver)
+			if rerr != nil {
 				ready = false
-				if rerr != nil {
-					fmt.Fprintf(&details, "  %s native input resolution not readable: %v\n", mark(stdout, false), rerr)
-				} else if len(resolved) == 0 {
-					fmt.Fprintf(&details, "  %s native input resolution returned no evidence\n", mark(stdout, false))
-				} else {
-					fmt.Fprintf(&details, "  %s native input resolution is %s: %s\n", mark(stdout, false), resolved[0].Status, resolved[0].Detail)
-				}
+				fmt.Fprintf(&details, "  %s native input resolution not readable: %v\n", mark(stdout, false), rerr)
 			} else if ruleInputUnavailable > 0 {
-				fmt.Fprintf(&details, "  - native index-pattern resolution readable (%s); rule input discovery failed above\n", resolved[0].Status)
+				fmt.Fprintf(&details, "  - native input resolution readable; rule input discovery failed above\n")
+			} else if resolution.Status == backendpkg.ResolutionEmpty {
+				fmt.Fprintf(&details, "  %s native input resolution readable (missing sources can be proved)\n", mark(stdout, true))
 			} else {
-				fmt.Fprintf(&details, "  %s native input resolution readable (%s)\n", mark(stdout, true), resolved[0].Status)
+				fmt.Fprintf(&details, "  %s native input resolution readable (%s)\n", mark(stdout, true), resolution.Status)
 			}
 		}
 		cancel()
@@ -149,7 +171,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "A required read path failed. Fix the failures below before scanning.")
 	case limited:
 		fmt.Fprintln(stdout, color(stdout, "33;1", "READY WITH LIMITS"))
-		fmt.Fprintln(stdout, "Live scans can run, but an optional check is unavailable.")
+		fmt.Fprintln(stdout, "Live scans can run, but one or more checks have limits.")
 	default:
 		fmt.Fprintln(stdout, color(stdout, "32;1", "READY"))
 		fmt.Fprintln(stdout, "The credential can read rules, sources, and native resolution evidence.")
@@ -168,6 +190,31 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		return report.ExitHealthy
 	}
 	return report.ExitError
+}
+
+func probeNativeInputResolution(ctx context.Context, resolver backendpkg.Resolver) (backendpkg.InputResolution, error) {
+	probe := backendpkg.Rule{ID: "deadair-resolution-probe", Enabled: true, Patterns: []string{"deadair-resolution-probe-does-not-exist-*"}}
+	resolved, err := resolver.ResolveInputs(ctx, []backendpkg.Rule{probe})
+	if err != nil {
+		return backendpkg.InputResolution{}, err
+	}
+	authoritative := make([]backendpkg.InputResolution, 0, 1)
+	for _, resolution := range resolved {
+		if !resolution.Diagnostic {
+			authoritative = append(authoritative, resolution)
+		}
+	}
+	if len(authoritative) == 0 {
+		return backendpkg.InputResolution{}, fmt.Errorf("native input resolution returned no authoritative evidence")
+	}
+	if len(authoritative) != 1 {
+		return backendpkg.InputResolution{}, fmt.Errorf("native input resolution returned %d authoritative results", len(authoritative))
+	}
+	resolution := authoritative[0]
+	if resolution.Status != backendpkg.ResolutionResolved && resolution.Status != backendpkg.ResolutionEmpty {
+		return backendpkg.InputResolution{}, fmt.Errorf("native input resolution is %s: %s", resolution.Status, resolution.Detail)
+	}
+	return resolution, nil
 }
 
 func mark(w io.Writer, good bool) string {

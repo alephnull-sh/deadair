@@ -83,6 +83,23 @@ func (r *Report) buildFindings(store *state.Store, policy *Policy) {
 						Severity: impaired.Severity, Source: source,
 					})
 				}
+			case ReasonSourcePlanIncompatible:
+				if len(impaired.IncompatibleSources) == 0 {
+					findings = append(findings, Finding{
+						ID:    stableFindingID(r.TargetID, r.Instance, r.Backend, FindingImpaired, ruleID, reason, "", ""),
+						Class: FindingImpaired, Reason: reason, RuleID: ruleID,
+						BackendObjectID: impaired.BackendObjectID, RuleName: impaired.Name, Severity: impaired.Severity,
+					})
+					break
+				}
+				for _, source := range impaired.IncompatibleSources {
+					findings = append(findings, Finding{
+						ID:    stableFindingID(r.TargetID, r.Instance, r.Backend, FindingImpaired, ruleID, reason, source, ""),
+						Class: FindingImpaired, Reason: reason, RuleID: ruleID,
+						BackendObjectID: impaired.BackendObjectID, RuleName: impaired.Name,
+						Severity: impaired.Severity, Source: source,
+					})
+				}
 			default:
 				findings = append(findings, Finding{
 					ID:    stableFindingID(r.TargetID, r.Instance, r.Backend, FindingImpaired, ruleID, reason, "", ""),
@@ -291,15 +308,22 @@ func findingRecoveryConfirmed(current *Report, previous Finding) bool {
 			return ruleHasAuthoritativeResolved(current, previous.RuleID)
 		case ReasonStarved:
 			return starvedRecoveryConfirmed(current, previous.RuleID)
+		case ReasonSourcePlanIncompatible:
+			return ruleHasAuthoritativeResolved(current, previous.RuleID)
 		default:
 			return false
 		}
 	case FindingImpaired:
+		if ruleInputUncertain(current, previous.RuleID) {
+			return false
+		}
 		switch previous.Reason {
 		case ReasonMissingFields:
 			return requiredFieldRecoveryConfirmed(current, previous)
 		case ReasonLagBlindWindow:
 			return ingestLagRecoveryConfirmed(current, previous)
+		case ReasonSourcePlanIncompatible:
+			return incompatibleSourceRecoveryConfirmed(current, previous)
 		default:
 			return false
 		}
@@ -336,7 +360,7 @@ func findingRecoveryConfirmed(current *Report, previous Finding) bool {
 		}
 		return false
 	case FindingPartialInput:
-		if !assessmentSupportsRecovery(current, AssessmentSourceResolution) {
+		if !assessmentSupportsRecovery(current, AssessmentSourceResolution) || ruleInputUncertain(current, previous.RuleID) {
 			return false
 		}
 		for _, resolution := range current.InputResolutions {
@@ -402,6 +426,24 @@ func starvedRecoveryConfirmed(r *Report, ruleID string) bool {
 	for _, source := range resolvedSources {
 		if sourceHealthStatus(r, source) == "ok" {
 			return true
+		}
+	}
+	return false
+}
+
+func incompatibleSourceRecoveryConfirmed(r *Report, previous Finding) bool {
+	if !assessmentSupportsRecovery(r, AssessmentSourceResolution) || ruleInputUncertain(r, previous.RuleID) {
+		return false
+	}
+	for _, resolution := range r.InputResolutions {
+		if resolution.Diagnostic || logicalInputResolutionRuleID(resolution) != previous.RuleID ||
+			resolution.Status != backend.ResolutionResolved {
+			continue
+		}
+		for _, source := range resolution.ResolvedSources {
+			if source == previous.Source {
+				return true
+			}
 		}
 	}
 	return false

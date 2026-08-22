@@ -2,222 +2,597 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>deadair report</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>deadair report · Elastic Security</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17202a; }
-    h1, h2 { margin-bottom: .4rem; }
-    table { border-collapse: collapse; width: 100%; margin: 1rem 0 2rem; }
-    th, td { border-bottom: 1px solid #d8dee4; padding: .45rem .5rem; text-align: left; }
-    th { background: #f6f8fa; font-weight: 600; }
-    .muted { color: #57606a; }
-    .status-ok { color: #116329; }
-    .status-stale, .status-empty, .status-low { color: #b42318; font-weight: 600; }
-    .status-maintenance, .status-warming, .status-pending, .status-unknown { color: #8250df; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; margin: 1rem 0 2rem; }
-    .metric { border: 1px solid #d8dee4; border-radius: 6px; padding: .75rem; }
-    .metric strong { display: block; font-size: 1.5rem; }
+    :root {
+      color-scheme: light;
+      --paper: #ffffff;
+      --ink: #17191c;
+      --muted: #626a73;
+      --line: #d8dce1;
+      --line-dark: #aeb4bc;
+      --soft: #f4f5f6;
+      --danger: #b42318;
+      --warn: #8a5b00;
+      --good: #147a45;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--paper); color: var(--ink); }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+    .report {
+      width: min(1080px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+    .hero {
+      padding: 0 0 30px;
+      border-bottom: 2px solid var(--ink);
+    }
+    .hero-top, .section-heading, .signal-top, .detail-summary {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .brand {
+      margin: 0;
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: .055em;
+      text-transform: uppercase;
+    }
+    .gate {
+      display: inline-block;
+      padding-left: 9px;
+      border-left: 3px solid currentColor;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .gate-failed { color: var(--danger); }
+    .gate-passed { color: var(--good); }
+    .gate-incomplete { color: var(--warn); }
+    h1 {
+      max-width: 28ch;
+      margin: 30px 0 8px;
+      font-size: 2rem;
+      line-height: 1.12;
+      letter-spacing: -.02em;
+    }
+    .lede { max-width: 64ch; margin: 0; color: var(--muted); font-size: 16px; }
+    .meta {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      margin-top: 28px;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .metric {
+      min-width: 0;
+      padding: 12px 14px 13px 0;
+      border-right: 1px solid var(--line);
+    }
+    .metric + .metric { padding-left: 14px; }
+    .metric:last-child { border-right: 0; }
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .metric strong {
+      display: block;
+      margin-top: 2px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 1.35rem;
+      line-height: 1.1;
+      letter-spacing: -.02em;
+    }
+    .metric-alert strong { color: var(--danger); }
+    .metric-warn strong { color: var(--warn); }
+    details > summary { cursor: pointer; }
+    details > summary:focus-visible, .table-wrap:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 3px;
+    }
+    section { margin-top: 34px; }
+    .section-heading {
+      align-items: end;
+      margin-bottom: 12px;
+      padding-bottom: 9px;
+      border-bottom: 1px solid var(--ink);
+    }
+    h2 { margin: 0; font-size: 1.45rem; line-height: 1.2; letter-spacing: -.02em; }
+    h3 {
+      margin: 28px 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .055em;
+      text-transform: uppercase;
+    }
+    .section-copy { max-width: 68ch; margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .count {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .signal-list {
+      margin: 0;
+      padding: 0;
+      border-top: 1px solid var(--line);
+      list-style: none;
+    }
+    .signal {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 3px;
+      padding: 14px 0 15px;
+      border-bottom: 1px solid var(--line);
+    }
+    .signal-top { align-items: start; }
+    .signal-title { margin: 0; font-size: 15px; font-weight: 600; }
+    .signal p { margin: 0; color: var(--muted); }
+    .signal .action { margin-top: 3px; color: var(--muted); font-size: 13px; }
+    .badge {
+      display: inline-block;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .045em;
+      line-height: 1.4;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .status-ok, .status-assessed, .status-resolved, .status-succeeded { color: var(--good); }
+    .status-stale, .status-empty, .status-failed, .status-incompatible { color: var(--danger); }
+    .status-incomplete, .status-unavailable, .status-unsupported, .status-ambiguous, .status-remote, .status-unknown, .status-disabled { color: var(--warn); }
+    .status-maintenance, .status-warming, .status-pending { color: var(--muted); }
+    .severity-critical, .severity-high { color: var(--danger); }
+    .severity-medium { color: var(--warn); }
+    .severity-low { color: var(--muted); }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+    .tag {
+      display: inline-block;
+      padding: 1px 5px;
+      border: 1px solid var(--line);
+      border-radius: 2px;
+      background: var(--soft);
+      color: #454b52;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+    .advisory-note {
+      margin: 0;
+      padding: 8px 0 8px 12px;
+      border-left: 2px solid var(--warn);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+      border-top: 1px solid var(--line-dark);
+      border-bottom: 1px solid var(--line-dark);
+      -webkit-overflow-scrolling: touch;
+    }
+    table { width: 100%; min-width: 720px; border-collapse: collapse; }
+    th, td {
+      padding: 9px 11px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--paper);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .045em;
+      text-transform: uppercase;
+    }
+    tbody tr:last-child td { border-bottom: 0; }
+    td { overflow-wrap: anywhere; }
+    td code, .technical {
+      color: #454b52;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+    .empty-note {
+      margin: 0;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .evidence-panel {
+      border-top: 1px solid var(--line-dark);
+      border-bottom: 1px solid var(--line-dark);
+    }
+    .evidence-panel > summary {
+      list-style: none;
+      padding: 12px 0;
+      font-weight: 600;
+    }
+    .evidence-panel > summary::-webkit-details-marker { display: none; }
+    .evidence-panel > summary::after {
+      content: "+";
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .evidence-panel[open] > summary::after { content: "−"; }
+    .evidence-body { padding: 0 0 20px; border-top: 1px solid var(--line); }
+    .evidence-body h3 { margin-top: 24px; }
+    .row-detail summary {
+      width: fit-content;
+      color: var(--ink);
+      font-size: 12px;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .row-detail p { margin: 5px 0 0; color: var(--muted); }
+    footer {
+      margin-top: 36px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+    }
+    @media (max-width: 680px) {
+      .report { width: min(100% - 28px, 1080px); padding: 22px 0 40px; }
+      .hero-top, .section-heading, .signal-top { align-items: flex-start; }
+      h1 { margin-top: 24px; font-size: 2rem; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric, .metric + .metric {
+        padding: 10px 8px 10px 0;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .metric:nth-child(even) {
+        padding-left: 12px;
+        border-left: 1px solid var(--line);
+      }
+      .metric:last-child,
+      .metric:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
+      section { margin-top: 34px; }
+      .signal-top { gap: 12px; }
+    }
+    @media print {
+      .report { width: 100%; padding: 0; }
+      details:not([open]) > *:not(summary) { display: block !important; }
+      .table-wrap { overflow: visible; }
+      table { min-width: 0; font-size: 10px; }
+    }
   </style>
 </head>
 <body>
-  <h1>deadair report</h1>
-  <p class="muted">Elastic Security 9.4.4 (elastic) · 2026-08-20 21:04:20 UTC</p>
-  <p class="muted">deadair.report.v1 · producer deadair v0.6.0 · recognized versions 8.x, 9.x<br>Capabilities: rule_inventory=supported, source_resolution=partial, freshness=supported, docs_storage=supported, schema=supported, required_fields=supported, ingest_lag=supported, candidate_parsing=supported, remote=listed-only</p>
-
-  <div class="grid">
-    <div class="metric"><span>Sources</span><strong>5</strong></div>
-    <div class="metric"><span>Degraded sources</span><strong>1</strong></div>
-    <div class="metric"><span>Low-volume sources</span><strong>0</strong></div>
-    <div class="metric"><span>Schema drift</span><strong>0</strong></div>
-    <div class="metric"><span>Dead detections</span><strong>2</strong></div>
-    <div class="metric"><span>Impaired detections</span><strong>2</strong></div>
-	<div class="metric"><span>Partial inputs</span><strong>0</strong></div>
-	    <div class="metric"><span>Stored unused telemetry</span><strong>4.1 KiB</strong></div>
-  </div>
 
 
-  <h2>Checks performed</h2>
-  <table>
-    <thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
-    <tbody><tr><td>source_resolution</td><td class="status-assessed">assessed</td><td></td></tr><tr><td>required_fields</td><td class="status-assessed">assessed</td><td></td></tr><tr><td>ingest_lag</td><td class="status-assessed">assessed</td><td>paired recent-event samples requested for 4 relevant source(s)</td></tr><tr><td>schema_drift</td><td class="status-assessed">assessed</td><td>compared with the saved schema snapshot</td></tr><tr><td>candidate_parsing</td><td class="status-disabled">disabled</td><td>no candidate rule file was supplied</td></tr></tbody>
-  </table>
+<main class="report">
+  <header class="hero">
+    <div class="hero-top">
+      <p class="brand">deadair / Elastic Security</p>
+      <span class="gate gate-failed">Gate failed</span>
+    </div>
+    <h1>2 detections can&#39;t fire</h1>
+    <p class="lede">Review the affected rules and sources below.</p>
+    <p class="meta"><time datetime="2026-08-22T03:13:44Z">22 Aug 2026, 03:13 UTC</time></p>
+
+    <div class="metrics">
+      <div class="metric"><span>Enabled detections</span><strong>5</strong></div>
+      <div class="metric"><span>Sources checked</span><strong>5</strong></div>
+      <div class="metric metric-alert"><span>Can't fire</span><strong>2</strong></div>
+      <div class="metric metric-warn"><span>Reduced visibility</span><strong>2</strong></div>
+      <div class="metric metric-alert"><span>Degraded sources</span><strong>1</strong></div>
 
 
 
-  <h2>Input resolution</h2>
-  <table>
-    <thead><tr><th>Rule ID</th><th>Input</th><th>Kind</th><th>Status</th><th>Resolved sources</th><th>Method</th><th>Detail</th></tr></thead>
-    <tbody>
+    </div>
 
-      <tr>
-        <td>aeea854a-c9c2-4f21-8073-4f59c24eeaa3</td>
-        <td>deadair-lab-lag</td>
-        <td>index_expression</td>
-        <td class="status-resolved">resolved</td>
-        <td>deadair-lab-lag</td>
-        <td>resolve_index</td>
-        <td></td>
-      </tr>
+  </header>
 
-      <tr>
-        <td>7defab08-683b-4409-b632-28fccfb7d762</td>
-        <td>deadair-lab-live</td>
-        <td>index_expression</td>
-        <td class="status-resolved">resolved</td>
-        <td>deadair-lab-live</td>
-        <td>resolve_index</td>
-        <td></td>
-      </tr>
 
-      <tr>
-        <td>a2ee9634-504a-43ce-9fb4-ad7b1a05f0bb</td>
-        <td>deadair-lab-registry-*</td>
-        <td>index_expression</td>
-        <td class="status-empty">empty</td>
-        <td></td>
-        <td>resolve_index</td>
-        <td></td>
-      </tr>
+  <section aria-labelledby="attention-heading">
+    <div class="section-heading">
+      <div>
+        <h2 id="attention-heading">Needs attention</h2>
+        <p class="section-copy">Confirmed findings and checks that need review.</p>
+      </div>
+    </div>
 
-      <tr>
-        <td>a704ce7d-558f-440e-9653-7c1ae29de55a</td>
-        <td>deadair-lab-schema</td>
-        <td>index_expression</td>
-        <td class="status-resolved">resolved</td>
-        <td>deadair-lab-schema</td>
-        <td>resolve_index</td>
-        <td></td>
-      </tr>
 
-      <tr>
-        <td>1117dbe7-be79-4868-9f5b-9a62b93de4b9</td>
-        <td>deadair-lab-stale</td>
-        <td>index_expression</td>
-        <td class="status-resolved">resolved</td>
-        <td>deadair-lab-stale</td>
-        <td>resolve_index</td>
-        <td></td>
-      </tr>
+    <h3>Detections that can't fire</h3>
+    <ul class="signal-list">
 
-    </tbody>
-  </table>
+      <li class="signal">
+        <div class="signal-top">
+          <p class="signal-title">Lab registry persistence</p>
+          <span class="badge severity-high">high</span>
+        </div>
+        <p>no matching source</p>
+
+      </li>
+
+      <li class="signal">
+        <div class="signal-top">
+          <p class="signal-title">Lab authentication source</p>
+          <span class="badge severity-medium">medium</span>
+        </div>
+        <p>all matching sources stale or empty</p>
+        <div class="tag-row"><span class="tag">deadair-lab-stale</span></div>
+      </li>
+
+    </ul>
 
 
 
+    <h3>Detections with reduced visibility</h3>
+    <ul class="signal-list">
 
-  <h2>Sources</h2>
-  <table>
-    <thead><tr><th>Name</th><th>Status</th><th>Docs</th><th>Size</th><th>Known consumers</th><th>Volume</th><th>Z-score</th><th>Schema</th><th>Ingest lag</th></tr></thead>
-    <tbody>
-
-      <tr>
-        <td>deadair-lab-lag</td>
-        <td class="status-ok">ok</td>
-        <td>2</td>
-        <td>8.2 KiB</td>
-        <td>1</td>
-        <td><span class="status-unknown">unknown</span></td>
-        <td>-</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>p95 2699s; max 2699s; n=2; paired-recent-events</td>
-      </tr>
-
-      <tr>
-        <td>deadair-lab-live</td>
-        <td class="status-ok">ok</td>
-        <td>1</td>
-        <td>5.4 KiB</td>
-        <td>1</td>
-        <td><span class="status-unknown">unknown</span></td>
-        <td>-</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>p95 0s; max 0s; n=1; paired-recent-events</td>
-      </tr>
-
-      <tr>
-        <td>deadair-lab-schema</td>
-        <td class="status-ok">ok</td>
-        <td>1</td>
-        <td>5.4 KiB</td>
-        <td>1</td>
-        <td><span class="status-unknown">unknown</span></td>
-        <td>-</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>p95 0s; max 0s; n=1; paired-recent-events</td>
-      </tr>
-
-      <tr>
-        <td>deadair-lab-stale</td>
-        <td class="status-stale">stale</td>
-        <td>1</td>
-        <td>5.4 KiB</td>
-        <td>1</td>
-        <td><span class="status-unknown">unknown</span></td>
-        <td>-</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>p95 259200s; max 259200s; n=1; paired-recent-events</td>
-      </tr>
-
-      <tr>
-        <td>deadair-lab-unused</td>
-        <td class="status-ok">ok</td>
-        <td>1</td>
-        <td>4.1 KiB</td>
-        <td>0</td>
-        <td><span class="status-unknown">unknown</span></td>
-        <td>-</td>
-        <td><span class="status-warming">warming</span></td>
-        <td>not assessed</td>
-      </tr>
-
-    </tbody>
-  </table>
-
-  <h2>Dead detections</h2>
-  <table>
-    <thead><tr><th>Severity</th><th>Name</th><th>Reason</th><th>Sources</th></tr></thead>
-    <tbody>
-
-      <tr><td>high</td><td>Lab registry persistence</td><td>no matching source</td><td></td></tr>
-
-      <tr><td>medium</td><td>Lab authentication source</td><td>all matching sources stale or empty</td><td>deadair-lab-stale</td></tr>
-
-    </tbody>
-  </table>
-
-  <h2>Impaired detections</h2>
-  <table>
-    <thead><tr><th>Severity</th><th>Name</th><th>Reasons</th><th>Missing fields</th><th>Lag evidence</th></tr></thead>
-    <tbody>
-
-      <tr><td>high</td><td>Lab parser field coverage</td><td>missing-fields</td><td>process.command_line</td><td>-</td></tr>
-
-      <tr><td>medium</td><td>Lab delayed ingest</td><td>lag-blind-window</td><td></td><td>p95 2699s; max 2699s; deadair-lab-lag</td></tr>
-
-    </tbody>
-  </table>
+      <li class="signal">
+        <div class="signal-top">
+          <p class="signal-title">Lab parser field coverage</p>
+          <span class="badge severity-high">high</span>
+        </div>
+        <p>missing fields</p>
+        <p class="action">Missing fields: process.command_line</p>
 
 
-  <h2>Required-field evidence</h2>
-  <table>
-    <thead><tr><th>Rule</th><th>Source</th><th>Status</th><th>Present</th><th>Missing</th><th>Detail</th></tr></thead>
-    <tbody>
+      </li>
 
-      <tr><td>Lab parser field coverage</td><td>deadair-lab-schema</td><td class="status-assessed">assessed</td><td>process.name</td><td>process.command_line</td><td></td></tr>
+      <li class="signal">
+        <div class="signal-top">
+          <p class="signal-title">Lab delayed ingest</p>
+          <span class="badge severity-medium">medium</span>
+        </div>
+        <p>lag blind window</p>
 
-    </tbody>
-  </table>
+        <p class="action">Ingest lag exceeds the rule window in deadair-lab-lag.</p>
+
+      </li>
+
+    </ul>
 
 
-	  <h2>Stored unused telemetry</h2>
 
-	  <table>
-    <thead><tr><th>Name</th><th>Docs</th><th>Size</th></tr></thead>
-    <tbody>
 
-      <tr><td>deadair-lab-unused</td><td>1</td><td>4.1 KiB</td></tr>
 
-    </tbody>
-	  </table>
 
+
+  </section>
+
+
+  <section aria-labelledby="sources-heading">
+    <div class="section-heading">
+      <div>
+        <h2 id="sources-heading">Sources</h2>
+        <p class="section-copy">The data feeds deadair resolved for this scan and the detections that depend on them.</p>
+      </div>
+      <span class="count">5 total</span>
+    </div>
+
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Sources">
+      <table>
+        <thead><tr><th>Source</th><th>Status</th><th>Age</th><th>Detections</th><th>Documents</th><th>Stored</th><th>Volume</th><th>Schema</th><th>Ingest lag</th></tr></thead>
+        <tbody>
+
+          <tr>
+            <td><strong>deadair-lab-lag</strong></td>
+            <td><span class="badge status-ok">ok</span></td>
+            <td>16s</td>
+            <td>1</td>
+            <td>2</td>
+            <td>8.2 KiB</td>
+            <td><span class="badge status-unknown">unknown</span></td>
+            <td><span class="badge status-warming">warming</span></td>
+            <td>p95 45m · max 45m</td>
+          </tr>
+
+          <tr>
+            <td><strong>deadair-lab-live</strong></td>
+            <td><span class="badge status-ok">ok</span></td>
+            <td>16s</td>
+            <td>1</td>
+            <td>1</td>
+            <td>5.4 KiB</td>
+            <td><span class="badge status-unknown">unknown</span></td>
+            <td><span class="badge status-warming">warming</span></td>
+            <td>p95 Not observed · max Not observed</td>
+          </tr>
+
+          <tr>
+            <td><strong>deadair-lab-schema</strong></td>
+            <td><span class="badge status-ok">ok</span></td>
+            <td>16s</td>
+            <td>1</td>
+            <td>1</td>
+            <td>5.4 KiB</td>
+            <td><span class="badge status-unknown">unknown</span></td>
+            <td><span class="badge status-warming">warming</span></td>
+            <td>p95 Not observed · max Not observed</td>
+          </tr>
+
+          <tr>
+            <td><strong>deadair-lab-stale</strong></td>
+            <td><span class="badge status-stale">stale</span></td>
+            <td>72h0m16s</td>
+            <td>1</td>
+            <td>1</td>
+            <td>5.4 KiB</td>
+            <td><span class="badge status-unknown">unknown</span></td>
+            <td><span class="badge status-warming">warming</span></td>
+            <td>p95 3d · max 3d</td>
+          </tr>
+
+          <tr>
+            <td><strong>deadair-lab-unused</strong></td>
+            <td><span class="badge status-ok">ok</span></td>
+            <td>16s</td>
+            <td>0</td>
+            <td>1</td>
+            <td>4.1 KiB</td>
+            <td><span class="badge status-unknown">unknown</span></td>
+            <td><span class="badge status-warming">warming</span></td>
+            <td>Not assessed</td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+
+
+    <h3>Stored unused telemetry</h3>
+
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Stored unused telemetry">
+        <table>
+          <thead><tr><th>Source</th><th>Documents</th><th>Stored</th></tr></thead>
+          <tbody><tr><td><strong>deadair-lab-unused</strong></td><td>1</td><td>4.1 KiB</td></tr></tbody>
+        </table>
+      </div>
+
+  </section>
+
+  <section aria-labelledby="evidence-heading">
+    <div class="section-heading">
+      <div>
+        <h2 id="evidence-heading">Evidence</h2>
+        <p class="section-copy">Open this when you need to audit how deadair reached the result.</p>
+      </div>
+    </div>
+
+    <details class="evidence-panel">
+      <summary class="detail-summary"><span>Evidence details</span></summary>
+      <div class="evidence-body">
+
+        <h3>Scan coverage</h3>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Scan coverage">
+          <table>
+            <thead><tr><th>Check</th><th>Status</th><th>What happened</th></tr></thead>
+            <tbody><tr><td><strong>Source resolution</strong></td><td><span class="badge status-assessed">assessed</span></td><td></td></tr><tr><td><strong>Required fields</strong></td><td><span class="badge status-assessed">assessed</span></td><td></td></tr><tr><td><strong>Ingest lag</strong></td><td><span class="badge status-assessed">assessed</span></td><td>paired recent-event samples requested for 4 relevant source(s)</td></tr><tr><td><strong>Schema drift</strong></td><td><span class="badge status-assessed">assessed</span></td><td>compared with the saved schema snapshot</td></tr><tr><td><strong>Candidate rule</strong></td><td><span class="badge status-disabled">disabled</span></td><td>no candidate rule file was supplied</td></tr></tbody>
+          </table>
+        </div>
+
+
+
+        <h3>Input resolution</h3>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Input resolution">
+          <table>
+            <thead><tr><th>Rule</th><th>Input</th><th>Kind</th><th>Status</th><th>Resolved sources</th><th>Technical evidence</th></tr></thead>
+            <tbody>
+
+              <tr>
+                <td class="technical">ef2b2b3a-25dd-4641-8ee5-a3c1b6d962d2</td>
+                <td>deadair-lab-lag</td>
+                <td>index expression</td>
+                <td><span class="badge status-resolved">resolved</span></td>
+                <td>deadair-lab-lag</td>
+                <td><details class="row-detail"><summary>Show</summary><p><code>resolve_index</code></p></details></td>
+              </tr>
+
+              <tr>
+                <td class="technical">8ecf85eb-baf0-4c27-83c0-989a3c63f907</td>
+                <td>deadair-lab-live</td>
+                <td>index expression</td>
+                <td><span class="badge status-resolved">resolved</span></td>
+                <td>deadair-lab-live</td>
+                <td><details class="row-detail"><summary>Show</summary><p><code>resolve_index</code></p></details></td>
+              </tr>
+
+              <tr>
+                <td class="technical">edf504f8-47ba-4750-b753-39e309a3a4b1</td>
+                <td>deadair-lab-registry-*</td>
+                <td>index expression</td>
+                <td><span class="badge status-empty">empty</span></td>
+                <td></td>
+                <td><details class="row-detail"><summary>Show</summary><p><code>resolve_index</code></p></details></td>
+              </tr>
+
+              <tr>
+                <td class="technical">297bae8b-cdd9-419b-a284-ea6a9815f260</td>
+                <td>deadair-lab-schema</td>
+                <td>index expression</td>
+                <td><span class="badge status-resolved">resolved</span></td>
+                <td>deadair-lab-schema</td>
+                <td><details class="row-detail"><summary>Show</summary><p><code>resolve_index</code></p></details></td>
+              </tr>
+
+              <tr>
+                <td class="technical">ac12deed-23cb-409f-b685-a0fa640efda1</td>
+                <td>deadair-lab-stale</td>
+                <td>index expression</td>
+                <td><span class="badge status-resolved">resolved</span></td>
+                <td>deadair-lab-stale</td>
+                <td><details class="row-detail"><summary>Show</summary><p><code>resolve_index</code></p></details></td>
+              </tr>
+
+            </tbody>
+          </table>
+        </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+        <h3>Required-field evidence</h3>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Required-field evidence">
+          <table>
+            <thead><tr><th>Rule</th><th>Source</th><th>Status</th><th>Present</th><th>Missing</th><th>Detail</th></tr></thead>
+            <tbody>
+
+              <tr><td>Lab parser field coverage</td><td>deadair-lab-schema</td><td><span class="badge status-assessed">assessed</span></td><td>process.name</td><td>process.command_line</td><td></td></tr>
+
+            </tbody>
+          </table>
+        </div>
+
+
+        <h3>About this scan</h3>
+        <p class="section-copy">Elastic Security 9.4.4 (elastic) · deadair.report.v1 · producer deadair v0.7.0 · recognized versions 8.x, 9.x</p>
+
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Backend capabilities">
+          <table>
+            <thead><tr><th>Capability</th><th>Status</th></tr></thead>
+            <tbody><tr><td>Rule inventory</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Source resolution</td><td><span class="badge status-partial">Partial</span></td></tr><tr><td>Source freshness</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Document inventory</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Field schema</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Required fields</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Ingest lag</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Candidate rule</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Remote inputs</td><td><span class="badge status-listed-only">Listed only</span></td></tr><tr><td>Dependency resolution</td><td><span class="badge status-unavailable">Unavailable</span></td></tr><tr><td>Cross-workspace inputs</td><td><span class="badge status-unavailable">Unavailable</span></td></tr><tr><td>Source lineage</td><td><span class="badge status-unavailable">Unavailable</span></td></tr><tr><td>Rule provenance</td><td><span class="badge status-unavailable">Unavailable</span></td></tr></tbody>
+          </table>
+        </div>
+
+      </div>
+    </details>
+  </section>
+
+  <footer>deadair / read-only assessment</footer>
+</main>
 </body>
 </html>

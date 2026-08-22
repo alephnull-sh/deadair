@@ -1,9 +1,8 @@
 # Best practices
 
-deadair is most useful when teams treat the first report as a coverage audit and later reports as
-regression monitoring. If you wire every first-run finding straight to paging, people will ignore
-the tool. The [usage guide](usage.md#read-the-findings) defines report terms and the evidence behind
-each finding.
+Treat the first report as a coverage audit. Use later reports to catch regressions. Paging on every
+first-run finding will only teach people to ignore the tool. The
+[usage guide](usage.md#read-the-findings) defines the report terms and evidence behind each finding.
 
 ## Roll out in this order
 
@@ -76,7 +75,7 @@ owner:              detection engineering
 - Treat `unknown` as a setup problem, not a healthy source. If many sources are unknown, fix
   `@timestamp` mappings and read privileges.
 - Before triaging no-match findings, verify one known-good rule/source pair. A role that cannot see
-  an expected index makes that index indistinguishable from an absent one.
+  an expected source makes it indistinguishable from an absent one.
 
 ## Route to the right owners
 
@@ -96,8 +95,9 @@ same incident, but they often belong to different queues.
 ## Credentials
 
 - Use one least-privilege credential per SIEM instance. `deadair setup` prints the required role.
-- Do not use admin credentials. The integration suite proves the documented roles are enough and
-  verifies representative writes are rejected.
+- Do not use admin credentials. Trusted Elastic and OpenSearch integration tests verify the
+  documented roles and representative write denials. Sentinel uses a separate recorded conformance
+  lab; see [validation status](validation.md) for its tested boundary.
 - Prefer secret files for daemons, with mode `0600`, or your normal secret manager writing those
   files.
 - Rotate deadair credentials like any other monitoring credential. Run `deadair check` after
@@ -131,10 +131,16 @@ For a full MSSP deployment shape, see [mssp.md](mssp.md).
 
 ## Know the limits
 
-- deadair proves a rule can see data. It does not prove the rule logic is correct.
+- deadair proves a rule can see its observable data prerequisites. It does not prove the rule logic
+  is correct or that an attack simulation will produce an alert.
 - Findings describe observed evidence, not root cause. Pattern changes, onboarding scope, source
   outages, and credential visibility can produce similar first-order symptoms.
 - It does not evaluate events inline and it does not tune detections.
-- Cross-cluster rules are listed as `remote_rules`. Scan the remote cluster as its own fleet
-  instance if you want coverage proof.
-- deadair currently has backends for Elastic Security and OpenSearch Security Analytics.
+- Unmapped Elastic and OpenSearch cross-cluster inputs are listed as `remote_rules`. Scan the remote
+  cluster as its own fleet instance if you need coverage proof.
+- Sentinel can assess explicitly mapped literal `workspace()` references. A rule that crosses a
+  subscription boundary still needs an exact successful `SentinelHealth` event after the latest
+  rule change and within its expected run cadence before deadair can corroborate execution, even
+  when the scanner can read the source. deadair does
+  not separately identify tenant boundaries, and Azure Lighthouse layouts are not live-validated.
+- deadair has backends for Elastic Security, OpenSearch Security Analytics, and Microsoft Sentinel.

@@ -43,6 +43,121 @@ func TestLifecycleDoesNotRecoverDisconnectedFindingWhenResolutionBecomesUnavaila
 	}
 }
 
+func TestUncertainDiagnosticSuppressesRuleVerdictAndLifecycle(t *testing.T) {
+	store := state.New()
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	rule := backend.Rule{
+		ID: "mixed-permission", Name: "Mixed permission", Enabled: true, Severity: "high",
+		Patterns: []string{"VisibleA", "DeniedB"},
+	}
+	sources := []backend.Source{{Name: "VisibleA", Docs: 10, LastEvent: now.Add(-2 * time.Hour)}}
+	build := func(resolutions []backend.InputResolution, assessment backend.EvidenceStatus) *Report {
+		opts := recoveryOptions(store, RuntimeAssessment{Name: AssessmentSourceResolution, Status: assessment})
+		opts.Check.Now = func() time.Time { return now }
+		return BuildWithOptions("sentinel", graph.BuildResolved([]backend.Rule{rule}, sources, resolutions), opts)
+	}
+	first := build([]backend.InputResolution{{
+		RuleID: rule.ID, Expression: "VisibleA", Status: backend.ResolutionResolved,
+		ResolvedSources: []string{"VisibleA"}, ObservedAt: now,
+	}}, backend.EvidenceAssessed)
+	var priorRuleFinding Finding
+	for _, finding := range first.Findings {
+		if finding.RuleID == rule.ID {
+			priorRuleFinding = finding
+			break
+		}
+	}
+	if priorRuleFinding.ID == "" || priorRuleFinding.Reason != ReasonStarved {
+		t.Fatalf("initial rule finding = %+v", first.Findings)
+	}
+
+	second := build([]backend.InputResolution{
+		{
+			RuleID: rule.ID, Expression: "VisibleA,DeniedB", Status: backend.ResolutionResolved,
+			ResolvedSources: []string{"VisibleA"}, ObservedAt: now,
+		},
+		{
+			RuleID: rule.ID, Selector: "DeniedB", Expression: "DeniedB", Diagnostic: true,
+			Status: backend.ResolutionUnavailable, Detail: "permission evidence unavailable", ObservedAt: now,
+		},
+	}, backend.EvidenceIncomplete)
+	if len(second.DeadDetections) != 0 || len(second.ImpairedDetections) != 0 || len(second.PartialInputCoverage) != 0 ||
+		len(second.UnmappedRules) != 1 || second.UnmappedRules[0].AssessmentStatus != backend.ResolutionUnavailable {
+		t.Fatalf("uncertain diagnostic produced a rule verdict: %+v", second)
+	}
+	for _, finding := range second.Findings {
+		if finding.RuleID == rule.ID {
+			t.Fatalf("uncertain diagnostic produced a rule finding: %+v", finding)
+		}
+	}
+	for _, finding := range second.RecoveredFindings {
+		if finding.ID == priorRuleFinding.ID {
+			t.Fatalf("uncertain diagnostic recovered the prior rule finding: %+v", finding)
+		}
+	}
+	for _, stored := range store.Findings {
+		if stored.FindingID == priorRuleFinding.ID && !stored.Active {
+			t.Fatal("uncertain diagnostic deactivated the prior rule finding")
+		}
+	}
+}
+
+func TestUncertainDiagnosticDoesNotRecoverImpairedFinding(t *testing.T) {
+	store := state.New()
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	rule := backend.Rule{
+		ID: "field-permission", Name: "Field permission", Enabled: true, Severity: "medium",
+		Patterns: []string{"VisibleA", "DeniedB"}, RequiredFields: []string{"process.name"},
+	}
+	sources := []backend.Source{{Name: "VisibleA", Docs: 10, LastEvent: now}}
+	build := func(resolutions []backend.InputResolution, fields map[string]backend.FieldEvidence, resolutionStatus backend.EvidenceStatus) *Report {
+		opts := recoveryOptions(store,
+			RuntimeAssessment{Name: AssessmentSourceResolution, Status: resolutionStatus},
+			RuntimeAssessment{Name: AssessmentRequiredFields, Status: backend.EvidenceAssessed},
+		)
+		opts.Check.Now = func() time.Time { return now }
+		opts.FieldEvidence = fields
+		return BuildWithOptions("sentinel", graph.BuildResolved([]backend.Rule{rule}, sources, resolutions), opts)
+	}
+	resolved := backend.InputResolution{
+		RuleID: rule.ID, Expression: "VisibleA", Status: backend.ResolutionResolved,
+		ResolvedSources: []string{"VisibleA"}, ObservedAt: now,
+	}
+	first := build([]backend.InputResolution{resolved}, map[string]backend.FieldEvidence{
+		"VisibleA": {Status: backend.EvidenceAssessed, Fields: map[string]bool{}},
+	}, backend.EvidenceAssessed)
+	var prior Finding
+	for _, finding := range first.Findings {
+		if finding.RuleID == rule.ID && finding.Reason == ReasonMissingFields {
+			prior = finding
+			break
+		}
+	}
+	if prior.ID == "" {
+		t.Fatalf("initial impaired finding = %+v", first.Findings)
+	}
+	resolved.Expression = "VisibleA,DeniedB"
+	second := build([]backend.InputResolution{
+		resolved,
+		{
+			RuleID: rule.ID, Selector: "DeniedB", Expression: "DeniedB", Diagnostic: true,
+			Status: backend.ResolutionUnavailable, ObservedAt: now,
+		},
+	}, map[string]backend.FieldEvidence{
+		"VisibleA": {Status: backend.EvidenceAssessed, Fields: map[string]bool{"process.name": true}},
+	}, backend.EvidenceIncomplete)
+	for _, finding := range second.RecoveredFindings {
+		if finding.ID == prior.ID {
+			t.Fatalf("uncertain input recovered the impaired finding: %+v", finding)
+		}
+	}
+	for _, stored := range store.Findings {
+		if stored.FindingID == prior.ID && !stored.Active {
+			t.Fatal("uncertain input deactivated the impaired finding")
+		}
+	}
+}
+
 func TestLifecycleRecoveryIgnoresAnotherRulesCollidingBackendObjectID(t *testing.T) {
 	store := state.New()
 	now := time.Now().UTC()

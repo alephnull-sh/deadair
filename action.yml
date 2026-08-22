@@ -3,7 +3,7 @@ description: Run a read-only single-instance deadair scan and retain the JSON ev
 
 inputs:
   backend:
-    description: Backend to scan (elastic or opensearch)
+    description: Backend to scan (elastic, opensearch, or sentinel)
     required: false
     default: elastic
   elasticsearch-url:
@@ -13,7 +13,7 @@ inputs:
     description: Kibana base URL
     required: false
   api-key:
-    description: Elastic API key, or OpenSearch API key when opensearch-api-key is empty
+    description: Elastic API key; also used for OpenSearch when opensearch-api-key is empty
     required: false
   api-key-file:
     description: Path to a file containing the Elastic or OpenSearch API key
@@ -33,28 +33,43 @@ inputs:
   opensearch-api-key:
     description: OpenSearch API key
     required: false
+  azure-subscription-id:
+    description: Azure subscription containing the Sentinel workspace
+    required: false
+  azure-resource-group:
+    description: Azure resource group containing the Sentinel workspace
+    required: false
+  sentinel-workspace:
+    description: Sentinel Log Analytics workspace resource name
+    required: false
+  sentinel-workspace-id:
+    description: Log Analytics workspace customer ID override; discovered through ARM when empty
+    required: false
+  sentinel-remotes-file:
+    description: Path to a JSON file mapping literal workspace() targets for cross-workspace rules
+    required: false
   candidate-rule:
-    description: Optional Elastic rule JSON/ndjson or OpenSearch detector JSON to assess without installing it
+    description: Elastic rule JSON/NDJSON, OpenSearch detector JSON, or Sentinel Scheduled/NRT JSON, YAML, or ARM template to assess without installing
     required: false
   policy-file:
-    description: Optional deadair policy file controlling which findings gate the scan
+    description: Path to a deadair policy file that controls which findings gate the scan
     required: false
   scan-args:
-    description: Additional space-separated assessment, TLS, and namespace flags; backend, endpoint, credential, output, redaction, policy, and candidate options use dedicated inputs
+    description: Extra space-separated assessment, TLS, and namespace flags; use dedicated inputs for backend, endpoint, credential, Sentinel topology, output, redaction, policy, and candidate options
     required: false
   redact-report:
-    description: Redact names in terminal output and the JSON artifact; disabling this may expose sensitive blind-spot evidence
+    description: Redact names in terminal output and the JSON artifact; disabling this can expose sensitive blind-spot evidence
     required: false
     default: "true"
   redact-key-file:
-    description: Optional path to an HMAC key file for stable redacted names; pass the key through a secret file, never as an argument
+    description: Path to an HMAC key file for stable redacted names; provide the key through a secret file, never as an argument
     required: false
   fail-on-findings:
-    description: Fail the job when deadair exits 1 with findings
+    description: Fail the job when findings make deadair exit 1
     required: false
     default: "true"
   artifact-name:
-    description: Name of the uploaded JSON report artifact; use a unique value for each matrix job or repeated invocation
+    description: Name for the uploaded JSON report artifact; use a unique value for each matrix job or repeated invocation
     required: false
     default: deadair-report
 
@@ -80,6 +95,21 @@ runs:
         DEADAIR_OPENSEARCH_USERNAME: ""
         DEADAIR_OPENSEARCH_PASSWORD: ""
         DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_AZURE_SUBSCRIPTION_ID: ""
+        DEADAIR_AZURE_RESOURCE_GROUP: ""
+        DEADAIR_SENTINEL_WORKSPACE: ""
+        DEADAIR_SENTINEL_WORKSPACE_ID: ""
+        DEADAIR_SENTINEL_REMOTES: ""
+        AZURE_TENANT_ID: ""
+        AZURE_CLIENT_ID: ""
+        AZURE_CLIENT_SECRET: ""
+        AZURE_USERNAME: ""
+        AZURE_PASSWORD: ""
+        AZURE_CLIENT_CERTIFICATE_PATH: ""
+        AZURE_CLIENT_CERTIFICATE_PASSWORD: ""
+        AZURE_FEDERATED_TOKEN_FILE: ""
+        AZURE_AUTHORITY_HOST: ""
+        AZURE_TOKEN_CREDENTIALS: ""
         DEADAIR_REDACT_KEY_FILE: ""
       with:
         go-version-file: ${{ github.action_path }}/go.mod
@@ -97,6 +127,21 @@ runs:
         DEADAIR_OPENSEARCH_USERNAME: ""
         DEADAIR_OPENSEARCH_PASSWORD: ""
         DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_AZURE_SUBSCRIPTION_ID: ""
+        DEADAIR_AZURE_RESOURCE_GROUP: ""
+        DEADAIR_SENTINEL_WORKSPACE: ""
+        DEADAIR_SENTINEL_WORKSPACE_ID: ""
+        DEADAIR_SENTINEL_REMOTES: ""
+        AZURE_TENANT_ID: ""
+        AZURE_CLIENT_ID: ""
+        AZURE_CLIENT_SECRET: ""
+        AZURE_USERNAME: ""
+        AZURE_PASSWORD: ""
+        AZURE_CLIENT_CERTIFICATE_PATH: ""
+        AZURE_CLIENT_CERTIFICATE_PASSWORD: ""
+        AZURE_FEDERATED_TOKEN_FILE: ""
+        AZURE_AUTHORITY_HOST: ""
+        AZURE_TOKEN_CREDENTIALS: ""
         DEADAIR_REDACT_KEY_FILE: ""
       run: bash "${{ github.action_path }}/.github/actions/deadair/build.sh"
 
@@ -112,6 +157,11 @@ runs:
         DEADAIR_OPENSEARCH_USERNAME: ${{ inputs.opensearch-username }}
         DEADAIR_OPENSEARCH_PASSWORD: ${{ inputs.opensearch-password }}
         DEADAIR_OPENSEARCH_API_KEY: ${{ inputs.opensearch-api-key }}
+        DEADAIR_AZURE_SUBSCRIPTION_ID: ${{ inputs.azure-subscription-id }}
+        DEADAIR_AZURE_RESOURCE_GROUP: ${{ inputs.azure-resource-group }}
+        DEADAIR_SENTINEL_WORKSPACE: ${{ inputs.sentinel-workspace }}
+        DEADAIR_SENTINEL_WORKSPACE_ID: ${{ inputs.sentinel-workspace-id }}
+        DEADAIR_SENTINEL_REMOTES: ${{ inputs.sentinel-remotes-file }}
         DEADAIR_REDACT_KEY_FILE: ""
         DEADAIR_ACTION_API_KEY_FILE: ${{ inputs.api-key-file }}
         DEADAIR_ACTION_OPENSEARCH_PASSWORD_FILE: ${{ inputs.opensearch-password-file }}
@@ -136,6 +186,21 @@ runs:
         DEADAIR_OPENSEARCH_USERNAME: ""
         DEADAIR_OPENSEARCH_PASSWORD: ""
         DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_AZURE_SUBSCRIPTION_ID: ""
+        DEADAIR_AZURE_RESOURCE_GROUP: ""
+        DEADAIR_SENTINEL_WORKSPACE: ""
+        DEADAIR_SENTINEL_WORKSPACE_ID: ""
+        DEADAIR_SENTINEL_REMOTES: ""
+        AZURE_TENANT_ID: ""
+        AZURE_CLIENT_ID: ""
+        AZURE_CLIENT_SECRET: ""
+        AZURE_USERNAME: ""
+        AZURE_PASSWORD: ""
+        AZURE_CLIENT_CERTIFICATE_PATH: ""
+        AZURE_CLIENT_CERTIFICATE_PASSWORD: ""
+        AZURE_FEDERATED_TOKEN_FILE: ""
+        AZURE_AUTHORITY_HOST: ""
+        AZURE_TOKEN_CREDENTIALS: ""
         DEADAIR_REDACT_KEY_FILE: ""
       run: bash "${{ github.action_path }}/.github/actions/deadair/summary.sh"
 
@@ -151,6 +216,21 @@ runs:
         DEADAIR_OPENSEARCH_USERNAME: ""
         DEADAIR_OPENSEARCH_PASSWORD: ""
         DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_AZURE_SUBSCRIPTION_ID: ""
+        DEADAIR_AZURE_RESOURCE_GROUP: ""
+        DEADAIR_SENTINEL_WORKSPACE: ""
+        DEADAIR_SENTINEL_WORKSPACE_ID: ""
+        DEADAIR_SENTINEL_REMOTES: ""
+        AZURE_TENANT_ID: ""
+        AZURE_CLIENT_ID: ""
+        AZURE_CLIENT_SECRET: ""
+        AZURE_USERNAME: ""
+        AZURE_PASSWORD: ""
+        AZURE_CLIENT_CERTIFICATE_PATH: ""
+        AZURE_CLIENT_CERTIFICATE_PASSWORD: ""
+        AZURE_FEDERATED_TOKEN_FILE: ""
+        AZURE_AUTHORITY_HOST: ""
+        AZURE_TOKEN_CREDENTIALS: ""
         DEADAIR_REDACT_KEY_FILE: ""
       with:
         name: ${{ inputs.artifact-name }}
@@ -173,6 +253,21 @@ runs:
         DEADAIR_OPENSEARCH_USERNAME: ""
         DEADAIR_OPENSEARCH_PASSWORD: ""
         DEADAIR_OPENSEARCH_API_KEY: ""
+        DEADAIR_AZURE_SUBSCRIPTION_ID: ""
+        DEADAIR_AZURE_RESOURCE_GROUP: ""
+        DEADAIR_SENTINEL_WORKSPACE: ""
+        DEADAIR_SENTINEL_WORKSPACE_ID: ""
+        DEADAIR_SENTINEL_REMOTES: ""
+        AZURE_TENANT_ID: ""
+        AZURE_CLIENT_ID: ""
+        AZURE_CLIENT_SECRET: ""
+        AZURE_USERNAME: ""
+        AZURE_PASSWORD: ""
+        AZURE_CLIENT_CERTIFICATE_PATH: ""
+        AZURE_CLIENT_CERTIFICATE_PASSWORD: ""
+        AZURE_FEDERATED_TOKEN_FILE: ""
+        AZURE_AUTHORITY_HOST: ""
+        AZURE_TOKEN_CREDENTIALS: ""
         DEADAIR_REDACT_KEY_FILE: ""
       run: bash "${{ github.action_path }}/.github/actions/deadair/gate.sh"
 

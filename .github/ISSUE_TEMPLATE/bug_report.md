@@ -6,11 +6,15 @@ labels: bug
 
 **deadair version** (`deadair version`):
 
-**Backend and version** (Elastic / OpenSearch, x.y.z):
+**Backend and version** (Elastic, OpenSearch, or Sentinel; x.y.z where applicable):
 
 **Command run:**
 
-**Expected / actual:**
+**What happened?**
 
-**Output or report excerpt.** Reports name blind detections and telemetry gaps. Please share
-excerpts from `--redact` output only.
+**What did you expect?**
+
+**Smallest reproduction or report excerpt:**
+
+Reports can name blind detections and telemetry gaps. Share only `--redact` output. Remove
+credentials and internal addresses from commands.

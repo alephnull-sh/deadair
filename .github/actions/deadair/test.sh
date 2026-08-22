@@ -10,24 +10,62 @@ bash -n "$script_dir/build.sh" "$script_dir/scan.sh" "$script_dir/summary.sh" "$
 
 step_count=$(grep -c '^    - name:' "$action_file")
 non_scan_steps=$((step_count - 1))
-credential_env=(
+scan_input_env=(
 	DEADAIR_BACKEND DEADAIR_ES_URL DEADAIR_KIBANA_URL DEADAIR_API_KEY
 	DEADAIR_OPENSEARCH_URL DEADAIR_OPENSEARCH_USERNAME
 	DEADAIR_OPENSEARCH_PASSWORD DEADAIR_OPENSEARCH_API_KEY
+	DEADAIR_AZURE_SUBSCRIPTION_ID DEADAIR_AZURE_RESOURCE_GROUP
+	DEADAIR_SENTINEL_WORKSPACE DEADAIR_SENTINEL_WORKSPACE_ID
+	DEADAIR_SENTINEL_REMOTES
 )
-credential_input=(
+scan_input=(
 	backend elasticsearch-url kibana-url api-key
 	opensearch-url opensearch-username opensearch-password opensearch-api-key
+	azure-subscription-id azure-resource-group sentinel-workspace sentinel-workspace-id
+	sentinel-remotes-file
 )
-for i in "${!credential_env[@]}"; do
-	name=${credential_env[$i]}
+for i in "${!scan_input_env[@]}"; do
+	name=${scan_input_env[$i]}
 	blank_count=$(grep -Fc "        $name: \"\"" "$action_file" || true)
 	if [[ $blank_count -ne $non_scan_steps ]]; then
 		printf '%s is not blanked in every non-scan Action step\n' "$name" >&2
 		exit 1
 	fi
-	expected_mapping=$(printf '        %s: ${{ inputs.%s }}' "$name" "${credential_input[$i]}")
+	occurrence_count=$(grep -Fc "        $name:" "$action_file" || true)
+	if [[ $occurrence_count -ne $step_count ]]; then
+		printf '%s must be mapped only by Scan and blanked everywhere else\n' "$name" >&2
+		exit 1
+	fi
+	expected_mapping=$(printf '        %s: ${{ inputs.%s }}' "$name" "${scan_input[$i]}")
 	grep -Fq "$expected_mapping" "$action_file"
+done
+azure_identity_env=(
+	AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET
+	AZURE_USERNAME AZURE_PASSWORD
+	AZURE_CLIENT_CERTIFICATE_PATH AZURE_CLIENT_CERTIFICATE_PASSWORD
+	AZURE_FEDERATED_TOKEN_FILE AZURE_AUTHORITY_HOST AZURE_TOKEN_CREDENTIALS
+)
+for name in "${azure_identity_env[@]}"; do
+	blank_count=$(grep -Fc "        $name: \"\"" "$action_file" || true)
+	if [[ $blank_count -ne $non_scan_steps ]]; then
+		printf '%s is not blanked in every non-scan Action step\n' "$name" >&2
+		exit 1
+	fi
+	occurrence_count=$(grep -Fc "        $name:" "$action_file" || true)
+	if [[ $occurrence_count -ne $non_scan_steps ]]; then
+		printf '%s must be inherited only by the Scan step\n' "$name" >&2
+		exit 1
+	fi
+done
+for name in \
+	azure-tenant-id azure-client-id azure-client-secret azure-client-secret-file \
+	azure-username azure-password \
+	azure-client-certificate azure-client-certificate-path azure-client-certificate-password \
+	azure-federated-token azure-federated-token-file azure-authority-host azure-token-credentials; do
+	if grep -Fq "  $name:" "$action_file"; then
+		printf '%s must not be exposed as an Action input\n' "$name" >&2
+		exit 1
+	fi
 done
 redact_blank_count=$(grep -Fc '        DEADAIR_REDACT_KEY_FILE: ""' "$action_file" || true)
 if [[ $redact_blank_count -ne $step_count ]]; then
@@ -68,6 +106,16 @@ reserved_output="$tmp_dir/reserved-output"
 for reserved in \
 	'--redact=false' '-redact=false' '--json' '-out=other.json' \
 	'--api-key-file=other.key' '--backend=opensearch' '--fleet=fleet.json' \
+	'--azure-subscription' '--azure-subscription=subscription-a' \
+	'-azure-subscription' '-azure-subscription=subscription-a' \
+	'--azure-resource-group' '--azure-resource-group=sentinel-rg' \
+	'-azure-resource-group' '-azure-resource-group=sentinel-rg' \
+	'--sentinel-workspace' '--sentinel-workspace=sentinel-lab' \
+	'-sentinel-workspace' '-sentinel-workspace=sentinel-lab' \
+	'--sentinel-workspace-id' '--sentinel-workspace-id=00000000-0000-0000-0000-000000000000' \
+	'-sentinel-workspace-id' '-sentinel-workspace-id=00000000-0000-0000-0000-000000000000' \
+	'--sentinel-remotes' '--sentinel-remotes=sentinel-remotes.json' \
+	'-sentinel-remotes' '-sentinel-remotes=sentinel-remotes.json' \
 	'-h' '--help'; do
 	set +e
 	RUNNER_TEMP="$runner_tmp" \
