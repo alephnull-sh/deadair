@@ -52,9 +52,7 @@ It catches:
 - on Sentinel, rules whose known sources use an incompatible Basic or Auxiliary table plan;
 - on Elastic and OpenSearch, healthy telemetry that no enabled detection reads.
 
-deadair currently works with Elastic Security, OpenSearch Security Analytics, and Microsoft
-Sentinel. Backend-specific gaps stay marked unavailable or unassessed instead of being treated as
-healthy or dead.
+deadair supports Elastic Security, OpenSearch Security Analytics, and Microsoft Sentinel.
 
 ## Quick start
 
@@ -65,12 +63,19 @@ Download a binary for macOS, Linux, or Windows from
 go install github.com/alephnull-sh/deadair/cmd/deadair@latest
 ```
 
-Connect a read-only SIEM credential:
+Print the read-only setup for your SIEM:
 
 ```sh
-deadair setup elastic   # print the least-privilege setup
-deadair check           # verify the credential can scan
-deadair scan            # assess live rules and telemetry
+deadair setup elastic      # Elastic Security
+deadair setup opensearch   # OpenSearch Security Analytics
+deadair setup sentinel     # Microsoft Sentinel
+```
+
+Run one setup, then verify and scan:
+
+```sh
+deadair check   # verify the credential can scan
+deadair scan    # assess live rules and telemetry
 ```
 
 Exit codes are stable: `0` passes the configured gate, `1` means gated findings, and `2` means the scan failed.
@@ -84,11 +89,10 @@ Exit codes are stable: `0` passes the configured gate, `1` means gated findings,
 | Measure | checks source freshness, schema, storage, and timing where the backend provides authoritative evidence; exact document and storage totals are unavailable on Sentinel |
 | Report | emits terminal, JSON, HTML, fleet rollups, and Prometheus metrics with the evidence behind each verdict |
 
-On Sentinel, deadair can surface two quieter failures that table health alone misses: the filtered
-subset used by one rule has gone silent, or a summary pipeline feeding an enabled detection has
-failed or fallen behind. These are advisory signals. They stay visible without changing findings,
-the gate, or the exit code. The lab had no eligible filtered query and no `LASummaryLogs` rows, so
-both checks currently have fixture coverage only.
+On Sentinel, deadair can also report when the filtered data used by one rule has gone quiet or a
+summary pipeline feeding a detection has failed or fallen behind. Both checks are advisory and do
+not affect findings, gates, or exit codes. The disposable lab had no eligible filtered query or
+`LASummaryLogs` rows, so both have only been tested with fixtures.
 
 Sentinel JSON and HTML reports also retain non-telemetry dependency evidence, structural lineage
 for summary tables consumed by enabled detections, and exact-ID rule-template and Content Hub
@@ -106,9 +110,9 @@ being treated as current. Structural summary lineage was exercised in the dispos
   <sub>Read-only scan of the disposable Sentinel lab after its short-lived telemetry expired. The stale, missing, incompatible, partial, and unsupported cases are deliberate. Re-record it from the <a href="integration/README.md#microsoft-sentinel">documented disposable lab</a> with <code>make record-sentinel-lab</code>.</sub>
 </p>
 
-deadair proves whether a detection's observable telemetry prerequisites are present and healthy. It
-does not prove that the rule logic is correct or that a simulated attack will produce an alert. Pair
-it with static rule validation and end-to-end detection testing for those layers.
+deadair checks whether a detection's telemetry is present and healthy. It does not validate rule
+logic or prove that a simulated attack will fire an alert. Use static rule validation and end-to-end
+detection tests for those jobs.
 
 ## Findings
 
