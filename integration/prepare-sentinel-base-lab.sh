@@ -4,7 +4,8 @@ set -eu
 # Provisions only the named base fixtures consumed by TestSentinelReadOnlyLab.
 # The resource group, workspace, Sentinel onboarding, budget, provider
 # registration, and provisioner identity are external prerequisites. plan is
-# offline. apply and cleanup require the exact confirmation marker below.
+# offline. apply, refresh-summary-proof, and cleanup require the exact
+# confirmation marker below.
 
 mode=${1:-plan}
 subscription_id=${DEADAIR_AZURE_SUBSCRIPTION_ID:-}
@@ -14,31 +15,31 @@ workspace_id=${DEADAIR_SENTINEL_WORKSPACE_ID:-}
 confirmation=${DEADAIR_SENTINEL_BASE_LAB_CONFIRM:-}
 
 fixture_marker=deadair-sentinel-base-validation
-rule_description='Disposable deadair Sentinel conformance rule.'
-function_category='deadair lab'
-dcr_name=deadair-sentinel-base-dcr
+rule_description='Disposable Sentinel lab rule for deadair conformance testing.'
+function_category='identity security lab'
+dcr_name="${workspace}-dcr"
 dcr_destination=labWorkspace
 
 base_function_id=7aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
-base_function=DeadairLabSource
-base_function_body='DeadairFresh_CL | project TimeGenerated, EventId, Marker'
+base_function=RecentIdentitySignIns
+base_function_body='WorkforceSignIn_CL | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
 parameterized_function_id=7bbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
-parameterized_function=DeadairLabParameterized
-parameterized_function_body='DeadairFresh_CL | where Marker == marker | project TimeGenerated, EventId, Marker'
-parameterized_function_parameters=marker:string
+parameterized_function=IdentitySignInsByUser
+parameterized_function_body='WorkforceSignIn_CL | where UserPrincipalName == userPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+parameterized_function_parameters=userPrincipalName:string
 
 nrt_rule_id=78888888-8888-4888-8888-888888888888
-nrt_display='deadair lab - nrt dependency'
-nrt_query='DeadairFresh_CL | where TimeGenerated < datetime(1900-01-01)'
+nrt_display='[lab] Suspicious interactive sign-in (NRT)'
+nrt_query='WorkforceSignIn_CL | where TimeGenerated < datetime(1900-01-01)'
 
 predicate_rule_id=77777777-7777-4777-8777-777777777777
-predicate_rule_display='deadair lab - predicate freshness'
-predicate_rule_query="DeadairPredicate_CL | where DeviceVendor == 'Deadair Labs' | project TimeGenerated, EventId, DeviceVendor"
+predicate_rule_display='[lab] Palo Alto firewall telemetry stopped'
+predicate_rule_query="PerimeterSecurity_CL | where DeviceVendor == 'Palo Alto Networks' and DeviceProduct == 'PAN-OS' | project TimeGenerated, SessionId, DeviceVendor, DeviceProduct, SourceIpAddress, DestinationIpAddress, DestinationPort, DeviceAction"
 
 case "$mode" in
-plan|apply|cleanup) ;;
+plan|apply|refresh-summary-proof|cleanup) ;;
 *)
-	echo "usage: $0 [plan|apply|cleanup]" >&2
+	echo "usage: $0 [plan|apply|refresh-summary-proof|cleanup]" >&2
 	exit 2
 	;;
 esac
@@ -79,6 +80,11 @@ case "$workspace" in
 	exit 2
 	;;
 esac
+workspace_length=${#workspace}
+if [ "$workspace_length" -lt 4 ] || [ "$workspace_length" -gt 26 ]; then
+	echo "DEADAIR_SENTINEL_WORKSPACE must contain 4 to 26 characters so its Direct DCR name remains valid" >&2
+	exit 2
+fi
 if ! valid_uuid "$workspace_id"; then
 	echo "DEADAIR_SENTINEL_WORKSPACE_ID must be a UUID" >&2
 	exit 2
@@ -104,14 +110,15 @@ print_plan() {
 	echo "  existing resource group: /subscriptions/$subscription_id/resourceGroups/$resource_group"
 	echo "  existing Sentinel workspace: $workspace_path"
 	echo "  expected workspace customer ID: $workspace_id"
-	echo "  create eight final tables; create then remove DeadairRemoved_CL"
+	echo "  create eight final tables; create then remove PartnerSSOAuth_CL"
 	echo "  create two saved workspace functions"
 	echo "  create one tagged direct-ingestion DCR: $dcr_path"
-	echo "  ingest six one-row samples (fresh, 45m lag, 90m stale, unused, predicate, Basic summary source)"
+	echo "  ingest seven rows: current workforce auth, 45m SaaS lag, 90m remote-access staleness, current ADFS,"
+	echo "    current FortiGate plus 90m Palo Alto network events, and one Basic firewall flow"
 	echo "  create twelve Scheduled rules and one disabled NRT rule"
-	echo "  create DeadairEmptyAnalytics_CL directly as an empty Analytics table"
+	echo "  create SaaSAudit_CL directly as an empty Analytics table"
 	echo "  cleanup starts Azure's 15-day deleted-table recovery/name-reservation window"
-	echo "  apply/cleanup confirmation: DEADAIR_SENTINEL_BASE_LAB_CONFIRM=$expected_confirmation"
+	echo "  apply/refresh-summary-proof/cleanup confirmation: DEADAIR_SENTINEL_BASE_LAB_CONFIRM=$expected_confirmation"
 }
 
 if [ "$mode" = plan ]; then
@@ -137,7 +144,10 @@ if [ "$active_subscription" != "$subscription_id" ]; then
 fi
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/deadair-sentinel-base.XXXXXX")
-trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+trap 'rm -rf "$tmp_dir"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 collection_resource() {
 	collection_label=$1
@@ -319,22 +329,65 @@ table_matches() {
 		.properties.schema.description == $marker and
 		.properties.plan == $plan and
 		((.properties.schema.name // .name) | ascii_downcase) == ($name | ascii_downcase) and
-		(if $shape == "four" then
-			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 4 and
+		(if $shape == "auth" then
+			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 5 and
 			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
-			any(.properties.schema.columns[]?; .name == "EventId" and (.type | ascii_downcase) == "string") and
-			any(.properties.schema.columns[]?; .name == "Marker" and (.type | ascii_downcase) == "string") and
-			any(.properties.schema.columns[]?; .name == "ExpectedField" and (.type | ascii_downcase) == "string")
-		elif $shape == "predicate" then
-			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 3 and
+			any(.properties.schema.columns[]?; .name == "SignInId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "UserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ClientIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "AuthenticationResult" and (.type | ascii_downcase) == "string")
+		elif $shape == "saas_auth" then
+			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 6 and
 			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
-			any(.properties.schema.columns[]?; .name == "EventId" and (.type | ascii_downcase) == "string") and
-			any(.properties.schema.columns[]?; .name == "DeviceVendor" and (.type | ascii_downcase) == "string")
-		else
-			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 2 and
+			any(.properties.schema.columns[]?; .name == "SignInId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "UserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ClientIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "AuthenticationResult" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ApplicationName" and (.type | ascii_downcase) == "string")
+		elif $shape == "adfs_auth" then
+			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 6 and
 			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
-			any(.properties.schema.columns[]?; .name == "Marker" and (.type | ascii_downcase) == "string")
-		end)' >/dev/null
+			any(.properties.schema.columns[]?; .name == "SignInId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "UserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ClientIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "AuthenticationResult" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "RelyingParty" and (.type | ascii_downcase) == "string")
+		elif $shape == "perimeter" then
+			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 8 and
+			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
+			any(.properties.schema.columns[]?; .name == "SessionId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DeviceVendor" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DeviceProduct" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "SourceIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DestinationIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DestinationPort" and (.type | ascii_downcase) == "int") and
+			any(.properties.schema.columns[]?; .name == "DeviceAction" and (.type | ascii_downcase) == "string")
+		elif $shape == "flow" then
+			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 8 and
+			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
+			any(.properties.schema.columns[]?; .name == "FlowId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DeviceVendor" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DeviceProduct" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "SourceIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DestinationIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DestinationPort" and (.type | ascii_downcase) == "int") and
+			any(.properties.schema.columns[]?; .name == "DeviceAction" and (.type | ascii_downcase) == "string")
+		elif $shape == "audit" then
+			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 5 and
+			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
+			any(.properties.schema.columns[]?; .name == "ActivityId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ActorUserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "OperationName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "Result" and (.type | ascii_downcase) == "string")
+		elif $shape == "saas_audit" then
+			([.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | length) == 6 and
+			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
+			any(.properties.schema.columns[]?; .name == "ActivityId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ActorUserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "OperationName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "Result" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ServiceName" and (.type | ascii_downcase) == "string")
+		else false end)' >/dev/null
 }
 
 function_owned() {
@@ -440,17 +493,27 @@ dcr_owned() {
 dcr_matches() {
 	printf '%s' "$1" | jq -e --arg marker "$fixture_marker" --arg workspace "$workspace_path" --arg destination "$dcr_destination" \
 		--arg resource "$dcr_path" --arg name "$dcr_name" --arg location "$workspace_location" '
-		def columns($stream):
+	def columns($stream):
 			[.properties.streamDeclarations[$stream].columns[]? |
 				{name, type: (.type | ascii_downcase)}] | sort_by(.name);
-		def standard_columns:
-			[{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
-			 {name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}] | sort_by(.name);
-		def predicate_columns:
-			[{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
-			 {name: "DeviceVendor", type: "string"}] | sort_by(.name);
-		def summary_source_columns:
-			[{name: "TimeGenerated", type: "datetime"}, {name: "Marker", type: "string"}] | sort_by(.name);
+		def auth_columns:
+			[{name: "TimeGenerated", type: "datetime"}, {name: "SignInId", type: "string"},
+			 {name: "UserPrincipalName", type: "string"}, {name: "ClientIpAddress", type: "string"},
+			 {name: "AuthenticationResult", type: "string"}] | sort_by(.name);
+		def saas_auth_columns:
+			auth_columns + [{name: "ApplicationName", type: "string"}] | sort_by(.name);
+		def adfs_auth_columns:
+			auth_columns + [{name: "RelyingParty", type: "string"}] | sort_by(.name);
+		def perimeter_columns:
+			[{name: "TimeGenerated", type: "datetime"}, {name: "SessionId", type: "string"},
+			 {name: "DeviceVendor", type: "string"}, {name: "DeviceProduct", type: "string"},
+			 {name: "SourceIpAddress", type: "string"}, {name: "DestinationIpAddress", type: "string"},
+			 {name: "DestinationPort", type: "int"}, {name: "DeviceAction", type: "string"}] | sort_by(.name);
+		def firewall_columns:
+			[{name: "TimeGenerated", type: "datetime"}, {name: "FlowId", type: "string"},
+			 {name: "DeviceVendor", type: "string"}, {name: "DeviceProduct", type: "string"},
+			 {name: "SourceIpAddress", type: "string"}, {name: "DestinationIpAddress", type: "string"},
+			 {name: "DestinationPort", type: "int"}, {name: "DeviceAction", type: "string"}] | sort_by(.name);
 		((.name // "") | ascii_downcase) == ($name | ascii_downcase) and
 		((.id // "") | ascii_downcase) == ($resource | ascii_downcase) and
 		((.type // "") | ascii_downcase) == "microsoft.insights/datacollectionrules" and
@@ -464,24 +527,24 @@ dcr_matches() {
 		([.properties.destinations.logAnalytics[]? |
 			select(.name == $destination and ((.workspaceResourceId | ascii_downcase) == ($workspace | ascii_downcase)))] | length) == 1 and
 		([.properties.streamDeclarations | keys[]] | sort) == ([
-			"Custom-DeadairFresh", "Custom-DeadairStale", "Custom-DeadairLag",
-			"Custom-DeadairUnused", "Custom-DeadairRemoved", "Custom-DeadairPredicate",
-			"Custom-DeadairBasic"] | sort) and
-		columns("Custom-DeadairFresh") == standard_columns and
-		columns("Custom-DeadairStale") == standard_columns and
-		columns("Custom-DeadairLag") == standard_columns and
-		columns("Custom-DeadairUnused") == standard_columns and
-		columns("Custom-DeadairRemoved") == standard_columns and
-		columns("Custom-DeadairPredicate") == predicate_columns and
-		columns("Custom-DeadairBasic") == summary_source_columns and
+			"Custom-WorkforceSignIn", "Custom-RemoteAccessAuth", "Custom-SaaSSignIn",
+			"Custom-ADFSAuthentication", "Custom-PartnerSSOAuth", "Custom-PerimeterSecurity",
+			"Custom-FirewallTrafficRaw"] | sort) and
+		columns("Custom-WorkforceSignIn") == auth_columns and
+		columns("Custom-RemoteAccessAuth") == auth_columns and
+		columns("Custom-SaaSSignIn") == saas_auth_columns and
+		columns("Custom-ADFSAuthentication") == adfs_auth_columns and
+		columns("Custom-PartnerSSOAuth") == saas_auth_columns and
+		columns("Custom-PerimeterSecurity") == perimeter_columns and
+		columns("Custom-FirewallTrafficRaw") == firewall_columns and
 		([.properties.dataFlows[]? |
 			select(.destinations == [$destination] and .transformKql == "source" and
 				(.streams | length) == 1 and .outputStream == (.streams[0] + "_CL") and
 				((.captureOverflow // false) == false) and ((.builtInTransform // "") == ""))] | length) == 7 and
 		([.properties.dataFlows[]?.outputStream] | sort) == ([
-			"Custom-DeadairFresh_CL", "Custom-DeadairStale_CL", "Custom-DeadairLag_CL",
-			"Custom-DeadairUnused_CL", "Custom-DeadairRemoved_CL", "Custom-DeadairPredicate_CL",
-			"Custom-DeadairBasic_CL"] | sort)' >/dev/null
+			"Custom-WorkforceSignIn_CL", "Custom-RemoteAccessAuth_CL", "Custom-SaaSSignIn_CL",
+			"Custom-ADFSAuthentication_CL", "Custom-PartnerSSOAuth_CL", "Custom-PerimeterSecurity_CL",
+			"Custom-FirewallTrafficRaw_CL"] | sort)' >/dev/null
 }
 
 verify_provider() {
@@ -533,7 +596,7 @@ verify_sentinel_onboarding() {
 }
 
 probe_logs_query_access() {
-	jq -n '{query: "print deadair_probe=1 | take 1"}' >"$tmp_dir/logs-query-probe.json"
+	jq -n '{query: "print read_probe=1 | take 1"}' >"$tmp_dir/logs-query-probe.json"
 	if ! probe_response=$(az rest --only-show-errors --method post --resource https://api.loganalytics.io \
 		--uri "https://api.loganalytics.io/v1/workspaces/$workspace_id/query" \
 		--body "@$tmp_dir/logs-query-probe.json" --output json); then
@@ -663,34 +726,34 @@ preflight_dcr() {
 }
 
 run_collision_preflight() {
-	preflight_table DeadairFresh_CL Analytics four
-	preflight_table DeadairStale_CL Analytics four
-	preflight_table DeadairLag_CL Analytics four
-	preflight_table DeadairUnused_CL Analytics four
-	preflight_table DeadairPredicate_CL Analytics predicate
-	preflight_table DeadairBasic_CL Basic two
-	preflight_table DeadairAuxiliary_CL Auxiliary two
-	preflight_table DeadairEmptyAnalytics_CL Analytics two
-	preflight_table DeadairRemoved_CL Analytics four
+	preflight_table WorkforceSignIn_CL Analytics auth
+	preflight_table RemoteAccessAuth_CL Analytics auth
+	preflight_table SaaSSignIn_CL Analytics saas_auth
+	preflight_table ADFSAuthentication_CL Analytics adfs_auth
+	preflight_table PerimeterSecurity_CL Analytics perimeter
+	preflight_table FirewallTrafficRaw_CL Basic flow
+	preflight_table IdentityAuditArchive_CL Auxiliary audit
+	preflight_table SaaSAudit_CL Analytics saas_audit
+	preflight_table PartnerSSOAuth_CL Analytics saas_auth
 	preflight_function "$base_function_id" "$base_function" "$base_function_body" ""
 	preflight_function "$parameterized_function_id" "$parameterized_function" "$parameterized_function_body" "$parameterized_function_parameters"
 	preflight_dcr
 
-	preflight_scheduled_rule 11111111-1111-4111-8111-111111111111 'deadair lab - fresh direct table' PT5M PT30M 'DeadairFresh_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	preflight_scheduled_rule 22222222-2222-4222-8222-222222222222 'deadair lab - stale direct table' PT5M PT30M 'DeadairStale_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	preflight_scheduled_rule 33333333-3333-4333-8333-333333333333 'deadair lab - delayed direct table' PT5M PT10M 'DeadairLag_CL | where TimeGenerated > ago(10m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	preflight_scheduled_rule 44444444-4444-4444-8444-444444444444 'deadair lab - removed direct table' PT5M PT30M 'DeadairRemoved_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	preflight_scheduled_rule 55555555-5555-4555-8555-555555555555 'deadair lab - partial union' PT5M PT30M 'union isfuzzy=true DeadairFresh_CL, DeadairRemoved_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	preflight_scheduled_rule 66666666-6666-4666-8666-666666666666 'deadair lab - let and join' PT5M PT30M 'let recentFresh = DeadairFresh_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (DeadairLag_CL | where TimeGenerated > ago(30m)) on ExpectedField | project TimeGenerated, EventId, Marker'
-	preflight_scheduled_rule 71111111-1111-4111-8111-111111111111 'deadair lab - saved function bare source' PT5M PT30M 'DeadairLabSource | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	preflight_scheduled_rule 72222222-2222-4222-8222-222222222222 'deadair lab - saved function call' PT5M PT30M 'DeadairLabSource() | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	preflight_scheduled_rule 73333333-3333-4333-8333-333333333333 'deadair lab - parameterized function' PT5M PT30M 'DeadairLabParameterized("fresh") | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	preflight_scheduled_rule 74444444-4444-4444-8444-444444444444 'deadair lab - auxiliary table dependency' PT5M PT30M 'DeadairAuxiliary_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
-	preflight_scheduled_rule 76666666-6666-4666-8666-666666666666 'deadair lab - empty analytics table' PT5M PT30M 'DeadairEmptyAnalytics_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
-	preflight_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT30M "$predicate_rule_query"
+	preflight_scheduled_rule 11111111-1111-4111-8111-111111111111 '[lab] Suspicious interactive sign-in' PT5M PT30M 'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	preflight_scheduled_rule 22222222-2222-4222-8222-222222222222 '[lab] VPN password spray' PT5M PT30M 'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	preflight_scheduled_rule 33333333-3333-4333-8333-333333333333 '[lab] Cloud sign-in impossible travel' PT5M PT10M 'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	preflight_scheduled_rule 44444444-4444-4444-8444-444444444444 '[lab] Partner SSO telemetry missing' PT5M PT30M 'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	preflight_scheduled_rule 55555555-5555-4555-8555-555555555555 '[lab] Sign-ins across primary and partner IdPs' PT5M PT30M 'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	preflight_scheduled_rule 66666666-6666-4666-8666-666666666666 '[lab] Interactive sign-in followed by cloud app access' PT5M PT30M 'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	preflight_scheduled_rule 71111111-1111-4111-8111-111111111111 '[lab] Recent identity sign-ins via saved function' PT5M PT30M 'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	preflight_scheduled_rule 72222222-2222-4222-8222-222222222222 '[lab] Recent identity sign-ins via function call' PT5M PT30M 'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	preflight_scheduled_rule 73333333-3333-4333-8333-333333333333 '[lab] High-risk account sign-in' PT5M PT30M 'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	preflight_scheduled_rule 74444444-4444-4444-8444-444444444444 '[lab] Privileged identity operations in archive' PT5M PT30M 'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result'
+	preflight_scheduled_rule 76666666-6666-4666-8666-666666666666 '[lab] Cloud audit activity stopped' PT5M PT30M 'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName'
+	preflight_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT3H "$predicate_rule_query"
 	preflight_nrt_rule
 
-	preflight_removed=$(collection_resource "table DeadairRemoved_CL" "$table_collection_uri" DeadairRemoved_CL)
+	preflight_removed=$(collection_resource "table PartnerSSOAuth_CL" "$table_collection_uri" PartnerSSOAuth_CL)
 	preflight_dcr_resource=$(collection_resource "DCR $dcr_name" "$dcr_collection_uri" "$dcr_name")
 	preflight_missing_rule=$(collection_resource "Scheduled rule 44444444-4444-4444-8444-444444444444" "$rule_collection_uri" 44444444-4444-4444-8444-444444444444)
 	preflight_partial_rule=$(collection_resource "Scheduled rule 55555555-5555-4555-8555-555555555555" "$rule_collection_uri" 55555555-5555-4555-8555-555555555555)
@@ -701,34 +764,143 @@ run_collision_preflight() {
 	fi
 }
 
+require_existing_fixture() {
+	require_label=$1
+	require_collection=$2
+	require_name=$3
+	require_resource=$(collection_resource "$require_label" "$require_collection" "$require_name")
+	if [ -z "$require_resource" ]; then
+		echo "refusing refresh-summary-proof: missing exact owned $require_label" >&2
+		exit 2
+	fi
+}
+
+strict_existing_base_preflight() {
+	# The ordinary collision pass validates the complete definition of every
+	# fixture that is present. This mode additionally requires the final base
+	# fixture set to exist exactly; it never creates or repairs a resource.
+	run_collision_preflight
+
+	for require_table in \
+		WorkforceSignIn_CL RemoteAccessAuth_CL SaaSSignIn_CL ADFSAuthentication_CL \
+		PerimeterSecurity_CL FirewallTrafficRaw_CL IdentityAuditArchive_CL SaaSAudit_CL; do
+		require_existing_fixture "base table $require_table" "$table_collection_uri" "$require_table"
+	done
+	if [ -n "$(collection_resource "removed base table PartnerSSOAuth_CL" "$table_collection_uri" PartnerSSOAuth_CL)" ]; then
+		echo "refusing refresh-summary-proof: removed base table PartnerSSOAuth_CL is present" >&2
+		exit 2
+	fi
+
+	require_existing_fixture "saved function $base_function" "$saved_search_collection_uri" "$base_function_id"
+	require_existing_fixture "saved function $parameterized_function" "$saved_search_collection_uri" "$parameterized_function_id"
+	require_existing_fixture "DCR $dcr_name" "$dcr_collection_uri" "$dcr_name"
+
+	for require_rule_id in \
+		11111111-1111-4111-8111-111111111111 \
+		22222222-2222-4222-8222-222222222222 \
+		33333333-3333-4333-8333-333333333333 \
+		44444444-4444-4444-8444-444444444444 \
+		55555555-5555-4555-8555-555555555555 \
+		66666666-6666-4666-8666-666666666666 \
+		71111111-1111-4111-8111-111111111111 \
+		72222222-2222-4222-8222-222222222222 \
+		73333333-3333-4333-8333-333333333333 \
+		74444444-4444-4444-8444-444444444444 \
+		76666666-6666-4666-8666-666666666666 \
+		"$predicate_rule_id"; do
+		require_existing_fixture "Scheduled base rule $require_rule_id" "$rule_collection_uri" "$require_rule_id"
+	done
+	require_existing_fixture "disabled NRT base rule $nrt_rule_id" "$rule_preview_collection_uri" "$nrt_rule_id"
+
+	echo "existing Sentinel base fixtures verified for summary proof refresh (read only)"
+}
+
 create_table_body() {
 	create_table_name=$1
 	create_table_plan=$2
 	create_table_shape=$3
-	if [ "$create_table_shape" = four ]; then
+	if [ "$create_table_shape" = auth ]; then
 		jq -n --arg name "$create_table_name" --arg plan "$create_table_plan" --arg marker "$fixture_marker" '{
 			properties: {plan: $plan, schema: {name: $name, description: $marker, columns: [
 				{name: "TimeGenerated", type: "dateTime"},
-				{name: "EventId", type: "string"},
-				{name: "Marker", type: "string"},
-				{name: "ExpectedField", type: "string"}
+				{name: "SignInId", type: "string"},
+				{name: "UserPrincipalName", type: "string"},
+				{name: "ClientIpAddress", type: "string"},
+				{name: "AuthenticationResult", type: "string"}
 			]}}
 		}'
-	elif [ "$create_table_shape" = predicate ]; then
+	elif [ "$create_table_shape" = saas_auth ]; then
 		jq -n --arg name "$create_table_name" --arg plan "$create_table_plan" --arg marker "$fixture_marker" '{
 			properties: {plan: $plan, schema: {name: $name, description: $marker, columns: [
 				{name: "TimeGenerated", type: "dateTime"},
-				{name: "EventId", type: "string"},
-				{name: "DeviceVendor", type: "string"}
+				{name: "SignInId", type: "string"},
+				{name: "UserPrincipalName", type: "string"},
+				{name: "ClientIpAddress", type: "string"},
+				{name: "AuthenticationResult", type: "string"},
+				{name: "ApplicationName", type: "string"}
+			]}}
+		}'
+	elif [ "$create_table_shape" = adfs_auth ]; then
+		jq -n --arg name "$create_table_name" --arg plan "$create_table_plan" --arg marker "$fixture_marker" '{
+			properties: {plan: $plan, schema: {name: $name, description: $marker, columns: [
+				{name: "TimeGenerated", type: "dateTime"},
+				{name: "SignInId", type: "string"},
+				{name: "UserPrincipalName", type: "string"},
+				{name: "ClientIpAddress", type: "string"},
+				{name: "AuthenticationResult", type: "string"},
+				{name: "RelyingParty", type: "string"}
+			]}}
+		}'
+	elif [ "$create_table_shape" = perimeter ]; then
+		jq -n --arg name "$create_table_name" --arg plan "$create_table_plan" --arg marker "$fixture_marker" '{
+			properties: {plan: $plan, schema: {name: $name, description: $marker, columns: [
+				{name: "TimeGenerated", type: "dateTime"},
+				{name: "SessionId", type: "string"},
+				{name: "DeviceVendor", type: "string"},
+				{name: "DeviceProduct", type: "string"},
+				{name: "SourceIpAddress", type: "string"},
+				{name: "DestinationIpAddress", type: "string"},
+				{name: "DestinationPort", type: "int"},
+				{name: "DeviceAction", type: "string"}
+			]}}
+		}'
+	elif [ "$create_table_shape" = flow ]; then
+		jq -n --arg name "$create_table_name" --arg plan "$create_table_plan" --arg marker "$fixture_marker" '{
+			properties: {plan: $plan, schema: {name: $name, description: $marker, columns: [
+				{name: "TimeGenerated", type: "dateTime"},
+				{name: "FlowId", type: "string"},
+				{name: "DeviceVendor", type: "string"},
+				{name: "DeviceProduct", type: "string"},
+				{name: "SourceIpAddress", type: "string"},
+				{name: "DestinationIpAddress", type: "string"},
+				{name: "DestinationPort", type: "int"},
+				{name: "DeviceAction", type: "string"}
+			]}}
+		}'
+	elif [ "$create_table_shape" = audit ]; then
+		jq -n --arg name "$create_table_name" --arg plan "$create_table_plan" --arg marker "$fixture_marker" '{
+			properties: {plan: $plan, schema: {name: $name, description: $marker, columns: [
+				{name: "TimeGenerated", type: "dateTime"},
+				{name: "ActivityId", type: "string"},
+				{name: "ActorUserPrincipalName", type: "string"},
+				{name: "OperationName", type: "string"},
+				{name: "Result", type: "string"}
+			]}}
+		}'
+	elif [ "$create_table_shape" = saas_audit ]; then
+		jq -n --arg name "$create_table_name" --arg plan "$create_table_plan" --arg marker "$fixture_marker" '{
+			properties: {plan: $plan, schema: {name: $name, description: $marker, columns: [
+				{name: "TimeGenerated", type: "dateTime"},
+				{name: "ActivityId", type: "string"},
+				{name: "ActorUserPrincipalName", type: "string"},
+				{name: "OperationName", type: "string"},
+				{name: "Result", type: "string"},
+				{name: "ServiceName", type: "string"}
 			]}}
 		}'
 	else
-		jq -n --arg name "$create_table_name" --arg plan "$create_table_plan" --arg marker "$fixture_marker" '{
-			properties: {plan: $plan, schema: {name: $name, description: $marker, columns: [
-				{name: "TimeGenerated", type: "dateTime"},
-				{name: "Marker", type: "string"}
-			]}}
-		}'
+		echo "unsupported table shape $create_table_shape" >&2
+		return 2
 	fi
 }
 
@@ -789,36 +961,46 @@ ensure_dcr() {
 		properties: {
 			description: $marker,
 			streamDeclarations: {
-				"Custom-DeadairFresh": {columns: [
-					{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
-					{name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}]},
-				"Custom-DeadairStale": {columns: [
-					{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
-					{name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}]},
-				"Custom-DeadairLag": {columns: [
-					{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
-					{name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}]},
-				"Custom-DeadairUnused": {columns: [
-					{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
-					{name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}]},
-				"Custom-DeadairRemoved": {columns: [
-					{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
-					{name: "Marker", type: "string"}, {name: "ExpectedField", type: "string"}]},
-				"Custom-DeadairPredicate": {columns: [
-					{name: "TimeGenerated", type: "datetime"}, {name: "EventId", type: "string"},
-					{name: "DeviceVendor", type: "string"}]},
-				"Custom-DeadairBasic": {columns: [
-					{name: "TimeGenerated", type: "datetime"}, {name: "Marker", type: "string"}]}
+				"Custom-WorkforceSignIn": {columns: [
+					{name: "TimeGenerated", type: "datetime"}, {name: "SignInId", type: "string"},
+					{name: "UserPrincipalName", type: "string"}, {name: "ClientIpAddress", type: "string"},
+					{name: "AuthenticationResult", type: "string"}]},
+				"Custom-RemoteAccessAuth": {columns: [
+					{name: "TimeGenerated", type: "datetime"}, {name: "SignInId", type: "string"},
+					{name: "UserPrincipalName", type: "string"}, {name: "ClientIpAddress", type: "string"},
+					{name: "AuthenticationResult", type: "string"}]},
+				"Custom-SaaSSignIn": {columns: [
+					{name: "TimeGenerated", type: "datetime"}, {name: "SignInId", type: "string"},
+					{name: "UserPrincipalName", type: "string"}, {name: "ClientIpAddress", type: "string"},
+					{name: "AuthenticationResult", type: "string"}, {name: "ApplicationName", type: "string"}]},
+				"Custom-ADFSAuthentication": {columns: [
+					{name: "TimeGenerated", type: "datetime"}, {name: "SignInId", type: "string"},
+					{name: "UserPrincipalName", type: "string"}, {name: "ClientIpAddress", type: "string"},
+					{name: "AuthenticationResult", type: "string"}, {name: "RelyingParty", type: "string"}]},
+				"Custom-PartnerSSOAuth": {columns: [
+					{name: "TimeGenerated", type: "datetime"}, {name: "SignInId", type: "string"},
+					{name: "UserPrincipalName", type: "string"}, {name: "ClientIpAddress", type: "string"},
+					{name: "AuthenticationResult", type: "string"}, {name: "ApplicationName", type: "string"}]},
+				"Custom-PerimeterSecurity": {columns: [
+					{name: "TimeGenerated", type: "datetime"}, {name: "SessionId", type: "string"},
+					{name: "DeviceVendor", type: "string"}, {name: "DeviceProduct", type: "string"},
+					{name: "SourceIpAddress", type: "string"}, {name: "DestinationIpAddress", type: "string"},
+					{name: "DestinationPort", type: "int"}, {name: "DeviceAction", type: "string"}]},
+				"Custom-FirewallTrafficRaw": {columns: [
+					{name: "TimeGenerated", type: "datetime"}, {name: "FlowId", type: "string"},
+					{name: "DeviceVendor", type: "string"}, {name: "DeviceProduct", type: "string"},
+					{name: "SourceIpAddress", type: "string"}, {name: "DestinationIpAddress", type: "string"},
+					{name: "DestinationPort", type: "int"}, {name: "DeviceAction", type: "string"}]}
 			},
 			destinations: {logAnalytics: [{workspaceResourceId: $workspace, name: $destination}]},
 			dataFlows: [
-				{streams: ["Custom-DeadairFresh"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairFresh_CL"},
-				{streams: ["Custom-DeadairStale"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairStale_CL"},
-				{streams: ["Custom-DeadairLag"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairLag_CL"},
-				{streams: ["Custom-DeadairUnused"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairUnused_CL"},
-				{streams: ["Custom-DeadairRemoved"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairRemoved_CL"},
-				{streams: ["Custom-DeadairPredicate"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairPredicate_CL"},
-				{streams: ["Custom-DeadairBasic"], destinations: [$destination], transformKql: "source", outputStream: "Custom-DeadairBasic_CL"}
+				{streams: ["Custom-WorkforceSignIn"], destinations: [$destination], transformKql: "source", outputStream: "Custom-WorkforceSignIn_CL"},
+				{streams: ["Custom-RemoteAccessAuth"], destinations: [$destination], transformKql: "source", outputStream: "Custom-RemoteAccessAuth_CL"},
+				{streams: ["Custom-SaaSSignIn"], destinations: [$destination], transformKql: "source", outputStream: "Custom-SaaSSignIn_CL"},
+				{streams: ["Custom-ADFSAuthentication"], destinations: [$destination], transformKql: "source", outputStream: "Custom-ADFSAuthentication_CL"},
+				{streams: ["Custom-PartnerSSOAuth"], destinations: [$destination], transformKql: "source", outputStream: "Custom-PartnerSSOAuth_CL"},
+				{streams: ["Custom-PerimeterSecurity"], destinations: [$destination], transformKql: "source", outputStream: "Custom-PerimeterSecurity_CL"},
+				{streams: ["Custom-FirewallTrafficRaw"], destinations: [$destination], transformKql: "source", outputStream: "Custom-FirewallTrafficRaw_CL"}
 			]
 		}
 	}' >"$tmp_dir/dcr.json"
@@ -890,9 +1072,10 @@ utc_minutes_ago() {
 
 wait_for_ingested_row() {
 	wait_table=$1
-	wait_event_id=$2
+	wait_key=$2
+	wait_value=$3
 	wait_attempt=0
-	jq -n --arg query "$wait_table | where EventId == '$wait_event_id' | take 1" '{query: $query}' >"$tmp_dir/query-$wait_table.json"
+	jq -n --arg query "$wait_table | where $wait_key == '$wait_value' | take 1" '{query: $query}' >"$tmp_dir/query-$wait_table.json"
 	# New Direct DCRs can take more than five minutes before their first rows
 	# become queryable even after the ingestion requests have succeeded.
 	while [ "$wait_attempt" -lt 120 ]; do
@@ -912,15 +1095,19 @@ wait_for_ingested_row() {
 }
 
 wait_for_basic_ingested_row() {
-	wait_marker=$1
+	wait_flow_id=$1
 	wait_attempt=0
-	jq -n --arg query "DeadairBasic_CL | where Marker == '$wait_marker' | take 1" \
-		'{query: $query}' >"$tmp_dir/search-DeadairBasic_CL.json"
+	jq -n --arg query "FirewallTrafficRaw_CL | where FlowId == '$wait_flow_id' and DeviceVendor == 'Fortinet' and DeviceProduct == 'FortiGate' and DeviceAction == 'Deny' | take 1" \
+		'{query: $query}' >"$tmp_dir/search-FirewallTrafficRaw_CL.json"
 	while [ "$wait_attempt" -lt 120 ]; do
 		if wait_response=$(az rest --only-show-errors --method post --resource https://api.loganalytics.io \
 			--uri "https://api.loganalytics.io/v1/workspaces/$workspace_id/search?timespan=PT30M" \
-			--body "@$tmp_dir/search-DeadairBasic_CL.json" --output json 2>/dev/null); then
-			wait_rows=$(printf '%s' "$wait_response" | jq '[.tables[0].rows[]?] | length')
+			--body "@$tmp_dir/search-FirewallTrafficRaw_CL.json" --output json 2>/dev/null); then
+			wait_rows=$(printf '%s' "$wait_response" | jq '
+				if ((has("error") | not) or .error == null) and
+					(.tables | type) == "array" and (.tables | length) == 1 and
+					(.tables[0].name == "PrimaryResult")
+				then [.tables[0].rows[]?] | length else 0 end')
 			if [ "$wait_rows" -gt 0 ]; then
 				return 0
 			fi
@@ -928,11 +1115,11 @@ wait_for_basic_ingested_row() {
 		wait_attempt=$((wait_attempt + 1))
 		sleep 5
 	done
-	echo "ingested marker did not become searchable in DeadairBasic_CL" >&2
+	echo "ingested denied flow did not become searchable in FirewallTrafficRaw_CL" >&2
 	return 1
 }
 
-ingest_base_rows() {
+resolve_dcr_ingestion_target() {
 	dcr_resource=$(stable_resource_json "$dcr_uri" "DCR $dcr_name")
 	if ! dcr_matches "$dcr_resource"; then
 		echo "refusing ingestion: DCR $dcr_name no longer matches its exact fixture definition" >&2
@@ -983,62 +1170,109 @@ ingest_base_rows() {
 		;;
 	esac
 	dcr_ingestion_endpoint="https://$dcr_ingestion_host"
+}
+
+post_dcr_row() {
+	post_stream=$1
+	post_file=$2
+	if ! az rest --only-show-errors --method post --resource https://monitor.azure.com \
+		--uri "$dcr_ingestion_endpoint/dataCollectionRules/$dcr_immutable_id/streams/Custom-$post_stream?api-version=2023-01-01" \
+		--body "@$post_file" --output none; then
+		echo "Logs Ingestion failed for Custom-$post_stream; the provisioner identity needs Monitoring Metrics Publisher at the DCR or resource-group scope" >&2
+		exit 2
+	fi
+}
+
+ingest_base_rows() {
+	resolve_dcr_ingestion_target
 
 	ingest_epoch=$(date -u '+%s')
 	fresh_event_id="fresh-$ingest_epoch"
 	lag_event_id="lag-$ingest_epoch"
 	stale_event_id="stale-$ingest_epoch"
 	unused_event_id="unused-$ingest_epoch"
-	predicate_event_id="predicate-$ingest_epoch"
-	basic_marker="summary-source-$ingest_epoch"
+	network_current_event_id="network-current-$ingest_epoch"
+	network_palo_alto_event_id="network-palo-alto-$ingest_epoch"
+	flow_id="denied-flow-$ingest_epoch"
 	fresh_time=$(utc_minutes_ago 0)
 	lag_time=$(utc_minutes_ago 45)
 	stale_time=$(utc_minutes_ago 90)
 
-	jq -n --arg time "$fresh_time" --arg id "$fresh_event_id" '[{TimeGenerated: $time, EventId: $id, Marker: "fresh", ExpectedField: "join-key"}]' >"$tmp_dir/ingest-fresh.json"
-	jq -n --arg time "$lag_time" --arg id "$lag_event_id" '[{TimeGenerated: $time, EventId: $id, Marker: "lag", ExpectedField: "join-key"}]' >"$tmp_dir/ingest-lag.json"
-	jq -n --arg time "$stale_time" --arg id "$stale_event_id" '[{TimeGenerated: $time, EventId: $id, Marker: "stale", ExpectedField: "join-key"}]' >"$tmp_dir/ingest-stale.json"
-	jq -n --arg time "$fresh_time" --arg id "$unused_event_id" '[{TimeGenerated: $time, EventId: $id, Marker: "unused", ExpectedField: "unused"}]' >"$tmp_dir/ingest-unused.json"
-	jq -n --arg time "$fresh_time" --arg id "$predicate_event_id" '[{TimeGenerated: $time, EventId: $id, DeviceVendor: "Deadair Labs"}]' >"$tmp_dir/ingest-predicate.json"
-	jq -n --arg time "$fresh_time" --arg marker "$basic_marker" '[{TimeGenerated: $time, Marker: $marker}]' >"$tmp_dir/ingest-basic.json"
+	jq -n --arg time "$fresh_time" --arg id "$fresh_event_id" \
+		'[{TimeGenerated: $time, SignInId: $id, UserPrincipalName: "analyst@lab.example", ClientIpAddress: "198.51.100.10", AuthenticationResult: "Success"}]' >"$tmp_dir/ingest-fresh.json"
+	jq -n --arg time "$lag_time" --arg id "$lag_event_id" \
+		'[{TimeGenerated: $time, SignInId: $id, UserPrincipalName: "analyst@lab.example", ClientIpAddress: "203.0.113.20", AuthenticationResult: "Success", ApplicationName: "Microsoft 365"}]' >"$tmp_dir/ingest-lag.json"
+	jq -n --arg time "$stale_time" --arg id "$stale_event_id" \
+		'[{TimeGenerated: $time, SignInId: $id, UserPrincipalName: "contractor@lab.example", ClientIpAddress: "192.0.2.44", AuthenticationResult: "Failure"}]' >"$tmp_dir/ingest-stale.json"
+	jq -n --arg time "$fresh_time" --arg id "$unused_event_id" \
+		'[{TimeGenerated: $time, SignInId: $id, UserPrincipalName: "legacy-user@lab.example", ClientIpAddress: "192.0.2.80", AuthenticationResult: "Success", RelyingParty: "urn:example:hr"}]' >"$tmp_dir/ingest-unused.json"
+	jq -n --arg current_time "$fresh_time" --arg current_id "$network_current_event_id" \
+		--arg stale_time "$stale_time" --arg stale_id "$network_palo_alto_event_id" '[
+			{TimeGenerated: $current_time, SessionId: $current_id, DeviceVendor: "Fortinet", DeviceProduct: "FortiGate", SourceIpAddress: "10.20.4.12", DestinationIpAddress: "198.51.100.25", DestinationPort: 443, DeviceAction: "Allow"},
+			{TimeGenerated: $stale_time, SessionId: $stale_id, DeviceVendor: "Palo Alto Networks", DeviceProduct: "PAN-OS", SourceIpAddress: "10.30.8.41", DestinationIpAddress: "203.0.113.53", DestinationPort: 53, DeviceAction: "Allow"}
+		]' >"$tmp_dir/ingest-predicate.json"
+	jq -n --arg time "$fresh_time" --arg id "$flow_id" '[{TimeGenerated: $time, FlowId: $id, DeviceVendor: "Fortinet", DeviceProduct: "FortiGate", SourceIpAddress: "10.20.4.12", DestinationIpAddress: "198.51.100.25", DestinationPort: 22, DeviceAction: "Deny"}]' >"$tmp_dir/ingest-basic.json"
 
 	for ingest_spec in \
-		"DeadairFresh_CL:$tmp_dir/ingest-fresh.json" \
-		"DeadairLag_CL:$tmp_dir/ingest-lag.json" \
-		"DeadairStale_CL:$tmp_dir/ingest-stale.json" \
-		"DeadairUnused_CL:$tmp_dir/ingest-unused.json" \
-		"DeadairPredicate_CL:$tmp_dir/ingest-predicate.json" \
-		"DeadairBasic_CL:$tmp_dir/ingest-basic.json"; do
+		"WorkforceSignIn_CL:$tmp_dir/ingest-fresh.json" \
+		"SaaSSignIn_CL:$tmp_dir/ingest-lag.json" \
+		"RemoteAccessAuth_CL:$tmp_dir/ingest-stale.json" \
+		"ADFSAuthentication_CL:$tmp_dir/ingest-unused.json" \
+		"PerimeterSecurity_CL:$tmp_dir/ingest-predicate.json" \
+		"FirewallTrafficRaw_CL:$tmp_dir/ingest-basic.json"; do
 		ingest_stream=${ingest_spec%%:*}
 		ingest_file=${ingest_spec#*:}
 		ingest_input=${ingest_stream%_CL}
-		if ! az rest --only-show-errors --method post --resource https://monitor.azure.com \
-			--uri "$dcr_ingestion_endpoint/dataCollectionRules/$dcr_immutable_id/streams/Custom-$ingest_input?api-version=2023-01-01" \
-			--body "@$ingest_file" --output none; then
-			echo "Logs Ingestion failed for $ingest_stream; the provisioner identity needs Monitoring Metrics Publisher at the DCR or resource-group scope" >&2
-			exit 2
-		fi
+		post_dcr_row "$ingest_input" "$ingest_file"
 	done
 
-	wait_for_ingested_row DeadairFresh_CL "$fresh_event_id"
-	wait_for_ingested_row DeadairLag_CL "$lag_event_id"
-	wait_for_ingested_row DeadairStale_CL "$stale_event_id"
-	wait_for_ingested_row DeadairUnused_CL "$unused_event_id"
-	wait_for_ingested_row DeadairPredicate_CL "$predicate_event_id"
-	wait_for_basic_ingested_row "$basic_marker"
+	wait_for_ingested_row WorkforceSignIn_CL SignInId "$fresh_event_id"
+	wait_for_ingested_row SaaSSignIn_CL SignInId "$lag_event_id"
+	wait_for_ingested_row RemoteAccessAuth_CL SignInId "$stale_event_id"
+	wait_for_ingested_row ADFSAuthentication_CL SignInId "$unused_event_id"
+	wait_for_ingested_row PerimeterSecurity_CL SessionId "$network_current_event_id"
+	wait_for_ingested_row PerimeterSecurity_CL SessionId "$network_palo_alto_event_id"
+	wait_for_basic_ingested_row "$flow_id"
+}
+
+ingest_summary_proof_row() {
+	proof_table_resource=$(stable_resource_json "$(table_uri FirewallTrafficRaw_CL)" "table FirewallTrafficRaw_CL")
+	if ! table_matches "$proof_table_resource" FirewallTrafficRaw_CL Basic flow; then
+		echo "refusing summary proof ingestion: FirewallTrafficRaw_CL no longer matches its exact base fixture definition" >&2
+		exit 2
+	fi
+	resolve_dcr_ingestion_target
+
+	proof_epoch=$(date -u '+%s')
+	proof_flow_id="denied-flow-$proof_epoch$$"
+	proof_time=$(utc_minutes_ago 0)
+	jq -n --arg time "$proof_time" --arg id "$proof_flow_id" '[{
+		TimeGenerated: $time,
+		FlowId: $id,
+		DeviceVendor: "Fortinet",
+		DeviceProduct: "FortiGate",
+		SourceIpAddress: "10.20.4.12",
+		DestinationIpAddress: "198.51.100.25",
+		DestinationPort: 22,
+		DeviceAction: "Deny"
+	}]' >"$tmp_dir/ingest-summary-proof.json"
+
+	post_dcr_row FirewallTrafficRaw "$tmp_dir/ingest-summary-proof.json"
+	wait_for_basic_ingested_row "$proof_flow_id"
+	echo "current summary proof row is searchable in FirewallTrafficRaw_CL (FlowId=$proof_flow_id)"
 }
 
 apply_fixtures() {
-	ensure_table DeadairFresh_CL Analytics four
-	ensure_table DeadairStale_CL Analytics four
-	ensure_table DeadairLag_CL Analytics four
-	ensure_table DeadairUnused_CL Analytics four
-	ensure_table DeadairPredicate_CL Analytics predicate
-	ensure_table DeadairBasic_CL Basic two
-	ensure_table DeadairAuxiliary_CL Auxiliary two
-	ensure_table DeadairEmptyAnalytics_CL Analytics two
+	ensure_table WorkforceSignIn_CL Analytics auth
+	ensure_table RemoteAccessAuth_CL Analytics auth
+	ensure_table SaaSSignIn_CL Analytics saas_auth
+	ensure_table ADFSAuthentication_CL Analytics adfs_auth
+	ensure_table PerimeterSecurity_CL Analytics perimeter
+	ensure_table FirewallTrafficRaw_CL Basic flow
+	ensure_table IdentityAuditArchive_CL Auxiliary audit
+	ensure_table SaaSAudit_CL Analytics saas_audit
 	if [ "$base_removed_needed" = true ]; then
-		ensure_table DeadairRemoved_CL Analytics four
+		ensure_table PartnerSSOAuth_CL Analytics saas_auth
 	fi
 
 	ensure_function "$base_function_id" "$base_function" "$base_function_body" ""
@@ -1046,38 +1280,38 @@ apply_fixtures() {
 	ensure_dcr
 	ingest_base_rows
 
-	ensure_scheduled_rule 11111111-1111-4111-8111-111111111111 'deadair lab - fresh direct table' PT5M PT30M 'DeadairFresh_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	ensure_scheduled_rule 22222222-2222-4222-8222-222222222222 'deadair lab - stale direct table' PT5M PT30M 'DeadairStale_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	ensure_scheduled_rule 33333333-3333-4333-8333-333333333333 'deadair lab - delayed direct table' PT5M PT10M 'DeadairLag_CL | where TimeGenerated > ago(10m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	ensure_scheduled_rule 44444444-4444-4444-8444-444444444444 'deadair lab - removed direct table' PT5M PT30M 'DeadairRemoved_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	ensure_scheduled_rule 55555555-5555-4555-8555-555555555555 'deadair lab - partial union' PT5M PT30M 'union isfuzzy=true DeadairFresh_CL, DeadairRemoved_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	ensure_scheduled_rule 66666666-6666-4666-8666-666666666666 'deadair lab - let and join' PT5M PT30M 'let recentFresh = DeadairFresh_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (DeadairLag_CL | where TimeGenerated > ago(30m)) on ExpectedField | project TimeGenerated, EventId, Marker'
-	ensure_scheduled_rule 71111111-1111-4111-8111-111111111111 'deadair lab - saved function bare source' PT5M PT30M 'DeadairLabSource | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	ensure_scheduled_rule 72222222-2222-4222-8222-222222222222 'deadair lab - saved function call' PT5M PT30M 'DeadairLabSource() | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	ensure_scheduled_rule 73333333-3333-4333-8333-333333333333 'deadair lab - parameterized function' PT5M PT30M 'DeadairLabParameterized("fresh") | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	ensure_scheduled_rule 74444444-4444-4444-8444-444444444444 'deadair lab - auxiliary table dependency' PT5M PT30M 'DeadairAuxiliary_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
-	ensure_scheduled_rule 76666666-6666-4666-8666-666666666666 'deadair lab - empty analytics table' PT5M PT30M 'DeadairEmptyAnalytics_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
-	ensure_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT30M "$predicate_rule_query"
+	ensure_scheduled_rule 11111111-1111-4111-8111-111111111111 '[lab] Suspicious interactive sign-in' PT5M PT30M 'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	ensure_scheduled_rule 22222222-2222-4222-8222-222222222222 '[lab] VPN password spray' PT5M PT30M 'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	ensure_scheduled_rule 33333333-3333-4333-8333-333333333333 '[lab] Cloud sign-in impossible travel' PT5M PT10M 'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	ensure_scheduled_rule 44444444-4444-4444-8444-444444444444 '[lab] Partner SSO telemetry missing' PT5M PT30M 'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	ensure_scheduled_rule 55555555-5555-4555-8555-555555555555 '[lab] Sign-ins across primary and partner IdPs' PT5M PT30M 'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	ensure_scheduled_rule 66666666-6666-4666-8666-666666666666 '[lab] Interactive sign-in followed by cloud app access' PT5M PT30M 'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	ensure_scheduled_rule 71111111-1111-4111-8111-111111111111 '[lab] Recent identity sign-ins via saved function' PT5M PT30M 'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	ensure_scheduled_rule 72222222-2222-4222-8222-222222222222 '[lab] Recent identity sign-ins via function call' PT5M PT30M 'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	ensure_scheduled_rule 73333333-3333-4333-8333-333333333333 '[lab] High-risk account sign-in' PT5M PT30M 'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	ensure_scheduled_rule 74444444-4444-4444-8444-444444444444 '[lab] Privileged identity operations in archive' PT5M PT30M 'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result'
+	ensure_scheduled_rule 76666666-6666-4666-8666-666666666666 '[lab] Cloud audit activity stopped' PT5M PT30M 'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName'
+	ensure_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT3H "$predicate_rule_query"
 	ensure_nrt_rule
 
-	removed_resource=$(collection_resource "table DeadairRemoved_CL" "$table_collection_uri" DeadairRemoved_CL)
+	removed_resource=$(collection_resource "table PartnerSSOAuth_CL" "$table_collection_uri" PartnerSSOAuth_CL)
 	if [ -n "$removed_resource" ]; then
-		removed_resource=$(stable_resource_json "$(table_uri DeadairRemoved_CL)" "table DeadairRemoved_CL")
-		if ! table_matches "$removed_resource" DeadairRemoved_CL Analytics four; then
+		removed_resource=$(stable_resource_json "$(table_uri PartnerSSOAuth_CL)" "table PartnerSSOAuth_CL")
+		if ! table_matches "$removed_resource" PartnerSSOAuth_CL Analytics saas_auth; then
 			echo "refusing final Removed-table deletion: the complete fixture definition changed during apply" >&2
 			exit 2
 		fi
-		az rest --only-show-errors --method delete --uri "$(table_uri DeadairRemoved_CL)" --output none
-		wait_for_collection_absence "$table_collection_uri" DeadairRemoved_CL "table DeadairRemoved_CL"
+		az rest --only-show-errors --method delete --uri "$(table_uri PartnerSSOAuth_CL)" --output none
+		wait_for_collection_absence "$table_collection_uri" PartnerSSOAuth_CL "table PartnerSSOAuth_CL"
 	fi
 
-	final_empty_analytics=$(collection_resource "table DeadairEmptyAnalytics_CL" "$table_collection_uri" DeadairEmptyAnalytics_CL)
-	if ! table_matches "$final_empty_analytics" DeadairEmptyAnalytics_CL Analytics two; then
+	final_empty_analytics=$(collection_resource "table SaaSAudit_CL" "$table_collection_uri" SaaSAudit_CL)
+	if ! table_matches "$final_empty_analytics" SaaSAudit_CL Analytics saas_audit; then
 		echo "base fixture apply ended without the exact empty Analytics table" >&2
 		exit 2
 	fi
-	if [ -n "$(collection_resource "table DeadairRemoved_CL" "$table_collection_uri" DeadairRemoved_CL)" ]; then
-		echo "base fixture apply ended with DeadairRemoved_CL still present" >&2
+	if [ -n "$(collection_resource "table PartnerSSOAuth_CL" "$table_collection_uri" PartnerSSOAuth_CL)" ]; then
+		echo "base fixture apply ended with PartnerSSOAuth_CL still present" >&2
 		exit 2
 	fi
 	echo "Sentinel base fixtures are ready"
@@ -1183,38 +1417,45 @@ delete_table() {
 }
 
 cleanup_fixtures() {
-	delete_scheduled_rule 11111111-1111-4111-8111-111111111111 'deadair lab - fresh direct table' PT5M PT30M 'DeadairFresh_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	delete_scheduled_rule 22222222-2222-4222-8222-222222222222 'deadair lab - stale direct table' PT5M PT30M 'DeadairStale_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	delete_scheduled_rule 33333333-3333-4333-8333-333333333333 'deadair lab - delayed direct table' PT5M PT10M 'DeadairLag_CL | where TimeGenerated > ago(10m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	delete_scheduled_rule 44444444-4444-4444-8444-444444444444 'deadair lab - removed direct table' PT5M PT30M 'DeadairRemoved_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField'
-	delete_scheduled_rule 55555555-5555-4555-8555-555555555555 'deadair lab - partial union' PT5M PT30M 'union isfuzzy=true DeadairFresh_CL, DeadairRemoved_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	delete_scheduled_rule 66666666-6666-4666-8666-666666666666 'deadair lab - let and join' PT5M PT30M 'let recentFresh = DeadairFresh_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (DeadairLag_CL | where TimeGenerated > ago(30m)) on ExpectedField | project TimeGenerated, EventId, Marker'
-	delete_scheduled_rule 71111111-1111-4111-8111-111111111111 'deadair lab - saved function bare source' PT5M PT30M 'DeadairLabSource | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	delete_scheduled_rule 72222222-2222-4222-8222-222222222222 'deadair lab - saved function call' PT5M PT30M 'DeadairLabSource() | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	delete_scheduled_rule 73333333-3333-4333-8333-333333333333 'deadair lab - parameterized function' PT5M PT30M 'DeadairLabParameterized("fresh") | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker'
-	delete_scheduled_rule 74444444-4444-4444-8444-444444444444 'deadair lab - auxiliary table dependency' PT5M PT30M 'DeadairAuxiliary_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
-	delete_scheduled_rule 76666666-6666-4666-8666-666666666666 'deadair lab - empty analytics table' PT5M PT30M 'DeadairEmptyAnalytics_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker'
-	delete_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT30M "$predicate_rule_query"
+	delete_scheduled_rule 11111111-1111-4111-8111-111111111111 '[lab] Suspicious interactive sign-in' PT5M PT30M 'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	delete_scheduled_rule 22222222-2222-4222-8222-222222222222 '[lab] VPN password spray' PT5M PT30M 'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	delete_scheduled_rule 33333333-3333-4333-8333-333333333333 '[lab] Cloud sign-in impossible travel' PT5M PT10M 'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	delete_scheduled_rule 44444444-4444-4444-8444-444444444444 '[lab] Partner SSO telemetry missing' PT5M PT30M 'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName'
+	delete_scheduled_rule 55555555-5555-4555-8555-555555555555 '[lab] Sign-ins across primary and partner IdPs' PT5M PT30M 'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	delete_scheduled_rule 66666666-6666-4666-8666-666666666666 '[lab] Interactive sign-in followed by cloud app access' PT5M PT30M 'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+	delete_scheduled_rule 71111111-1111-4111-8111-111111111111 '[lab] Recent identity sign-ins via saved function' PT5M PT30M 'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	delete_scheduled_rule 72222222-2222-4222-8222-222222222222 '[lab] Recent identity sign-ins via function call' PT5M PT30M 'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	delete_scheduled_rule 73333333-3333-4333-8333-333333333333 '[lab] High-risk account sign-in' PT5M PT30M 'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName'
+	delete_scheduled_rule 74444444-4444-4444-8444-444444444444 '[lab] Privileged identity operations in archive' PT5M PT30M 'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result'
+	delete_scheduled_rule 76666666-6666-4666-8666-666666666666 '[lab] Cloud audit activity stopped' PT5M PT30M 'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName'
+	delete_scheduled_rule "$predicate_rule_id" "$predicate_rule_display" PT5M PT3H "$predicate_rule_query"
 	delete_nrt_rule
 	delete_dcr
 	delete_function "$base_function_id" "$base_function" "$base_function_body" ""
 	delete_function "$parameterized_function_id" "$parameterized_function" "$parameterized_function_body" "$parameterized_function_parameters"
-	delete_table DeadairFresh_CL Analytics four
-	delete_table DeadairStale_CL Analytics four
-	delete_table DeadairLag_CL Analytics four
-	delete_table DeadairUnused_CL Analytics four
-	delete_table DeadairPredicate_CL Analytics predicate
-	delete_table DeadairBasic_CL Basic two
-	delete_table DeadairAuxiliary_CL Auxiliary two
-	delete_table DeadairEmptyAnalytics_CL Analytics two
-	delete_table DeadairRemoved_CL Analytics four
+	delete_table WorkforceSignIn_CL Analytics auth
+	delete_table RemoteAccessAuth_CL Analytics auth
+	delete_table SaaSSignIn_CL Analytics saas_auth
+	delete_table ADFSAuthentication_CL Analytics adfs_auth
+	delete_table PerimeterSecurity_CL Analytics perimeter
+	delete_table FirewallTrafficRaw_CL Basic flow
+	delete_table IdentityAuditArchive_CL Auxiliary audit
+	delete_table SaaSAudit_CL Analytics saas_audit
+	delete_table PartnerSSOAuth_CL Analytics saas_auth
 	echo "Sentinel base fixtures removed; the resource group, workspace, Sentinel onboarding, budget, and role assignments were left intact"
 }
 
 verify_workspace_prerequisites
-if [ "$mode" = apply ]; then
+if [ "$mode" = apply ] || [ "$mode" = refresh-summary-proof ]; then
 	verify_sentinel_onboarding
 	probe_logs_query_access
+
+	if [ "$mode" = refresh-summary-proof ]; then
+		strict_existing_base_preflight
+		ingest_summary_proof_row
+		exit 0
+	fi
+
 	run_collision_preflight
 	apply_fixtures
 	exit 0

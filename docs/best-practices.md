@@ -94,7 +94,8 @@ same incident, but they often belong to different queues.
 
 ## Credentials
 
-- Use one least-privilege credential per SIEM instance. `deadair setup` prints the required role.
+- Use one least-privilege credential per SIEM instance. `deadair setup <backend>` prints the
+  required role.
 - Do not use admin credentials. Trusted Elastic and OpenSearch integration tests verify the
   documented roles and representative write denials. Sentinel uses a separate recorded conformance
   lab; see [validation status](validation.md) for its tested boundary.

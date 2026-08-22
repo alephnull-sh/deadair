@@ -90,7 +90,7 @@ func runCheckWithTargets(args []string, stdout, stderr io.Writer, resolveTargets
 			}
 			if ruleInputUnavailable > 0 {
 				ready = false
-				fmt.Fprintf(&details, "  %s rule input discovery unavailable for %d enabled rule(s)", mark(stdout, false), ruleInputUnavailable)
+				fmt.Fprintf(&details, "  %s rule input discovery unavailable for %s", mark(stdout, false), countLabel(ruleInputUnavailable, "enabled rule", "enabled rules"))
 				if ruleInputDetail != "" {
 					fmt.Fprintf(&details, ": %s", ruleInputDetail)
 				}

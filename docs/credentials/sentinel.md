@@ -283,8 +283,9 @@ both when enabling them because their queries could not execute. Azure Monitor's
 [Simple Log Alerts](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-create-simple-alert)
 can query Basic tables, but those are separate from Sentinel Scheduled and NRT analytics rules.
 
-Sentinel does not expose authoritative rule-required fields or a cheap exact document and storage
-inventory for this scan. Required-field and unused-telemetry findings therefore remain unavailable.
+Sentinel does not expose authoritative rule-required fields or a bounded, authoritative per-table
+event and storage inventory for this scan. Required-field and unused-telemetry findings therefore
+remain unavailable.
 Dependency evidence explains resolution outcomes, and a required dependency can affect the rule
 verdict. Summary-lineage and provenance evidence is informational and cannot create a finding or
 change a gate. The CLI currently targets Azure public cloud endpoints.

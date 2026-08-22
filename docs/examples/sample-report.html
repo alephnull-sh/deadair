@@ -78,6 +78,18 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
     }
+    .policy-note {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .policy-note strong {
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
     .metrics {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
@@ -196,6 +208,10 @@
       -webkit-overflow-scrolling: touch;
     }
     table { width: 100%; min-width: 720px; border-collapse: collapse; }
+    .source-table .source-name { width: 24%; min-width: 180px; }
+    .source-table .source-age { min-width: 88px; white-space: nowrap; }
+    .source-table-compact { min-width: 640px; }
+    .source-table-compact .source-name { width: 38%; min-width: 240px; }
     th, td {
       padding: 9px 11px;
       border-bottom: 1px solid var(--line);
@@ -292,6 +308,11 @@
 <body>
 
 
+
+
+
+
+
 <main class="report">
   <header class="hero">
     <div class="hero-top">
@@ -300,7 +321,8 @@
     </div>
     <h1>2 detections can&#39;t fire</h1>
     <p class="lede">Review the affected rules and sources below.</p>
-    <p class="meta"><time datetime="2026-08-22T03:13:44Z">22 Aug 2026, 03:13 UTC</time></p>
+    <p class="meta"><time datetime="2026-08-22T16:57:51Z">22 Aug 2026, 16:57 UTC</time></p>
+
 
     <div class="metrics">
       <div class="metric"><span>Enabled detections</span><strong>5</strong></div>
@@ -330,7 +352,7 @@
 
       <li class="signal">
         <div class="signal-top">
-          <p class="signal-title">Lab registry persistence</p>
+          <p class="signal-title">Sysmon registry run-key modification</p>
           <span class="badge severity-high">high</span>
         </div>
         <p>no matching source</p>
@@ -339,11 +361,11 @@
 
       <li class="signal">
         <div class="signal-top">
-          <p class="signal-title">Lab authentication source</p>
+          <p class="signal-title">Okta authentication failures</p>
           <span class="badge severity-medium">medium</span>
         </div>
         <p>all matching sources stale or empty</p>
-        <div class="tag-row"><span class="tag">deadair-lab-stale</span></div>
+        <div class="tag-row"><span class="tag">okta-system-events-prod</span></div>
       </li>
 
     </ul>
@@ -355,10 +377,10 @@
 
       <li class="signal">
         <div class="signal-top">
-          <p class="signal-title">Lab parser field coverage</p>
+          <p class="signal-title">PowerShell from legacy endpoints</p>
           <span class="badge severity-high">high</span>
         </div>
-        <p>missing fields</p>
+        <p>required fields are missing</p>
         <p class="action">Missing fields: process.command_line</p>
 
 
@@ -366,13 +388,27 @@
 
       <li class="signal">
         <div class="signal-top">
-          <p class="signal-title">Lab delayed ingest</p>
+          <p class="signal-title">Cloudflare firewall blocks</p>
           <span class="badge severity-medium">medium</span>
         </div>
-        <p>lag blind window</p>
+        <p>events may arrive too late for the rule</p>
 
-        <p class="action">Ingest lag exceeds the rule window in deadair-lab-lag.</p>
+        <p class="action">Ingest delay may leave a blind window in cloudflare-firewall-prod.</p>
 
+      </li>
+
+    </ul>
+
+
+
+    <h3>Sources that need attention</h3>
+    <ul class="signal-list">
+
+      <li class="signal">
+        <div class="signal-top">
+          <p class="signal-title">okta-system-events-prod</p>
+        </div>
+        <p>No recent events.</p>
       </li>
 
     </ul>
@@ -396,68 +432,68 @@
     </div>
 
     <div class="table-wrap" tabindex="0" role="region" aria-label="Sources">
-      <table>
-        <thead><tr><th>Source</th><th>Status</th><th>Age</th><th>Detections</th><th>Documents</th><th>Stored</th><th>Volume</th><th>Schema</th><th>Ingest lag</th></tr></thead>
+      <table class="source-table">
+        <thead><tr><th class="source-name">Source</th><th>Status</th><th class="source-age">Age</th><th>Detections</th><th>Documents</th><th>Stored</th><th>Volume</th><th>Schema</th><th>Ingest lag</th></tr></thead>
         <tbody>
 
           <tr>
-            <td><strong>deadair-lab-lag</strong></td>
+            <td class="source-name"><strong>cloudflare-firewall-prod</strong></td>
             <td><span class="badge status-ok">ok</span></td>
-            <td>16s</td>
+            <td class="source-age">16s</td>
             <td>1</td>
             <td>2</td>
-            <td>8.2 KiB</td>
+            <td>15.3 KiB</td>
             <td><span class="badge status-unknown">unknown</span></td>
             <td><span class="badge status-warming">warming</span></td>
             <td>p95 45m · max 45m</td>
           </tr>
 
           <tr>
-            <td><strong>deadair-lab-live</strong></td>
+            <td class="source-name"><strong>dns-query-events-prod</strong></td>
             <td><span class="badge status-ok">ok</span></td>
-            <td>16s</td>
+            <td class="source-age">16s</td>
+            <td>0</td>
             <td>1</td>
-            <td>1</td>
-            <td>5.4 KiB</td>
+            <td>6.9 KiB</td>
             <td><span class="badge status-unknown">unknown</span></td>
             <td><span class="badge status-warming">warming</span></td>
-            <td>p95 Not observed · max Not observed</td>
+            <td>—</td>
           </tr>
 
           <tr>
-            <td><strong>deadair-lab-schema</strong></td>
+            <td class="source-name"><strong>endpoint-process-events-legacy</strong></td>
             <td><span class="badge status-ok">ok</span></td>
-            <td>16s</td>
+            <td class="source-age">16s</td>
             <td>1</td>
             <td>1</td>
-            <td>5.4 KiB</td>
+            <td>7.8 KiB</td>
             <td><span class="badge status-unknown">unknown</span></td>
             <td><span class="badge status-warming">warming</span></td>
-            <td>p95 Not observed · max Not observed</td>
+            <td>p95 0s · max 0s</td>
           </tr>
 
           <tr>
-            <td><strong>deadair-lab-stale</strong></td>
+            <td class="source-name"><strong>endpoint-process-events-prod</strong></td>
+            <td><span class="badge status-ok">ok</span></td>
+            <td class="source-age">16s</td>
+            <td>1</td>
+            <td>1</td>
+            <td>8.3 KiB</td>
+            <td><span class="badge status-unknown">unknown</span></td>
+            <td><span class="badge status-warming">warming</span></td>
+            <td>p95 0s · max 0s</td>
+          </tr>
+
+          <tr>
+            <td class="source-name"><strong>okta-system-events-prod</strong></td>
             <td><span class="badge status-stale">stale</span></td>
-            <td>72h0m16s</td>
+            <td class="source-age">72h0m16s</td>
             <td>1</td>
             <td>1</td>
-            <td>5.4 KiB</td>
+            <td>8.3 KiB</td>
             <td><span class="badge status-unknown">unknown</span></td>
             <td><span class="badge status-warming">warming</span></td>
             <td>p95 3d · max 3d</td>
-          </tr>
-
-          <tr>
-            <td><strong>deadair-lab-unused</strong></td>
-            <td><span class="badge status-ok">ok</span></td>
-            <td>16s</td>
-            <td>0</td>
-            <td>1</td>
-            <td>4.1 KiB</td>
-            <td><span class="badge status-unknown">unknown</span></td>
-            <td><span class="badge status-warming">warming</span></td>
-            <td>Not assessed</td>
           </tr>
 
         </tbody>
@@ -465,14 +501,16 @@
     </div>
 
 
-    <h3>Stored unused telemetry</h3>
 
-      <div class="table-wrap" tabindex="0" role="region" aria-label="Stored unused telemetry">
-        <table>
-          <thead><tr><th>Source</th><th>Documents</th><th>Stored</th></tr></thead>
-          <tbody><tr><td><strong>deadair-lab-unused</strong></td><td>1</td><td>4.1 KiB</td></tr></tbody>
-        </table>
-      </div>
+      <h3>Stored unused telemetry</h3>
+
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Stored unused telemetry">
+          <table>
+            <thead><tr><th>Source</th><th>Documents</th><th>Stored</th></tr></thead>
+            <tbody><tr><td><strong>dns-query-events-prod</strong></td><td>1</td><td>6.9 KiB</td></tr></tbody>
+          </table>
+        </div>
+
 
   </section>
 
@@ -492,7 +530,7 @@
         <div class="table-wrap" tabindex="0" role="region" aria-label="Scan coverage">
           <table>
             <thead><tr><th>Check</th><th>Status</th><th>What happened</th></tr></thead>
-            <tbody><tr><td><strong>Source resolution</strong></td><td><span class="badge status-assessed">assessed</span></td><td></td></tr><tr><td><strong>Required fields</strong></td><td><span class="badge status-assessed">assessed</span></td><td></td></tr><tr><td><strong>Ingest lag</strong></td><td><span class="badge status-assessed">assessed</span></td><td>paired recent-event samples requested for 4 relevant source(s)</td></tr><tr><td><strong>Schema drift</strong></td><td><span class="badge status-assessed">assessed</span></td><td>compared with the saved schema snapshot</td></tr><tr><td><strong>Candidate rule</strong></td><td><span class="badge status-disabled">disabled</span></td><td>no candidate rule file was supplied</td></tr></tbody>
+            <tbody><tr><td><strong>Source resolution</strong></td><td><span class="badge status-assessed">assessed</span></td><td></td></tr><tr><td><strong>Required fields</strong></td><td><span class="badge status-assessed">assessed</span></td><td></td></tr><tr><td><strong>Ingest lag</strong></td><td><span class="badge status-assessed">assessed</span></td><td>paired recent-event samples requested for 4 relevant sources</td></tr><tr><td><strong>Schema drift</strong></td><td><span class="badge status-assessed">assessed</span></td><td>compared with the saved schema snapshot</td></tr><tr><td><strong>Candidate rule</strong></td><td><span class="badge status-disabled">disabled</span></td><td>no candidate rule file was supplied</td></tr></tbody>
           </table>
         </div>
 
@@ -505,26 +543,26 @@
             <tbody>
 
               <tr>
-                <td class="technical">ef2b2b3a-25dd-4641-8ee5-a3c1b6d962d2</td>
-                <td>deadair-lab-lag</td>
+                <td class="technical">6aa71d51-cf43-443d-a5e2-39f9498ef22f</td>
+                <td>cloudflare-firewall-prod</td>
                 <td>index expression</td>
                 <td><span class="badge status-resolved">resolved</span></td>
-                <td>deadair-lab-lag</td>
+                <td>cloudflare-firewall-prod</td>
                 <td><details class="row-detail"><summary>Show</summary><p><code>resolve_index</code></p></details></td>
               </tr>
 
               <tr>
-                <td class="technical">8ecf85eb-baf0-4c27-83c0-989a3c63f907</td>
-                <td>deadair-lab-live</td>
+                <td class="technical">43d0d051-ea0e-4db9-88cf-14489d9115b8</td>
+                <td>endpoint-process-events-prod</td>
                 <td>index expression</td>
                 <td><span class="badge status-resolved">resolved</span></td>
-                <td>deadair-lab-live</td>
+                <td>endpoint-process-events-prod</td>
                 <td><details class="row-detail"><summary>Show</summary><p><code>resolve_index</code></p></details></td>
               </tr>
 
               <tr>
-                <td class="technical">edf504f8-47ba-4750-b753-39e309a3a4b1</td>
-                <td>deadair-lab-registry-*</td>
+                <td class="technical">c861e637-6d09-456e-8462-b7f0db853265</td>
+                <td>winlogbeat-sysmon-*</td>
                 <td>index expression</td>
                 <td><span class="badge status-empty">empty</span></td>
                 <td></td>
@@ -532,20 +570,20 @@
               </tr>
 
               <tr>
-                <td class="technical">297bae8b-cdd9-419b-a284-ea6a9815f260</td>
-                <td>deadair-lab-schema</td>
+                <td class="technical">f3247394-f0a1-49a7-8f51-2613e8ac1f74</td>
+                <td>endpoint-process-events-legacy</td>
                 <td>index expression</td>
                 <td><span class="badge status-resolved">resolved</span></td>
-                <td>deadair-lab-schema</td>
+                <td>endpoint-process-events-legacy</td>
                 <td><details class="row-detail"><summary>Show</summary><p><code>resolve_index</code></p></details></td>
               </tr>
 
               <tr>
-                <td class="technical">ac12deed-23cb-409f-b685-a0fa640efda1</td>
-                <td>deadair-lab-stale</td>
+                <td class="technical">740f8607-144c-4cea-a6ab-f099db14376e</td>
+                <td>okta-system-events-prod</td>
                 <td>index expression</td>
                 <td><span class="badge status-resolved">resolved</span></td>
-                <td>deadair-lab-stale</td>
+                <td>okta-system-events-prod</td>
                 <td><details class="row-detail"><summary>Show</summary><p><code>resolve_index</code></p></details></td>
               </tr>
 
@@ -571,7 +609,7 @@
             <thead><tr><th>Rule</th><th>Source</th><th>Status</th><th>Present</th><th>Missing</th><th>Detail</th></tr></thead>
             <tbody>
 
-              <tr><td>Lab parser field coverage</td><td>deadair-lab-schema</td><td><span class="badge status-assessed">assessed</span></td><td>process.name</td><td>process.command_line</td><td></td></tr>
+              <tr><td>PowerShell from legacy endpoints</td><td>endpoint-process-events-legacy</td><td><span class="badge status-assessed">assessed</span></td><td>process.name</td><td>process.command_line</td><td></td></tr>
 
             </tbody>
           </table>
@@ -584,7 +622,7 @@
         <div class="table-wrap" tabindex="0" role="region" aria-label="Backend capabilities">
           <table>
             <thead><tr><th>Capability</th><th>Status</th></tr></thead>
-            <tbody><tr><td>Rule inventory</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Source resolution</td><td><span class="badge status-partial">Partial</span></td></tr><tr><td>Source freshness</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Document inventory</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Field schema</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Required fields</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Ingest lag</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Candidate rule</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Remote inputs</td><td><span class="badge status-listed-only">Listed only</span></td></tr><tr><td>Dependency resolution</td><td><span class="badge status-unavailable">Unavailable</span></td></tr><tr><td>Cross-workspace inputs</td><td><span class="badge status-unavailable">Unavailable</span></td></tr><tr><td>Source lineage</td><td><span class="badge status-unavailable">Unavailable</span></td></tr><tr><td>Rule provenance</td><td><span class="badge status-unavailable">Unavailable</span></td></tr></tbody>
+            <tbody><tr><td>Rule inventory</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Source resolution</td><td><span class="badge status-partial">Partial</span></td></tr><tr><td>Source freshness</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Document inventory</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Field schema</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Required fields</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Ingest lag</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Candidate rule</td><td><span class="badge status-supported">Supported</span></td></tr><tr><td>Remote inputs</td><td><span class="badge status-listed-only">Listed only</span></td></tr></tbody>
           </table>
         </div>
 

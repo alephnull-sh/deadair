@@ -25,6 +25,8 @@ func htmlExitCode(r *Report) int {
 }
 
 func htmlHeadline(r *Report) string {
+	visibleUnmapped := r.VisibleUnmappedRules()
+	sourceFindings := htmlSourceFindings(r)
 	if r.Scope.Mode == "candidate" {
 		switch htmlExitCode(r) {
 		case ExitError:
@@ -39,7 +41,16 @@ func htmlHeadline(r *Report) string {
 				return "Candidate rule failed the gate"
 			}
 		default:
-			return "Candidate rule passed"
+			if len(r.PartialInputCoverage) > 0 {
+				return htmlCount(len(r.PartialInputCoverage), "partial candidate input needs review", "partial candidate inputs need review")
+			}
+			if len(visibleUnmapped)+len(r.RemoteRules) > 0 {
+				return "Candidate assessment has coverage gaps"
+			}
+			if htmlAdvisoryCount(r) > 0 {
+				return "Candidate passed with advisory signals"
+			}
+			return "Candidate passed the configured gate"
 		}
 	}
 	switch {
@@ -47,16 +58,18 @@ func htmlHeadline(r *Report) string {
 		return htmlCount(r.Summary.DeadDetections, "detection can't fire", "detections can't fire")
 	case r.Summary.ImpairedDetections > 0:
 		return htmlCount(r.Summary.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility")
-	case r.Summary.DegradedSources > 0:
-		return htmlCount(r.Summary.DegradedSources, "source needs attention", "sources need attention")
+	case len(sourceFindings) > 0:
+		return htmlCount(len(sourceFindings), "source needs attention", "sources need attention")
 	case r.ExitCode() == ExitFindings:
 		return "The scan found a live blind spot"
+	case len(r.PartialInputCoverage) > 0:
+		return htmlCount(len(r.PartialInputCoverage), "partial rule input needs review", "partial rule inputs need review")
 	case htmlAdvisoryCount(r) > 0:
 		return htmlCount(htmlAdvisoryCount(r), "advisory signal needs review", "advisory signals need review")
-	case len(r.UnmappedRules)+len(r.RemoteRules) > 0:
+	case len(visibleUnmapped)+len(r.RemoteRules) > 0:
 		return "No confirmed failures, but coverage has gaps"
 	default:
-		return "No blind spots found"
+		return "No gated findings"
 	}
 }
 
@@ -108,7 +121,36 @@ func htmlAdvisoryCount(r *Report) int {
 	return len(htmlFreshnessWarnings(r)) + len(htmlSummaryWarnings(r))
 }
 
+type htmlSourceFinding struct {
+	Name    string
+	Reasons []string
+}
+
+func htmlSourceFindings(r *Report) []htmlSourceFinding {
+	items := make([]htmlSourceFinding, 0, r.Summary.DegradedSources+r.Summary.VolumeLowSources+r.Summary.SchemaDriftSources)
+	for _, source := range r.Sources {
+		var reasons []string
+		switch source.Status {
+		case "stale":
+			reasons = append(reasons, "No recent events.")
+		case "empty":
+			reasons = append(reasons, "No events in the measured window.")
+		}
+		if source.Volume != nil && source.Volume.Status == "low" {
+			reasons = append(reasons, "Volume is below its baseline.")
+		}
+		if source.Schema != nil && source.Schema.Status == "drift" {
+			reasons = append(reasons, "The field schema changed.")
+		}
+		if len(reasons) > 0 {
+			items = append(items, htmlSourceFinding{Name: source.Name, Reasons: reasons})
+		}
+	}
+	return items
+}
+
 func htmlGateNote(r *Report) string {
+	visibleUnmapped := r.VisibleUnmappedRules()
 	if r.Scope.Mode == "candidate" {
 		switch htmlExitCode(r) {
 		case ExitError:
@@ -119,10 +161,16 @@ func htmlGateNote(r *Report) string {
 			}
 			return "Review the candidate rule and its sources below."
 		default:
+			if count := len(r.PartialInputCoverage); count > 0 {
+				return fmt.Sprintf("No gated candidate findings. Review %s below.", htmlCount(count, "partial input", "partial inputs"))
+			}
 			if count := htmlAdvisoryCount(r); count > 0 {
 				return fmt.Sprintf("No gated candidate findings. Review %s below.", htmlCount(count, "advisory signal", "advisory signals"))
 			}
-			return "No candidate findings or incomplete inputs."
+			if count := len(visibleUnmapped) + len(r.RemoteRules); count > 0 {
+				return fmt.Sprintf("No gated candidate findings. %s could not be fully assessed.", htmlCount(count, "input", "inputs"))
+			}
+			return "No gated candidate findings."
 		}
 	}
 	if htmlExitCode(r) == ExitFindings {
@@ -131,13 +179,16 @@ func htmlGateNote(r *Report) string {
 		}
 		return "Review the affected rules and sources below."
 	}
+	if count := len(r.PartialInputCoverage); count > 0 {
+		return fmt.Sprintf("No gated findings. Review %s below.", htmlCount(count, "partial rule input", "partial rule inputs"))
+	}
 	if count := htmlAdvisoryCount(r); count > 0 {
 		return fmt.Sprintf("No gated findings. Review %s below.", htmlCount(count, "advisory signal", "advisory signals"))
 	}
-	if count := len(r.UnmappedRules) + len(r.RemoteRules); count > 0 {
+	if count := len(visibleUnmapped) + len(r.RemoteRules); count > 0 {
 		return fmt.Sprintf("No gated findings. %s could not be fully assessed.", htmlCount(count, "rule", "rules"))
 	}
-	return "No gated findings or incomplete rule inputs."
+	return "No gated findings."
 }
 
 func htmlHumanLabel(raw any) string {
@@ -187,7 +238,7 @@ func htmlTime(value *time.Time) string {
 
 func htmlDuration(seconds float64) string {
 	if seconds <= 0 {
-		return "Not observed"
+		return "0s"
 	}
 	d := time.Duration(seconds) * time.Second
 	if d >= 24*time.Hour && d%(24*time.Hour) == 0 {
@@ -282,6 +333,53 @@ func htmlDependencyConclusion(item DependencyEvidence) string {
 	return "No recent successful rule-health event was found after the latest rule change. Enable Analytics rule health monitoring or inspect the rule's run history, then rescan."
 }
 
+func htmlCapabilityStatus(r *Report, name string) (CapabilityStatus, bool) {
+	for _, capability := range r.BackendMetadata.Capabilities {
+		if capability.Name == name {
+			return capability.Status, true
+		}
+	}
+	return "", false
+}
+
+func htmlShowDocsStorage(r *Report) bool {
+	for _, source := range r.Sources {
+		if source.Docs >= 0 {
+			return true
+		}
+	}
+	status, known := htmlCapabilityStatus(r, CapabilityDocsStorage)
+	return !known || status != CapabilityUnavailable
+}
+
+func htmlShowVolume(r *Report) bool {
+	for _, source := range r.Sources {
+		if source.Volume != nil && source.Volume.Status != "" && source.Volume.Status != "unknown" {
+			return true
+		}
+	}
+	status, known := htmlCapabilityStatus(r, CapabilityDocsStorage)
+	return !known || status != CapabilityUnavailable
+}
+
+func htmlShowUnusedTelemetry(r *Report) bool {
+	if r.Summary.UnusedTelemetryAssessment != UnusedAssessmentUnavailable {
+		return true
+	}
+	status, known := htmlCapabilityStatus(r, CapabilityDocsStorage)
+	return !known || status != CapabilityUnavailable
+}
+
+func htmlVisibleCapabilities(r *Report) []Capability {
+	visible := make([]Capability, 0, len(r.BackendMetadata.Capabilities))
+	for _, capability := range r.BackendMetadata.Capabilities {
+		if capability.Status != CapabilityUnavailable {
+			visible = append(visible, capability)
+		}
+	}
+	return visible
+}
+
 var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 	"bytes": func(n int64) string {
 		return formatBytes(n)
@@ -300,6 +398,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 		return fmt.Sprintf("%d", *value)
 	},
 	"reason":               DeadReasonLabel,
+	"impairedReason":       ImpairedReasonLabel,
 	"headline":             htmlHeadline,
 	"gateLabel":            htmlGateLabel,
 	"gateClass":            htmlGateClass,
@@ -307,6 +406,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 	"advisoryCount":        htmlAdvisoryCount,
 	"freshnessWarnings":    htmlFreshnessWarnings,
 	"summaryWarnings":      htmlSummaryWarnings,
+	"sourceFindings":       htmlSourceFindings,
 	"human":                htmlHumanLabel,
 	"time":                 htmlTime,
 	"ago":                  htmlAgo,
@@ -315,6 +415,11 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 	"summaryState":         htmlSummaryState,
 	"summaryAction":        htmlSummaryAction,
 	"dependencyConclusion": htmlDependencyConclusion,
+	"showDocsStorage":      htmlShowDocsStorage,
+	"showVolume":           htmlShowVolume,
+	"showUnusedTelemetry":  htmlShowUnusedTelemetry,
+	"visibleCapabilities":  htmlVisibleCapabilities,
+	"visibleUnmapped":      func(r *Report) []RuleRef { return r.VisibleUnmappedRules() },
 	"versions":             func(items []string) string { return strings.Join(items, ", ") },
 	"join":                 func(items []string) string { return strings.Join(items, ", ") },
 }).Parse(`<!doctype html>
@@ -396,6 +501,18 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
       color: var(--muted);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
+    }
+    .policy-note {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .policy-note strong {
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      letter-spacing: .05em;
+      text-transform: uppercase;
     }
     .metrics {
       display: grid;
@@ -515,6 +632,10 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
       -webkit-overflow-scrolling: touch;
     }
     table { width: 100%; min-width: 720px; border-collapse: collapse; }
+    .source-table .source-name { width: 24%; min-width: 180px; }
+    .source-table .source-age { min-width: 88px; white-space: nowrap; }
+    .source-table-compact { min-width: 640px; }
+    .source-table-compact .source-name { width: 38%; min-width: 240px; }
     th, td {
       padding: 9px 11px;
       border-bottom: 1px solid var(--line);
@@ -611,6 +732,11 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 <body>
 {{ $freshnessWarnings := freshnessWarnings . }}
 {{ $summaryWarnings := summaryWarnings . }}
+{{ $sourceFindings := sourceFindings . }}
+{{ $showDocsStorage := showDocsStorage . }}
+{{ $showVolume := showVolume . }}
+{{ $showUnusedTelemetry := showUnusedTelemetry . }}
+{{ $unmappedRules := visibleUnmapped . }}
 <main class="report">
   <header class="hero">
     <div class="hero-top">
@@ -620,6 +746,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     <h1>{{headline .}}</h1>
     <p class="lede">{{gateNote .}}</p>
     <p class="meta"><time datetime="{{.GeneratedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.GeneratedAt.Format "2 Jan 2006, 15:04 UTC"}}</time>{{if .Redacted}} · redacted{{with .Redaction}} with key {{.KeyID}}{{end}}{{end}}</p>
+    {{with .Policy}}<p class="policy-note"><strong>Policy</strong> · {{$.Summary.GatedFindings}} gated · {{.AcceptedActive}} accepted · {{.AcceptedExpired}} expired</p>{{end}}
 
     <div class="metrics">
       <div class="metric"><span>Enabled detections</span><strong>{{.Summary.EnabledRules}}</strong></div>
@@ -634,7 +761,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 
   </header>
 
-  {{if or .DeadDetections .ImpairedDetections .PartialInputCoverage .UnmappedRules .RemoteRules $freshnessWarnings $summaryWarnings}}
+  {{if or .DeadDetections .ImpairedDetections .PartialInputCoverage $unmappedRules .RemoteRules $freshnessWarnings $summaryWarnings $sourceFindings}}
   <section aria-labelledby="attention-heading">
     <div class="section-heading">
       <div>
@@ -668,10 +795,24 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
           <p class="signal-title">{{.Name}}</p>
           <span class="badge severity-{{.Severity}}">{{.Severity}}</span>
         </div>
-        <p>{{range $i, $reason := .Reasons}}{{if $i}} · {{end}}{{human $reason}}{{end}}</p>
+        <p>{{range $i, $reason := .Reasons}}{{if $i}} · {{end}}{{impairedReason $reason}}{{end}}</p>
         {{if .MissingFields}}<p class="action">Missing fields: {{join .MissingFields}}</p>{{end}}
-        {{if .LagSources}}<p class="action">Ingest lag exceeds the rule window in {{join .LagSources}}.</p>{{end}}
+        {{if .LagSources}}<p class="action">Ingest delay may leave a blind window in {{join .LagSources}}.</p>{{end}}
         {{if .IncompatibleSources}}<p class="action">This rule can't use: {{join .IncompatibleSources}}.</p>{{end}}
+      </li>
+      {{end}}
+    </ul>
+    {{end}}
+
+    {{if $sourceFindings}}
+    <h3>Sources that need attention</h3>
+    <ul class="signal-list">
+      {{range $sourceFindings}}
+      <li class="signal">
+        <div class="signal-top">
+          <p class="signal-title">{{.Name}}</p>
+        </div>
+        {{range .Reasons}}<p>{{.}}</p>{{end}}
       </li>
       {{end}}
     </ul>
@@ -693,10 +834,10 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     </ul>
     {{end}}
 
-    {{if or .UnmappedRules .RemoteRules}}
+    {{if or $unmappedRules .RemoteRules}}
     <h3>Rules not fully assessed</h3>
     <ul class="signal-list">
-      {{range .UnmappedRules}}
+      {{range $unmappedRules}}
       <li class="signal">
         <div class="signal-top">
           <p class="signal-title">{{.Name}}</p>
@@ -719,7 +860,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 
     {{if or $freshnessWarnings $summaryWarnings}}
     <h3>Sentinel advisory signals</h3>
-    <p class="advisory-note">These signals add context to the confirmed findings above. They do not change the gate or exit code.</p>
+    <p class="advisory-note">These checks are advisory. They do not change the gate or exit code.</p>
     <ul class="signal-list">
       {{range $freshnessWarnings}}
       <li class="signal">
@@ -757,20 +898,20 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     </div>
     {{if .Sources}}
     <div class="table-wrap" tabindex="0" role="region" aria-label="Sources">
-      <table>
-        <thead><tr><th>Source</th><th>Status</th><th>Age</th><th>Detections</th><th>Documents</th><th>Stored</th><th>Volume</th><th>Schema</th><th>Ingest lag</th></tr></thead>
+      <table class="source-table{{if and (not $showDocsStorage) (not $showVolume)}} source-table-compact{{end}}">
+        <thead><tr><th class="source-name">Source</th><th>Status</th><th class="source-age">Age</th><th>Detections</th>{{if $showDocsStorage}}<th>Documents</th><th>Stored</th>{{end}}{{if $showVolume}}<th>Volume</th>{{end}}<th>Schema</th><th>Ingest lag</th></tr></thead>
         <tbody>
         {{range .Sources}}
           <tr>
-            <td><strong>{{.Name}}</strong></td>
+            <td class="source-name"><strong>{{.Name}}</strong></td>
             <td><span class="badge status-{{.Status}}">{{human .Status}}</span>{{if .ExpectedDowntime}}<br><span class="count">expected downtime</span>{{end}}</td>
-            <td>{{if .AgeSeconds}}{{if .AgeLowerBound}}At least {{end}}{{duration .AgeSeconds}}{{else}}Not observed{{end}}</td>
+            <td class="source-age">{{if .AgeSeconds}}{{if .AgeLowerBound}}At least {{end}}{{duration .AgeSeconds}}{{else}}Not observed{{end}}</td>
             <td>{{.Consumers}}</td>
-            <td>{{if lt .Docs 0}}Not available{{else}}{{.Docs}}{{end}}</td>
-            <td>{{if lt .Docs 0}}Not available{{else}}{{bytes .SizeBytes}}{{end}}</td>
-            <td>{{if .Volume}}<span class="badge status-{{.Volume.Status}}">{{human .Volume.Status}}</span>{{else}}Not assessed{{end}}</td>
-            <td>{{if .Schema}}<span class="badge status-{{.Schema.Status}}">{{human .Schema.Status}}</span>{{else}}Not assessed{{end}}</td>
-            <td>{{if .IngestLag}}{{if eq .IngestLag.Status "assessed"}}p95 {{duration .IngestLag.P95Seconds}} · max {{duration .IngestLag.MaxSeconds}}{{else}}<span class="badge status-{{.IngestLag.Status}}">{{human .IngestLag.Status}}</span>{{with .IngestLag.Detail}}<br><span class="count">{{.}}</span>{{end}}{{end}}{{else}}Not assessed{{end}}</td>
+            {{if $showDocsStorage}}<td>{{if lt .Docs 0}}Not available{{else}}{{.Docs}}{{end}}</td>
+            <td>{{if lt .Docs 0}}Not available{{else}}{{bytes .SizeBytes}}{{end}}</td>{{end}}
+            {{if $showVolume}}<td>{{if .Volume}}<span class="badge status-{{.Volume.Status}}">{{human .Volume.Status}}</span>{{else}}—{{end}}</td>{{end}}
+            <td>{{if .Schema}}<span class="badge status-{{.Schema.Status}}">{{human .Schema.Status}}</span>{{else}}—{{end}}</td>
+            <td>{{if .IngestLag}}{{if eq .IngestLag.Status "assessed"}}p95 {{duration .IngestLag.P95Seconds}} · max {{duration .IngestLag.MaxSeconds}}{{else}}<span class="badge status-{{.IngestLag.Status}}">{{human .IngestLag.Status}}</span>{{with .IngestLag.Detail}}<br><span class="count">{{.}}</span>{{end}}{{end}}{{else}}—{{end}}</td>
           </tr>
         {{end}}
         </tbody>
@@ -780,20 +921,22 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     <p class="empty-note">No source inventory was available for this scan.</p>
     {{end}}
 
-    <h3>Stored unused telemetry</h3>
-    {{if eq .Summary.UnusedTelemetryAssessment "unavailable"}}
-      <p class="empty-note">Not assessed: {{.Summary.UnusedTelemetryExplanation}}.</p>
-    {{else if eq .Summary.UnusedTelemetryAssessment "not-applicable"}}
-      <p class="empty-note">Not applicable to this candidate-rule report.</p>
-    {{else if .UnusedTelemetry}}
-      <div class="table-wrap" tabindex="0" role="region" aria-label="Stored unused telemetry">
-        <table>
-          <thead><tr><th>Source</th><th>Documents</th><th>Stored</th></tr></thead>
-          <tbody>{{range .UnusedTelemetry}}<tr><td><strong>{{.Name}}</strong></td><td>{{.Docs}}</td><td>{{bytes .SizeBytes}}</td></tr>{{end}}</tbody>
-        </table>
-      </div>
-    {{else}}
-      <p class="empty-note">No stored source was left without an enabled detection reading it.</p>
+    {{if $showUnusedTelemetry}}
+      <h3>Stored unused telemetry</h3>
+      {{if eq .Summary.UnusedTelemetryAssessment "unavailable"}}
+        <p class="empty-note">Not assessed: {{.Summary.UnusedTelemetryExplanation}}.</p>
+      {{else if eq .Summary.UnusedTelemetryAssessment "not-applicable"}}
+        <p class="empty-note">Not applicable to this candidate-rule report.</p>
+      {{else if .UnusedTelemetry}}
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Stored unused telemetry">
+          <table>
+            <thead><tr><th>Source</th><th>Documents</th><th>Stored</th></tr></thead>
+            <tbody>{{range .UnusedTelemetry}}<tr><td><strong>{{.Name}}</strong></td><td>{{.Docs}}</td><td>{{bytes .SizeBytes}}</td></tr>{{end}}</tbody>
+          </table>
+        </div>
+      {{else}}
+        <p class="empty-note">No stored source was left without an enabled detection reading it.</p>
+      {{end}}
     {{end}}
   </section>
 
@@ -956,11 +1099,11 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 
         <h3>About this scan</h3>
         <p class="section-copy">{{.BackendMetadata.Product}}{{with .BackendMetadata.ObservedVersion}} {{.}}{{end}} ({{.Backend}}) · {{.SchemaVersion}} · producer {{.Producer.Name}} {{.Producer.Version}}{{with .BackendMetadata.SupportedVersionLines}} · recognized versions {{versions .}}{{end}}</p>
-        {{if .BackendMetadata.Capabilities}}
+        {{with visibleCapabilities .}}
         <div class="table-wrap" tabindex="0" role="region" aria-label="Backend capabilities">
           <table>
             <thead><tr><th>Capability</th><th>Status</th></tr></thead>
-            <tbody>{{range .BackendMetadata.Capabilities}}<tr><td>{{human .Name}}</td><td><span class="badge status-{{.Status}}">{{human .Status}}</span></td></tr>{{end}}</tbody>
+            <tbody>{{range .}}<tr><td>{{human .Name}}</td><td><span class="badge status-{{.Status}}">{{human .Status}}</span></td></tr>{{end}}</tbody>
           </table>
         </div>
         {{end}}

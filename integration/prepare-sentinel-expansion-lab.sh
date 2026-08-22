@@ -2,8 +2,9 @@
 set -eu
 
 # Prepares only the disposable fixtures added by the Sentinel expansion test.
-# The default mode is plan. apply and cleanup require an explicit confirmation
-# value and always target the named child resources below.
+# The default mode is plan. apply and cleanup require an explicit expansion
+# confirmation. apply also requires the exact base-row confirmation before it
+# can call the narrow base ingestion mode.
 
 mode=${1:-plan}
 subscription_id=${DEADAIR_AZURE_SUBSCRIPTION_ID:-}
@@ -12,41 +13,44 @@ workspace=${DEADAIR_SENTINEL_WORKSPACE:-}
 remote_workspace=${DEADAIR_SENTINEL_REMOTE_WORKSPACE:-}
 remote_workspace_id_env=${DEADAIR_SENTINEL_REMOTE_WORKSPACE_ID:-}
 confirmation=${DEADAIR_SENTINEL_LAB_CONFIRM:-}
+base_confirmation=${DEADAIR_SENTINEL_BASE_LAB_CONFIRM:-}
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+base_lab_script="$script_dir/prepare-sentinel-base-lab.sh"
 
-watchlist_alias=DeadairVIPs
-watchlist_source=deadair-sentinel-expansion-fixture.csv
-remote_table=DeadairRemote_CL
-summary_rule=deadair-basic-summary
-summary_table=DeadairBasicSummary_CL
-summary_display=deadair-basic-summary
-summary_query='DeadairBasic_CL | summarize EventCount=count() | extend Marker="deadair-summary-runtime"'
-summary_diagnostic_setting=deadair-summary-runtime
+watchlist_alias=PrivilegedAccounts
+watchlist_source=deadair-privileged-accounts.csv
+remote_table=RegionalRemoteAccess_CL
+summary_rule=firewall-deny-summary
+summary_table=FirewallDenySummary_CL
+summary_display='[lab] Summarize denied firewall connections'
+summary_query='FirewallTrafficRaw_CL | where DeviceAction == "Deny" | summarize DeniedConnections=count() by DeviceVendor, DeviceProduct'
+summary_diagnostic_setting=firewall-deny-summary-runtime
 fixture_marker=deadair-sentinel-expansion-validation
 base_fixture_marker=deadair-sentinel-base-validation
 summary_table_description="$fixture_marker:$summary_table"
 nrt_rule_id=78888888-8888-4888-8888-888888888888
-nrt_display='deadair lab - nrt dependency'
-nrt_description='Disposable deadair Sentinel conformance rule.'
-nrt_query='DeadairFresh_CL | where TimeGenerated < datetime(1900-01-01)'
+nrt_display='[lab] Suspicious interactive sign-in (NRT)'
+nrt_description='Disposable Sentinel lab rule for deadair conformance testing.'
+nrt_query='WorkforceSignIn_CL | where TimeGenerated < datetime(1900-01-01)'
 nrt_suppression=PT1H
-base_function=DeadairLabSource
-base_function_body='DeadairFresh_CL | project TimeGenerated, EventId, Marker'
-parameterized_function=DeadairLabParameterized
-parameterized_function_body='DeadairFresh_CL | where Marker == marker | project TimeGenerated, EventId, Marker'
-parameterized_function_parameters=marker:string
+base_function=RecentIdentitySignIns
+base_function_body='WorkforceSignIn_CL | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+parameterized_function=IdentitySignInsByUser
+parameterized_function_body='WorkforceSignIn_CL | where UserPrincipalName == userPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult'
+parameterized_function_parameters=userPrincipalName:string
 
 watchlist_rule_id=79911111-1111-4111-8111-111111111111
-watchlist_rule_display='deadair expansion - literal watchlist dependency'
-watchlist_rule_query='_GetWatchlist("DeadairVIPs") | take 0'
+watchlist_rule_display='[lab] Privileged account activity'
+watchlist_rule_query='_GetWatchlist("PrivilegedAccounts") | project UserPrincipalName, Role | take 0'
 asim_rule_id=79922222-2222-4222-8222-222222222222
-asim_rule_display='deadair expansion - native ASIM dependency'
+asim_rule_display='[lab] ASIM authentication activity'
 asim_rule_query='_Im_Authentication(starttime=ago(1d),endtime=now()) | take 0'
 remote_rule_id=79933333-3333-4333-8333-333333333333
-remote_rule_display='deadair expansion - remote workspace dependency'
+remote_rule_display='[lab] Regional VPN authentication'
 remote_rule_query="workspace(\"$remote_workspace\").$remote_table | take 0"
 summary_consumer_rule_id=79944444-4444-4444-8444-444444444444
-summary_consumer_rule_display='deadair expansion - summary table consumer'
-summary_consumer_rule_query="$summary_table | where TimeGenerated > ago(30m) | project TimeGenerated, Marker, EventCount"
+summary_consumer_rule_display='[lab] Firewall deny volume from summary data'
+summary_consumer_rule_query="$summary_table | where TimeGenerated > ago(30m) | project TimeGenerated, DeviceVendor, DeviceProduct, DeniedConnections"
 
 case "$mode" in
 plan|verify|apply|cleanup|predicate-test) ;;
@@ -55,6 +59,22 @@ plan|verify|apply|cleanup|predicate-test) ;;
 	exit 2
 	;;
 esac
+
+valid_uuid() {
+	case "$1" in
+	????????-????-????-????-????????????) ;;
+	*) return 1 ;;
+	esac
+	uuid_compact=$(printf '%s' "$1" | tr -d '-')
+	case "$uuid_compact" in
+	????????????????????????????????) ;;
+	*) return 1 ;;
+	esac
+	case "$uuid_compact" in
+	*[!0-9A-Fa-f]*) return 1 ;;
+	esac
+	return 0
+}
 
 if [ "$mode" = predicate-test ] && [ -z "$subscription_id" ]; then
 	subscription_id=00000000-0000-0000-0000-000000000000
@@ -164,12 +184,12 @@ watchlist_matches() {
 		(((.type // "") | ascii_downcase) == "microsoft.securityinsights/watchlists") and
 		(if (.properties | type) == "object" then
 			(.properties.watchlistAlias == $alias) and
-			(.properties.displayName == "deadair expansion validation VIPs") and
+			(.properties.displayName == "[lab] Privileged accounts") and
 			(.properties.provider == "deadair") and
 			(.properties.source == $source) and
 			(.properties.sourceType == "Local") and
 			(.properties.description == $marker) and
-			(.properties.itemsSearchKey == "FixtureID") and
+			(.properties.itemsSearchKey == "UserPrincipalName") and
 			(((.properties | has("contentType")) | not) or
 				.properties.contentType == "text/csv") and
 			(.properties.isDeleted == false)
@@ -183,8 +203,10 @@ summary_table_matches() {
 		def columns:
 			[.properties.schema.columns[]? | {name, type: (.type | ascii_downcase)}] | sort_by(.name);
 		def query_columns:
-			[{name: "TimeGenerated", type: "datetime"}, {name: "EventCount", type: "long"},
-			 {name: "Marker", type: "string"}] | sort_by(.name);
+			[{name: "TimeGenerated", type: "datetime"},
+			 {name: "DeviceVendor", type: "string"},
+			 {name: "DeviceProduct", type: "string"},
+			 {name: "DeniedConnections", type: "long"}] | sort_by(.name);
 		def service_columns:
 			[{name: "_RuleName", type: "string"}, {name: "_RuleLastModifiedTime", type: "datetime"},
 			 {name: "_BinSize", type: "long"}, {name: "_BinStartTime", type: "datetime"}];
@@ -335,20 +357,25 @@ basic_data_response_matches() {
 		(.tables[0].columns | type) == "array" and
 		([.tables[0].columns[]? | {name, type: (.type | ascii_downcase)}] == [
 			{name: "TimeGenerated", type: "datetime"},
-			{name: "Marker", type: "string"}
+			{name: "FlowId", type: "string"},
+			{name: "DeviceVendor", type: "string"},
+			{name: "DeviceProduct", type: "string"},
+			{name: "DeviceAction", type: "string"}
 		]) and
 		(.tables[0].rows | type) == "array" and (.tables[0].rows | length) == 1 and
-		(.tables[0].rows[0] | length) == 2 and
+		(.tables[0].rows[0] | length) == 5 and
 		(.tables[0].rows[0][0] | type) == "string" and
 		(.tables[0].rows[0][0] |
 			try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null) != null and
 		(.tables[0].rows[0][1] | type) == "string" and
-		(.tables[0].rows[0][1] | test("^summary-source-[0-9]+$"))' >/dev/null
+		(.tables[0].rows[0][1] | test("^denied-flow-[0-9]+$")) and
+		(.tables[0].rows[0][2] | type) == "string" and (.tables[0].rows[0][2] != "") and
+		(.tables[0].rows[0][3] | type) == "string" and (.tables[0].rows[0][3] != "") and
+		(.tables[0].rows[0][4] == "Deny")' >/dev/null
 }
 
 summary_output_response_matches() {
-	printf '%s' "$1" | jq -e --arg rule "$summary_rule" --arg marker "deadair-summary-runtime" \
-		--arg revision "$2" '
+	printf '%s' "$1" | jq -e --arg rule "$summary_rule" --arg revision "$2" '
 		def epoch:
 			try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null;
 		($revision | epoch) as $revision_epoch |
@@ -359,56 +386,58 @@ summary_output_response_matches() {
 		(.tables[0].columns | type) == "array" and
 		([.tables[0].columns[]? | {name, type: (.type | ascii_downcase)}] == [
 			{name: "TimeGenerated", type: "datetime"},
-			{name: "EventCount", type: "long"},
-			{name: "Marker", type: "string"},
+			{name: "DeviceVendor", type: "string"},
+			{name: "DeviceProduct", type: "string"},
+			{name: "DeniedConnections", type: "long"},
 			{name: "RuleName", type: "string"},
 			{name: "RuleModifiedAt", type: "datetime"},
 			{name: "BinSize", type: "long"},
 			{name: "BinStartTime", type: "datetime"}
 		]) and
 		(.tables[0].rows | type) == "array" and (.tables[0].rows | length) == 1 and
-		(.tables[0].rows[0] | length) == 7 and
+		(.tables[0].rows[0] | length) == 8 and
 		(.tables[0].rows[0] as $row |
 			($row[0] | type) == "string" and ($row[0] | epoch) != null and
-			($row[1] | type) == "number" and $row[1] > 0 and ($row[1] | floor) == $row[1] and
-			($row[2] == $marker) and ($row[3] == $rule) and
-			($row[4] | type) == "string" and ($row[4] | epoch) != null and
-			(($row[4] | epoch) >= ($revision_epoch - 30)) and
-			(($row[4] | epoch) <= ($revision_epoch + 30)) and
-			($row[5] == 20) and
-			($row[6] | type) == "string" and ($row[6] | epoch) != null)' >/dev/null
+			($row[1] == "Fortinet") and ($row[2] == "FortiGate") and
+			($row[3] | type) == "number" and $row[3] > 0 and ($row[3] | floor) == $row[3] and
+			($row[4] == $rule) and
+			($row[5] | type) == "string" and ($row[5] | epoch) != null and
+			(($row[5] | epoch) >= ($revision_epoch - 30)) and
+			(($row[5] | epoch) <= ($revision_epoch + 30)) and
+			($row[6] == 20) and
+			($row[7] | type) == "string" and ($row[7] | epoch) != null)' >/dev/null
 }
 
 summary_source_response_matches() {
-	printf '%s' "$1" | jq -e --argjson expected "$2" '
+	printf '%s' "$1" | jq -e --argjson expected "$2" --arg vendor "$3" --arg product "$4" '
 		((has("error") | not) or .error == null) and
 		($expected | type) == "number" and $expected > 0 and ($expected | floor) == $expected and
 		(.tables | type) == "array" and (.tables | length) == 1 and
 		(.tables[0].name == "PrimaryResult") and
 		(.tables[0].columns | type) == "array" and
 		([.tables[0].columns[]? | {name, type: (.type | ascii_downcase)}] == [
-			{name: "SourceEventCount", type: "long"},
-			{name: "SourceMarker", type: "string"}
+			{name: "SourceDeniedCount", type: "long"},
+			{name: "SourceFlowId", type: "string"},
+			{name: "DeviceVendor", type: "string"},
+			{name: "DeviceProduct", type: "string"}
 		]) and
 		(.tables[0].rows | type) == "array" and (.tables[0].rows | length) == 1 and
-		(.tables[0].rows[0] | length) == 2 and
+		(.tables[0].rows[0] | length) == 4 and
 		(.tables[0].rows[0][0] | type) == "number" and
 		(.tables[0].rows[0][0] > 0) and (.tables[0].rows[0][0] == $expected) and
 		((.tables[0].rows[0][0] | floor) == .tables[0].rows[0][0]) and
 		(.tables[0].rows[0][1] | type) == "string" and
-		(.tables[0].rows[0][1] | test("^summary-source-[0-9]+$"))' >/dev/null
+		(.tables[0].rows[0][1] | test("^denied-flow-[0-9]+$")) and
+		(.tables[0].rows[0][2] == $vendor) and
+		(.tables[0].rows[0][3] == $product)' >/dev/null
 }
 
 expect_predicate_accepts() {
 	label=$1
 	predicate=$2
 	resource=$3
-	if [ "$#" -eq 4 ]; then
-		predicate_arg=$4
-		if "$predicate" "$resource" "$predicate_arg"; then
-			return 0
-		fi
-	elif "$predicate" "$resource"; then
+	shift 3
+	if "$predicate" "$resource" "$@"; then
 		return 0
 	fi
 	echo "predicate regression: $label was rejected" >&2
@@ -419,12 +448,8 @@ expect_predicate_rejects() {
 	label=$1
 	predicate=$2
 	resource=$3
-	if [ "$#" -eq 4 ]; then
-		predicate_arg=$4
-		if ! "$predicate" "$resource" "$predicate_arg"; then
-			return 0
-		fi
-	elif ! "$predicate" "$resource"; then
+	shift 3
+	if ! "$predicate" "$resource" "$@"; then
 		return 0
 	fi
 	echo "predicate regression: $label was accepted" >&2
@@ -452,9 +477,9 @@ run_predicate_tests() {
 		--arg marker "$fixture_marker" --arg source "$watchlist_source" '{
 		id: $id, name: $alias, type: "Microsoft.SecurityInsights/watchlists",
 		properties: {
-			watchlistAlias: $alias, displayName: "deadair expansion validation VIPs",
+			watchlistAlias: $alias, displayName: "[lab] Privileged accounts",
 			provider: "deadair", source: $source, sourceType: "Local", description: $marker,
-			itemsSearchKey: "FixtureID", isDeleted: false
+			itemsSearchKey: "UserPrincipalName", isDeleted: false
 		}
 	}')
 	expect_predicate_accepts "watchlist with omitted contentType" watchlist_matches "$watchlist"
@@ -478,8 +503,9 @@ run_predicate_tests() {
 				name: $table, description: $description,
 				columns: [
 					{name: "TimeGenerated", type: "dateTime"},
-					{name: "EventCount", type: "long"},
-					{name: "Marker", type: "string"}
+					{name: "DeviceVendor", type: "string"},
+					{name: "DeviceProduct", type: "string"},
+					{name: "DeniedConnections", type: "long"}
 				]
 			}
 		}
@@ -492,7 +518,7 @@ run_predicate_tests() {
 	expect_predicate_rejects "summary table with an unrelated extra column" summary_table_matches \
 		"$(printf '%s' "$summary" | jq -c '.properties.schema.columns += [{name: "Extra", type: "string"}]')"
 	expect_predicate_rejects "summary table with a wrong column type" summary_table_matches \
-		"$(printf '%s' "$summary" | jq -c '(.properties.schema.columns[] | select(.name == "EventCount")).type = "string"')"
+		"$(printf '%s' "$summary" | jq -c '(.properties.schema.columns[] | select(.name == "DeniedConnections")).type = "string"')"
 	expect_predicate_rejects "summary table that is not settled" summary_table_matches \
 		"$(printf '%s' "$summary" | jq -c '.properties.provisioningState = "Updating"')"
 	summary_with_service=$(printf '%s' "$summary" | jq -c '.properties.schema.columns += [
@@ -676,16 +702,21 @@ run_predicate_tests() {
 			name: "PrimaryResult",
 			columns: [
 				{name: "TimeGenerated", type: "datetime"},
-				{name: "Marker", type: "string"}
+				{name: "FlowId", type: "string"},
+				{name: "DeviceVendor", type: "string"},
+				{name: "DeviceProduct", type: "string"},
+				{name: "DeviceAction", type: "string"}
 			],
-			rows: [["2026-08-22T12:05:00.1234567Z", "summary-source-1787399100"]]
+			rows: [["2026-08-22T12:05:00.1234567Z", "denied-flow-1787399100", "Fortinet", "FortiGate", "Deny"]]
 		}]
 	}')
-	expect_predicate_accepts "current exact Basic-plan source row" basic_data_response_matches "$basic_data"
+	expect_predicate_accepts "current exact Basic-plan denied-flow row" basic_data_response_matches "$basic_data"
 	expect_predicate_rejects "empty Basic-plan search result" basic_data_response_matches \
 		"$(printf '%s' "$basic_data" | jq -c '.tables[0].rows = []')"
-	expect_predicate_rejects "Basic-plan row without the exact source marker" basic_data_response_matches \
-		"$(printf '%s' "$basic_data" | jq -c '.tables[0].rows[0][1] = "summary-source-current"')"
+	expect_predicate_rejects "Basic-plan row without the exact denied FlowId" basic_data_response_matches \
+		"$(printf '%s' "$basic_data" | jq -c '.tables[0].rows[0][1] = "denied-flow-current"')"
+	expect_predicate_rejects "Basic-plan row without a Deny action" basic_data_response_matches \
+		"$(printf '%s' "$basic_data" | jq -c '.tables[0].rows[0][4] = "Allow"')"
 	expect_predicate_rejects "duplicate Basic-plan search rows" basic_data_response_matches \
 		"$(printf '%s' "$basic_data" | jq -c '.tables[0].rows += [.tables[0].rows[0]]')"
 	expect_predicate_rejects "Basic-plan search result with a wrong column type" basic_data_response_matches \
@@ -699,27 +730,30 @@ run_predicate_tests() {
 			name: "PrimaryResult",
 			columns: [
 				{name: "TimeGenerated", type: "datetime"},
-				{name: "EventCount", type: "long"},
-				{name: "Marker", type: "string"},
+				{name: "DeviceVendor", type: "string"},
+				{name: "DeviceProduct", type: "string"},
+				{name: "DeniedConnections", type: "long"},
 				{name: "RuleName", type: "string"},
 				{name: "RuleModifiedAt", type: "datetime"},
 				{name: "BinSize", type: "long"},
 				{name: "BinStartTime", type: "datetime"}
 			],
-			rows: [["2026-08-22T12:20:00Z", 1, "deadair-summary-runtime", $rule,
+			rows: [["2026-08-22T12:20:00Z", "Fortinet", "FortiGate", 1, $rule,
 				"2026-08-22T11:59:55.1234567Z", 20, "2026-08-22T12:00:00Z"]]
 		}]
 	}')
 	expect_predicate_accepts "exact positive owned summary output" summary_output_response_matches \
 		"$summary_output" "$output_revision"
 	expect_predicate_rejects "zero-count owned summary output" summary_output_response_matches \
-		"$(printf '%s' "$summary_output" | jq -c '.tables[0].rows[0][1] = 0')" "$output_revision"
+		"$(printf '%s' "$summary_output" | jq -c '.tables[0].rows[0][3] = 0')" "$output_revision"
+	expect_predicate_rejects "summary output for another device family" summary_output_response_matches \
+		"$(printf '%s' "$summary_output" | jq -c '.tables[0].rows[0][2] = "PAN-OS"')" "$output_revision"
 	expect_predicate_rejects "summary output for another rule" summary_output_response_matches \
-		"$(printf '%s' "$summary_output" | jq -c '.tables[0].rows[0][3] = "other-summary"')" "$output_revision"
+		"$(printf '%s' "$summary_output" | jq -c '.tables[0].rows[0][4] = "other-summary"')" "$output_revision"
 	expect_predicate_rejects "summary output with another bin size" summary_output_response_matches \
-		"$(printf '%s' "$summary_output" | jq -c '.tables[0].rows[0][5] = 60')" "$output_revision"
+		"$(printf '%s' "$summary_output" | jq -c '.tables[0].rows[0][6] = 60')" "$output_revision"
 	expect_predicate_rejects "summary output outside the definition timestamp tolerance" summary_output_response_matches \
-		"$(printf '%s' "$summary_output" | jq -c '.tables[0].rows[0][4] = "2026-08-22T11:59:29Z"')" "$output_revision"
+		"$(printf '%s' "$summary_output" | jq -c '.tables[0].rows[0][5] = "2026-08-22T11:59:29Z"')" "$output_revision"
 	expect_predicate_rejects "partial summary output" summary_output_response_matches \
 		"$(printf '%s' "$summary_output" | jq -c '.error = {code: "PartialError"}')" "$output_revision"
 
@@ -727,21 +761,25 @@ run_predicate_tests() {
 		tables: [{
 			name: "PrimaryResult",
 			columns: [
-				{name: "SourceEventCount", type: "long"},
-				{name: "SourceMarker", type: "string"}
+				{name: "SourceDeniedCount", type: "long"},
+				{name: "SourceFlowId", type: "string"},
+				{name: "DeviceVendor", type: "string"},
+				{name: "DeviceProduct", type: "string"}
 			],
-			rows: [[1, "summary-source-1787399100"]]
+			rows: [[1, "denied-flow-1787399100", "Fortinet", "FortiGate"]]
 		}]
 	}')
-	expect_predicate_accepts "exact positive source bin" summary_source_response_matches "$summary_source" 1
+	expect_predicate_accepts "exact positive source bin" summary_source_response_matches "$summary_source" 1 Fortinet FortiGate
 	expect_predicate_rejects "zero-count source bin" summary_source_response_matches \
-		"$(printf '%s' "$summary_source" | jq -c '.tables[0].rows[0][0] = 0')" 1
+		"$(printf '%s' "$summary_source" | jq -c '.tables[0].rows[0][0] = 0')" 1 Fortinet FortiGate
 	expect_predicate_rejects "source bin count different from summary output" summary_source_response_matches \
-		"$(printf '%s' "$summary_source" | jq -c '.tables[0].rows[0][0] = 2')" 1
-	expect_predicate_rejects "source bin without the owned marker" summary_source_response_matches \
-		"$(printf '%s' "$summary_source" | jq -c '.tables[0].rows[0][1] = "other-source-1787399100"')" 1
+		"$(printf '%s' "$summary_source" | jq -c '.tables[0].rows[0][0] = 2')" 1 Fortinet FortiGate
+	expect_predicate_rejects "source bin without the owned denied FlowId" summary_source_response_matches \
+		"$(printf '%s' "$summary_source" | jq -c '.tables[0].rows[0][1] = "other-source-1787399100"')" 1 Fortinet FortiGate
+	expect_predicate_rejects "source bin for another device family" summary_source_response_matches \
+		"$(printf '%s' "$summary_source" | jq -c '.tables[0].rows[0][3] = "PAN-OS"')" 1 Fortinet FortiGate
 	expect_predicate_rejects "partial source-bin search" summary_source_response_matches \
-		"$(printf '%s' "$summary_source" | jq -c '.error = {code: "PartialError"}')" 1
+		"$(printf '%s' "$summary_source" | jq -c '.error = {code: "PartialError"}')" 1 Fortinet FortiGate
 
 	echo "Sentinel expansion ownership predicate tests passed"
 }
@@ -772,7 +810,9 @@ print_plan() {
 	echo "  PUT/DELETE SummaryLogs diagnostic setting: $summary_diagnostic_path"
 	echo "  PUT/DELETE owned summary destination: $summary_table_path"
 	echo "  PUT/DELETE four disabled expansion analytics rules under: $sentinel_path/alertRules"
+	echo "  POST one current denied-flow row through the exact existing base DCR after the summary rule settles"
 	echo "  confirmation for apply/cleanup: DEADAIR_SENTINEL_LAB_CONFIRM=$fixture_marker"
+	echo "  separate base-row confirmation for apply: DEADAIR_SENTINEL_BASE_LAB_CONFIRM=$expected_base_confirmation"
 	echo
 	echo "Run the read-only test with:"
 	echo "  require certificate EnvironmentCredential variables and matching DEADAIR_SENTINEL_SCANNER_CLIENT_ID"
@@ -1047,11 +1087,11 @@ wait_for_summary_output_proof() {
 		;;
 	esac
 
-	output_query="$summary_table
+output_query="$summary_table
 | where TimeGenerated between (ago(7d) .. now())
-| where _RuleName == \"$summary_rule\" and _BinSize == 20 and Marker == \"deadair-summary-runtime\" and EventCount >= 1
-| summarize arg_max(TimeGenerated, EventCount, Marker, _RuleName, _RuleLastModifiedTime, _BinSize, _BinStartTime)
-| project TimeGenerated, EventCount, Marker, RuleName=_RuleName, RuleModifiedAt=_RuleLastModifiedTime, BinSize=_BinSize, BinStartTime=_BinStartTime"
+| where _RuleName == \"$summary_rule\" and _BinSize == 20 and DeniedConnections >= 1
+| summarize arg_max(TimeGenerated, DeviceVendor, DeviceProduct, DeniedConnections, _RuleName, _RuleLastModifiedTime, _BinSize, _BinStartTime)
+| project TimeGenerated, DeviceVendor, DeviceProduct, DeniedConnections, RuleName=_RuleName, RuleModifiedAt=_RuleLastModifiedTime, BinSize=_BinSize, BinStartTime=_BinStartTime"
 	output_body=$(jq -cn --arg query "$output_query" '{query: $query}')
 	output_attempt=0
 	output_max_attempts=180
@@ -1061,9 +1101,11 @@ wait_for_summary_output_proof() {
 			--uri "https://api.loganalytics.io/v1/workspaces/$home_workspace_id/query" \
 			--body "$output_body" --output json 2>/dev/null); then
 			if summary_output_response_matches "$output_response" "$output_revision"; then
-				output_event_count=$(printf '%s' "$output_response" | jq -r '.tables[0].rows[0][1]')
-				output_bin_size=$(printf '%s' "$output_response" | jq -r '.tables[0].rows[0][5]')
-				output_bin_start=$(printf '%s' "$output_response" | jq -r '.tables[0].rows[0][6]')
+				output_vendor=$(printf '%s' "$output_response" | jq -r '.tables[0].rows[0][1]')
+				output_product=$(printf '%s' "$output_response" | jq -r '.tables[0].rows[0][2]')
+				output_denied_count=$(printf '%s' "$output_response" | jq -r '.tables[0].rows[0][3]')
+				output_bin_size=$(printf '%s' "$output_response" | jq -r '.tables[0].rows[0][6]')
+				output_bin_start=$(printf '%s' "$output_response" | jq -r '.tables[0].rows[0][7]')
 				output_bin_safe=false
 				case "$output_bin_start" in
 				????-??-??T??:??:??Z|????-??-??T??:??:??.*Z)
@@ -1087,16 +1129,17 @@ wait_for_summary_output_proof() {
 					output_last_state="summary destination returned unsafe bin metadata"
 				else
 					source_query="let bin_start=datetime($output_bin_start);
-DeadairBasic_CL
+FirewallTrafficRaw_CL
 | where TimeGenerated >= bin_start and TimeGenerated < bin_start + ${output_bin_size}m
-| where Marker matches regex \"^summary-source-[0-9]+$\"
-| summarize SourceEventCount=count(), arg_max(TimeGenerated, Marker)
-| project SourceEventCount, SourceMarker=Marker"
+| where DeviceAction == \"Deny\" and FlowId matches regex \"^denied-flow-[0-9]+$\"
+| where DeviceVendor == \"Fortinet\" and DeviceProduct == \"FortiGate\"
+| summarize SourceDeniedCount=count(), arg_max(TimeGenerated, FlowId, DeviceVendor, DeviceProduct)
+| project SourceDeniedCount, SourceFlowId=FlowId, DeviceVendor, DeviceProduct"
 					source_body=$(jq -cn --arg query "$source_query" '{query: $query}')
 					if source_response=$(az rest --only-show-errors --method post --resource https://api.loganalytics.io \
 						--uri "https://api.loganalytics.io/v1/workspaces/$home_workspace_id/search?timespan=P1D" \
 						--body "$source_body" --output json 2>/dev/null); then
-						if summary_source_response_matches "$source_response" "$output_event_count"; then
+						if summary_source_response_matches "$source_response" "$output_denied_count" "$output_vendor" "$output_product"; then
 							if ! proof_rule_resource=$(az rest --only-show-errors --method get \
 								--uri "$summary_uri" --output json 2>/dev/null) ||
 								! proof_table_resource=$(az rest --only-show-errors --method get \
@@ -1111,10 +1154,10 @@ DeadairBasic_CL
 								echo "summary output ownership changed during the bounded proof; rerun expansion verify" >&2
 								return 1
 							fi
-							echo "positive summary destination row matches its exact Basic-plan source bin"
+							echo "positive firewall-deny summary row matches its exact Basic-plan source bin"
 							return 0
 						fi
-						output_last_state="Basic-plan source bin did not match the positive summary destination count and marker"
+						output_last_state="Basic-plan denied-flow source bin did not match the positive summary destination count"
 					else
 						output_last_state="bounded Basic-plan source-bin search failed"
 					fi
@@ -1224,21 +1267,65 @@ verify_base_table() {
 		.properties.provisioningState == "Succeeded" and
 		.properties.schema.description == $marker and .properties.plan == $plan and
 		((.properties.schema.name // .name) | ascii_downcase) == ($name | ascii_downcase) and
-		(if $shape == "four" then
-			([.properties.schema.columns[]?] | length) == 4 and
+		(if $shape == "auth" then
+			([.properties.schema.columns[]?] | length) == 5 and
 			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
-			any(.properties.schema.columns[]?; .name == "EventId" and (.type | ascii_downcase) == "string") and
-			any(.properties.schema.columns[]?; .name == "Marker" and (.type | ascii_downcase) == "string") and
-			any(.properties.schema.columns[]?; .name == "ExpectedField" and (.type | ascii_downcase) == "string")
-		elif $shape == "predicate" then
-			([.properties.schema.columns[]?] | length) == 3 and
+			any(.properties.schema.columns[]?; .name == "SignInId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "UserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ClientIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "AuthenticationResult" and (.type | ascii_downcase) == "string")
+		elif $shape == "saas_auth" then
+			([.properties.schema.columns[]?] | length) == 6 and
 			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
-			any(.properties.schema.columns[]?; .name == "EventId" and (.type | ascii_downcase) == "string") and
-			any(.properties.schema.columns[]?; .name == "DeviceVendor" and (.type | ascii_downcase) == "string")
-		else
-			([.properties.schema.columns[]?] | length) == 2 and
+			any(.properties.schema.columns[]?; .name == "SignInId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "UserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ClientIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "AuthenticationResult" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ApplicationName" and (.type | ascii_downcase) == "string")
+		elif $shape == "adfs_auth" then
+			([.properties.schema.columns[]?] | length) == 6 and
 			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
-			any(.properties.schema.columns[]?; .name == "Marker" and (.type | ascii_downcase) == "string")
+			any(.properties.schema.columns[]?; .name == "SignInId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "UserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ClientIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "AuthenticationResult" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "RelyingParty" and (.type | ascii_downcase) == "string")
+		elif $shape == "perimeter" then
+			([.properties.schema.columns[]?] | length) == 8 and
+			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
+			any(.properties.schema.columns[]?; .name == "SessionId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DeviceVendor" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DeviceProduct" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "SourceIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DestinationIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DestinationPort" and (.type | ascii_downcase) == "int") and
+			any(.properties.schema.columns[]?; .name == "DeviceAction" and (.type | ascii_downcase) == "string")
+		elif $shape == "flow" then
+			([.properties.schema.columns[]?] | length) == 8 and
+			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
+			any(.properties.schema.columns[]?; .name == "FlowId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DeviceVendor" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DeviceProduct" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "SourceIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DestinationIpAddress" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "DestinationPort" and (.type | ascii_downcase) == "int") and
+			any(.properties.schema.columns[]?; .name == "DeviceAction" and (.type | ascii_downcase) == "string")
+		elif $shape == "audit" then
+			([.properties.schema.columns[]?] | length) == 5 and
+			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
+			any(.properties.schema.columns[]?; .name == "ActivityId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ActorUserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "OperationName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "Result" and (.type | ascii_downcase) == "string")
+		elif $shape == "saas_audit" then
+			([.properties.schema.columns[]?] | length) == 6 and
+			any(.properties.schema.columns[]?; .name == "TimeGenerated" and (.type | ascii_downcase) == "datetime") and
+			any(.properties.schema.columns[]?; .name == "ActivityId" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ActorUserPrincipalName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "OperationName" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "Result" and (.type | ascii_downcase) == "string") and
+			any(.properties.schema.columns[]?; .name == "ServiceName" and (.type | ascii_downcase) == "string")
+		else false
 		end)')
 	if [ "$table_exact" != true ]; then
 		add_prerequisite_issue "base table $name does not match plan $want_plan and its exact owned $want_shape-column schema"
@@ -1282,10 +1369,10 @@ verify_base_rule() {
 
 verify_base_data() {
 	base_data_query='union
-(DeadairFresh_CL | where ingestion_time() >= ago(24h) and TimeGenerated >= ago(24h) | extend IngestedAt=ingestion_time() | summarize RowCount=count(), arg_max(IngestedAt, TimeGenerated, EventId, Marker, ExpectedField) | project Source="Fresh", RowCount, EventIDPresent=isnotempty(EventId), MarkerPresent=isnotempty(Marker), ExpectedFieldPresent=isnotempty(ExpectedField), Paired=isnotnull(TimeGenerated) and isnotnull(IngestedAt), LagSeconds=datetime_diff("second", IngestedAt, TimeGenerated)),
-(DeadairLag_CL | where ingestion_time() >= ago(24h) and TimeGenerated >= ago(24h) | extend IngestedAt=ingestion_time() | summarize RowCount=count(), arg_max(IngestedAt, TimeGenerated, EventId, Marker, ExpectedField) | project Source="Lag", RowCount, EventIDPresent=isnotempty(EventId), MarkerPresent=isnotempty(Marker), ExpectedFieldPresent=isnotempty(ExpectedField), Paired=isnotnull(TimeGenerated) and isnotnull(IngestedAt), LagSeconds=datetime_diff("second", IngestedAt, TimeGenerated)),
-(DeadairStale_CL | where ingestion_time() >= ago(24h) and TimeGenerated >= ago(24h) | extend IngestedAt=ingestion_time() | summarize RowCount=count(), arg_max(IngestedAt, TimeGenerated, EventId, Marker, ExpectedField) | project Source="Stale", RowCount, EventIDPresent=isnotempty(EventId), MarkerPresent=isnotempty(Marker), ExpectedFieldPresent=isnotempty(ExpectedField), Paired=isnotnull(TimeGenerated) and isnotnull(IngestedAt), LagSeconds=datetime_diff("second", IngestedAt, TimeGenerated)),
-(DeadairUnused_CL | where ingestion_time() >= ago(24h) and TimeGenerated >= ago(24h) | extend IngestedAt=ingestion_time() | summarize RowCount=count(), arg_max(IngestedAt, TimeGenerated, EventId, Marker, ExpectedField) | project Source="Unused", RowCount, EventIDPresent=isnotempty(EventId), MarkerPresent=isnotempty(Marker), ExpectedFieldPresent=isnotempty(ExpectedField), Paired=isnotnull(TimeGenerated) and isnotnull(IngestedAt), LagSeconds=datetime_diff("second", IngestedAt, TimeGenerated))'
+(WorkforceSignIn_CL | where ingestion_time() >= ago(24h) and TimeGenerated >= ago(24h) | extend IngestedAt=ingestion_time() | summarize RowCount=count(), arg_max(IngestedAt, TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult) | project Source="Workforce", RowCount, SignInIdPresent=isnotempty(SignInId), PrincipalPresent=isnotempty(UserPrincipalName), ClientIpPresent=isnotempty(ClientIpAddress), AuthResultPresent=isnotempty(AuthenticationResult), SourceSpecificPresent=true, Paired=isnotnull(TimeGenerated) and isnotnull(IngestedAt), LagSeconds=datetime_diff("second", IngestedAt, TimeGenerated)),
+(SaaSSignIn_CL | where ingestion_time() >= ago(24h) and TimeGenerated >= ago(24h) | extend IngestedAt=ingestion_time() | summarize RowCount=count(), arg_max(IngestedAt, TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName) | project Source="SaaS", RowCount, SignInIdPresent=isnotempty(SignInId), PrincipalPresent=isnotempty(UserPrincipalName), ClientIpPresent=isnotempty(ClientIpAddress), AuthResultPresent=isnotempty(AuthenticationResult), SourceSpecificPresent=isnotempty(ApplicationName), Paired=isnotnull(TimeGenerated) and isnotnull(IngestedAt), LagSeconds=datetime_diff("second", IngestedAt, TimeGenerated)),
+(RemoteAccessAuth_CL | where ingestion_time() >= ago(24h) and TimeGenerated >= ago(24h) | extend IngestedAt=ingestion_time() | summarize RowCount=count(), arg_max(IngestedAt, TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult) | project Source="RemoteAccess", RowCount, SignInIdPresent=isnotempty(SignInId), PrincipalPresent=isnotempty(UserPrincipalName), ClientIpPresent=isnotempty(ClientIpAddress), AuthResultPresent=isnotempty(AuthenticationResult), SourceSpecificPresent=true, Paired=isnotnull(TimeGenerated) and isnotnull(IngestedAt), LagSeconds=datetime_diff("second", IngestedAt, TimeGenerated)),
+(ADFSAuthentication_CL | where ingestion_time() >= ago(24h) and TimeGenerated >= ago(24h) | extend IngestedAt=ingestion_time() | summarize RowCount=count(), arg_max(IngestedAt, TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, RelyingParty) | project Source="ADFS", RowCount, SignInIdPresent=isnotempty(SignInId), PrincipalPresent=isnotempty(UserPrincipalName), ClientIpPresent=isnotempty(ClientIpAddress), AuthResultPresent=isnotempty(AuthenticationResult), SourceSpecificPresent=isnotempty(RelyingParty), Paired=isnotnull(TimeGenerated) and isnotnull(IngestedAt), LagSeconds=datetime_diff("second", IngestedAt, TimeGenerated))'
 	base_data_body=$(jq -cn --arg query "$base_data_query" '{query: $query}')
 	if ! base_data_response=$(az rest --only-show-errors --method post --resource https://api.loganalytics.io \
 		--uri "https://api.loganalytics.io/v1/workspaces/$home_workspace_id/query" \
@@ -1297,20 +1384,20 @@ verify_base_data() {
 		add_prerequisite_issue "bounded base-row aggregate returned a partial or malformed Logs response"
 	elif ! printf '%s' "$base_data_response" | jq -e '
 		.tables[0] as $table |
-		([$table.columns[]?.name] == ["Source", "RowCount", "EventIDPresent", "MarkerPresent", "ExpectedFieldPresent", "Paired", "LagSeconds"]) and
+		([$table.columns[]?.name] == ["Source", "RowCount", "SignInIdPresent", "PrincipalPresent", "ClientIpPresent", "AuthResultPresent", "SourceSpecificPresent", "Paired", "LagSeconds"]) and
 		([$table.rows[]? | {key: .[0], value: {
-			count: .[1], event: .[2], marker: .[3], expected: .[4], paired: .[5], lag: .[6]
+			count: .[1], sign_in: .[2], principal: .[3], client_ip: .[4], auth_result: .[5], source_specific: .[6], paired: .[7], lag: .[8]
 		}}] | from_entries) as $rows |
-		($rows | keys | sort) == (["Fresh", "Lag", "Stale", "Unused"] | sort) and
+		($rows | keys | sort) == (["Workforce", "SaaS", "RemoteAccess", "ADFS"] | sort) and
 		all($rows[]; (.count | type) == "number" and .count > 0 and
-			.event == true and .marker == true and .expected == true and .paired == true and
+			.sign_in == true and .principal == true and .client_ip == true and .auth_result == true and .source_specific == true and .paired == true and
 			(.lag | type) == "number" and .lag >= 0) and
-		$rows.Fresh.lag < $rows.Lag.lag and $rows.Lag.lag < $rows.Stale.lag' >/dev/null; then
-		add_prerequisite_issue "bounded base-row aggregate lacks complete recent rows or Fresh < Lag < Stale paired lag ordering"
+		$rows.Workforce.lag < $rows.SaaS.lag and $rows.SaaS.lag < $rows.RemoteAccess.lag' >/dev/null; then
+		add_prerequisite_issue "bounded base-row aggregate lacks complete recent authentication rows or Workforce < SaaS < RemoteAccess paired lag ordering"
 		base_rows_refresh_needed=true
 	fi
 
-	predicate_data_query="DeadairPredicate_CL | where ingestion_time() >= ago(24h) and TimeGenerated between (ago(30m) .. now()) and DeviceVendor == 'Deadair Labs' | summarize RowCount=count(), arg_max(TimeGenerated, EventId, DeviceVendor) | project RowCount, EventIDPresent=isnotempty(EventId), VendorPresent=DeviceVendor == 'Deadair Labs'"
+	predicate_data_query="PerimeterSecurity_CL | where ingestion_time() >= ago(24h) and TimeGenerated >= ago(24h) | summarize CurrentFortiGate=countif(TimeGenerated between (ago(30m) .. now()) and DeviceVendor == 'Fortinet' and DeviceProduct == 'FortiGate' and isnotempty(SessionId) and isnotempty(SourceIpAddress) and isnotempty(DestinationIpAddress) and isnotnull(DestinationPort) and isnotempty(DeviceAction)), StalePaloAlto=countif(TimeGenerated between (ago(2h) .. ago(1h)) and DeviceVendor == 'Palo Alto Networks' and DeviceProduct == 'PAN-OS' and isnotempty(SessionId) and isnotempty(SourceIpAddress) and isnotempty(DestinationIpAddress) and isnotnull(DestinationPort) and isnotempty(DeviceAction))"
 	predicate_data_body=$(jq -cn --arg query "$predicate_data_query" '{query: $query}')
 	if ! predicate_data_response=$(az rest --only-show-errors --method post --resource https://api.loganalytics.io \
 		--uri "https://api.loganalytics.io/v1/workspaces/$home_workspace_id/query" \
@@ -1322,24 +1409,24 @@ verify_base_data() {
 		add_prerequisite_issue "bounded predicate fixture returned a partial or malformed Logs response"
 	elif ! printf '%s' "$predicate_data_response" | jq -e '
 		.tables[0] as $table |
-		([$table.columns[]?.name] == ["RowCount", "EventIDPresent", "VendorPresent"]) and
+		([$table.columns[]?.name] == ["CurrentFortiGate", "StalePaloAlto"]) and
 		([$table.rows[]?] | length) == 1 and
 		($table.rows[0][0] | type) == "number" and $table.rows[0][0] > 0 and
-		$table.rows[0][1] == true and $table.rows[0][2] == true' >/dev/null; then
-		add_prerequisite_issue "bounded predicate fixture lacks a complete Deadair Labs row from the previous 30 minutes"
+		($table.rows[0][1] | type) == "number" and $table.rows[0][1] > 0' >/dev/null; then
+		add_prerequisite_issue "bounded network fixture lacks both a current FortiGate row and a 60-to-120-minute-old Palo Alto PAN-OS row"
 		base_rows_refresh_needed=true
 	fi
 
-	basic_data_query='DeadairBasic_CL | where TimeGenerated between (ago(30m) .. now()) and Marker matches regex "^summary-source-[0-9]+$" | top 1 by TimeGenerated desc | project TimeGenerated, Marker'
+	basic_data_query='FirewallTrafficRaw_CL | where TimeGenerated between (ago(30m) .. now()) and FlowId matches regex "^denied-flow-[0-9]+$" and DeviceAction == "Deny" | top 1 by TimeGenerated desc | project TimeGenerated, FlowId, DeviceVendor, DeviceProduct, DeviceAction'
 	basic_data_body=$(jq -cn --arg query "$basic_data_query" '{query: $query}')
 	if ! basic_data_response=$(az rest --only-show-errors --method post --resource https://api.loganalytics.io \
 		--uri "https://api.loganalytics.io/v1/workspaces/$home_workspace_id/search?timespan=PT30M" \
 		--body "$basic_data_body" --output json 2>/dev/null); then
-		add_prerequisite_issue "current Basic-plan summary source could not be read through the bounded Logs search API"
+		add_prerequisite_issue "current Basic-plan firewall source could not be read through the bounded Logs search API"
 		return
 	fi
 	if ! basic_data_response_matches "$basic_data_response"; then
-		add_prerequisite_issue "DeadairBasic_CL lacks a current exact summary-source-<digits> row from the previous 30 minutes"
+		add_prerequisite_issue "FirewallTrafficRaw_CL lacks a current exact denied-flow-<digits> Deny row from the previous 30 minutes"
 		base_rows_refresh_needed=true
 	fi
 }
@@ -1360,45 +1447,48 @@ verify_base_prerequisites() {
 	fi
 	if [ -z "$home_workspace_id" ]; then
 		add_prerequisite_issue "home workspace customer ID is missing"
+	elif ! valid_uuid "$home_workspace_id"; then
+		add_prerequisite_issue "home workspace customer ID is not an exact UUID"
+		home_workspace_id=
 	fi
 
-	verify_base_table DeadairFresh_CL Analytics four
-	verify_base_table DeadairStale_CL Analytics four
-	verify_base_table DeadairLag_CL Analytics four
-	verify_base_table DeadairUnused_CL Analytics four
-	verify_base_table DeadairPredicate_CL Analytics predicate
-	verify_base_table DeadairBasic_CL Basic two
-	verify_base_table DeadairAuxiliary_CL Auxiliary two
-	verify_base_table DeadairEmptyAnalytics_CL Analytics two
-	removed=$(collection_resource "removed-table fixture DeadairRemoved_CL" "$table_collection_uri" DeadairRemoved_CL)
+	verify_base_table WorkforceSignIn_CL Analytics auth
+	verify_base_table RemoteAccessAuth_CL Analytics auth
+	verify_base_table SaaSSignIn_CL Analytics saas_auth
+	verify_base_table ADFSAuthentication_CL Analytics adfs_auth
+	verify_base_table PerimeterSecurity_CL Analytics perimeter
+	verify_base_table FirewallTrafficRaw_CL Basic flow
+	verify_base_table IdentityAuditArchive_CL Auxiliary audit
+	verify_base_table SaaSAudit_CL Analytics saas_audit
+	removed=$(collection_resource "removed-table fixture PartnerSSOAuth_CL" "$table_collection_uri" PartnerSSOAuth_CL)
 	if [ -n "$removed" ]; then
-		add_prerequisite_issue "removed-table fixture DeadairRemoved_CL must be absent"
+		add_prerequisite_issue "removed-table fixture PartnerSSOAuth_CL must be absent"
 	fi
 
-	verify_base_rule 11111111-1111-4111-8111-111111111111 'deadair lab - fresh direct table' \
-		'DeadairFresh_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField' PT5M PT30M
-	verify_base_rule 22222222-2222-4222-8222-222222222222 'deadair lab - stale direct table' \
-		'DeadairStale_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField' PT5M PT30M
-	verify_base_rule 33333333-3333-4333-8333-333333333333 'deadair lab - delayed direct table' \
-		'DeadairLag_CL | where TimeGenerated > ago(10m) | project TimeGenerated, EventId, Marker, ExpectedField' PT5M PT10M
-	verify_base_rule 44444444-4444-4444-8444-444444444444 'deadair lab - removed direct table' \
-		'DeadairRemoved_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker, ExpectedField' PT5M PT30M
-	verify_base_rule 55555555-5555-4555-8555-555555555555 'deadair lab - partial union' \
-		'union isfuzzy=true DeadairFresh_CL, DeadairRemoved_CL | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker' PT5M PT30M
-	verify_base_rule 66666666-6666-4666-8666-666666666666 'deadair lab - let and join' \
-		'let recentFresh = DeadairFresh_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (DeadairLag_CL | where TimeGenerated > ago(30m)) on ExpectedField | project TimeGenerated, EventId, Marker' PT5M PT30M
-	verify_base_rule 71111111-1111-4111-8111-111111111111 'deadair lab - saved function bare source' \
-		'DeadairLabSource | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker' PT5M PT30M
-	verify_base_rule 72222222-2222-4222-8222-222222222222 'deadair lab - saved function call' \
-		'DeadairLabSource() | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker' PT5M PT30M
-	verify_base_rule 73333333-3333-4333-8333-333333333333 'deadair lab - parameterized function' \
-		'DeadairLabParameterized("fresh") | where TimeGenerated > ago(30m) | project TimeGenerated, EventId, Marker' PT5M PT30M
-	verify_base_rule 74444444-4444-4444-8444-444444444444 'deadair lab - auxiliary table dependency' \
-		'DeadairAuxiliary_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker' PT5M PT30M
-	verify_base_rule 76666666-6666-4666-8666-666666666666 'deadair lab - empty analytics table' \
-		'DeadairEmptyAnalytics_CL | where TimeGenerated > ago(30m) | project TimeGenerated, Marker' PT5M PT30M
-	verify_base_rule 77777777-7777-4777-8777-777777777777 'deadair lab - predicate freshness' \
-		"DeadairPredicate_CL | where DeviceVendor == 'Deadair Labs' | project TimeGenerated, EventId, DeviceVendor" PT5M PT30M
+	verify_base_rule 11111111-1111-4111-8111-111111111111 '[lab] Suspicious interactive sign-in' \
+		'WorkforceSignIn_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult' PT5M PT30M
+	verify_base_rule 22222222-2222-4222-8222-222222222222 '[lab] VPN password spray' \
+		'RemoteAccessAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult' PT5M PT30M
+	verify_base_rule 33333333-3333-4333-8333-333333333333 '[lab] Cloud sign-in impossible travel' \
+		'SaaSSignIn_CL | where TimeGenerated > ago(10m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName' PT5M PT10M
+	verify_base_rule 44444444-4444-4444-8444-444444444444 '[lab] Partner SSO telemetry missing' \
+		'PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult, ApplicationName' PT5M PT30M
+	verify_base_rule 55555555-5555-4555-8555-555555555555 '[lab] Sign-ins across primary and partner IdPs' \
+		'union isfuzzy=true WorkforceSignIn_CL, PartnerSSOAuth_CL | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult' PT5M PT30M
+	verify_base_rule 66666666-6666-4666-8666-666666666666 '[lab] Interactive sign-in followed by cloud app access' \
+		'let recentFresh = WorkforceSignIn_CL | where TimeGenerated > ago(30m); recentFresh | join kind=leftouter (SaaSSignIn_CL | where TimeGenerated > ago(30m)) on UserPrincipalName | project TimeGenerated, SignInId, UserPrincipalName, ClientIpAddress, AuthenticationResult' PT5M PT30M
+	verify_base_rule 71111111-1111-4111-8111-111111111111 '[lab] Recent identity sign-ins via saved function' \
+		'RecentIdentitySignIns | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName' PT5M PT30M
+	verify_base_rule 72222222-2222-4222-8222-222222222222 '[lab] Recent identity sign-ins via function call' \
+		'RecentIdentitySignIns() | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName' PT5M PT30M
+	verify_base_rule 73333333-3333-4333-8333-333333333333 '[lab] High-risk account sign-in' \
+		'IdentitySignInsByUser("analyst@lab.example") | where TimeGenerated > ago(30m) | project TimeGenerated, SignInId, UserPrincipalName' PT5M PT30M
+	verify_base_rule 74444444-4444-4444-8444-444444444444 '[lab] Privileged identity operations in archive' \
+		'IdentityAuditArchive_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result' PT5M PT30M
+	verify_base_rule 76666666-6666-4666-8666-666666666666 '[lab] Cloud audit activity stopped' \
+		'SaaSAudit_CL | where TimeGenerated > ago(30m) | project TimeGenerated, ActivityId, ActorUserPrincipalName, OperationName, Result, ServiceName' PT5M PT30M
+	verify_base_rule 77777777-7777-4777-8777-777777777777 '[lab] Palo Alto firewall telemetry stopped' \
+		"PerimeterSecurity_CL | where DeviceVendor == 'Palo Alto Networks' and DeviceProduct == 'PAN-OS' | project TimeGenerated, SessionId, DeviceVendor, DeviceProduct, SourceIpAddress, DestinationIpAddress, DestinationPort, DeviceAction" PT5M PT3H
 	fusion=$(collection_resource "BuiltInFusion provenance rule" "$alert_rule_collection_uri" BuiltInFusion)
 	if [ -z "$fusion" ]; then
 		add_prerequisite_issue "missing BuiltInFusion provenance rule"
@@ -1455,7 +1545,7 @@ verify_base_prerequisites() {
 			[.functions[]? | select(.name == $name and .body == $body and
 				((.parameters // "") == $parameters or .parameters == ("(" + $parameters + ")")))] | length')
 		if [ "$parameterized_matches" -ne 1 ]; then
-			add_prerequisite_issue "$parameterized_function metadata does not match the required body and marker:string parameter"
+			add_prerequisite_issue "$parameterized_function metadata does not match the required body and userPrincipalName:string parameter"
 		fi
 	fi
 	if [ "$base_tables_ready" = true ] && [ -n "$home_workspace_id" ]; then
@@ -1513,6 +1603,7 @@ verify_existing_summary_output_if_present() {
 
 if [ "$mode" = plan ] || [ "$mode" = verify ] || [ "$mode" = apply ]; then
 	verify_base_prerequisites
+	expected_base_confirmation="$base_fixture_marker:$workspace:$home_workspace_id"
 fi
 if [ "$mode" = plan ]; then
 	print_plan
@@ -1528,8 +1619,16 @@ if [ "$mode" = verify ]; then
 	exit 0
 fi
 
+if [ "$mode" = apply ] && [ "$base_confirmation" != "$expected_base_confirmation" ]; then
+	echo "refusing apply: set DEADAIR_SENTINEL_BASE_LAB_CONFIRM=$expected_base_confirmation" >&2
+	exit 2
+fi
+
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/deadair-sentinel-expansion.XXXXXX")
-trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+trap 'rm -rf "$tmp_dir"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [ "$mode" = apply ]; then
 	require_collection_absent "watchlist $watchlist_alias" "$watchlist_collection_uri" "$watchlist_alias"
@@ -1553,14 +1652,14 @@ if [ "$mode" = apply ]; then
 
 	jq -n --arg source "$watchlist_source" --arg marker "$fixture_marker" '{
 		properties: {
-			displayName: "deadair expansion validation VIPs",
+			displayName: "[lab] Privileged accounts",
 			source: $source,
 			sourceType: "Local",
 			provider: "deadair",
 			description: $marker,
 			numberOfLinesToSkip: 0,
-			rawContent: "FixtureID,Label\nfixture-user,deadair\n",
-			itemsSearchKey: "FixtureID",
+			rawContent: "UserPrincipalName,Role\nadmin@lab.example,Global Administrator\n",
+			itemsSearchKey: "UserPrincipalName",
 			contentType: "text/csv"
 		}
 	}' >"$tmp_dir/watchlist.json"
@@ -1611,7 +1710,10 @@ if [ "$mode" = apply ]; then
 				name: $table,
 				columns: [
 					{name: "TimeGenerated", type: "dateTime"},
-					{name: "Marker", type: "string"}
+					{name: "SignInId", type: "string"},
+					{name: "UserPrincipalName", type: "string"},
+					{name: "ClientIpAddress", type: "string"},
+					{name: "AuthenticationResult", type: "string"}
 				]
 			}
 		}
@@ -1628,8 +1730,9 @@ if [ "$mode" = apply ]; then
 			description: $description,
 			columns: [
 				{name: "TimeGenerated", type: "dateTime"},
-				{name: "EventCount", type: "long"},
-				{name: "Marker", type: "string"}
+				{name: "DeviceVendor", type: "string"},
+				{name: "DeviceProduct", type: "string"},
+				{name: "DeniedConnections", type: "long"}
 				]
 			}
 		}
@@ -1696,6 +1799,21 @@ if [ "$mode" = apply ]; then
 		echo "summary rule did not preserve its exact active runtime definition" >&2
 		exit 2
 	fi
+	summary_rule_revision=$(printf '%s' "$summary_rule_resource" | jq -r '.systemData.lastModifiedAt // empty')
+	case "$summary_rule_revision" in
+	????-??-??T??:??:??Z|????-??-??T??:??:??.*Z)
+		case "$summary_rule_revision" in
+		*[!0-9TZ:.-]*)
+			echo "summary rule returned an unsafe ARM revision time" >&2
+			exit 2
+			;;
+		esac
+		;;
+	*)
+		echo "summary rule does not expose a usable current ARM revision time" >&2
+		exit 2
+		;;
+	esac
 	if ! summary_table_resource=$(az rest --only-show-errors --method get --uri "$summary_table_uri" --output json); then
 		echo "summary destination could not be re-read after the summary rule settled" >&2
 		exit 2
@@ -1709,6 +1827,22 @@ if [ "$mode" = apply ]; then
 	create_expansion_rule "$asim_rule_id" "$asim_rule_display" "$asim_rule_query"
 	create_expansion_rule "$remote_rule_id" "$remote_rule_display" "$remote_rule_query"
 	create_expansion_rule "$summary_consumer_rule_id" "$summary_consumer_rule_display" "$summary_consumer_rule_query"
+	DEADAIR_SENTINEL_BASE_LAB_CONFIRM="$base_confirmation" \
+		DEADAIR_AZURE_SUBSCRIPTION_ID="$subscription_id" \
+		DEADAIR_AZURE_RESOURCE_GROUP="$resource_group" \
+		DEADAIR_SENTINEL_WORKSPACE="$workspace" \
+		DEADAIR_SENTINEL_WORKSPACE_ID="$home_workspace_id" \
+		"$base_lab_script" refresh-summary-proof
+	if ! refreshed_summary_rule=$(az rest --only-show-errors --method get --uri "$summary_uri" --output json); then
+		echo "summary rule could not be re-read after the current proof row became searchable" >&2
+		exit 2
+	fi
+	refreshed_summary_revision=$(printf '%s' "$refreshed_summary_rule" | jq -r '.systemData.lastModifiedAt // empty')
+	if ! summary_rule_matches "$refreshed_summary_rule" || [ "$refreshed_summary_revision" != "$summary_rule_revision" ]; then
+		echo "summary rule changed while the current proof row was being ingested" >&2
+		exit 2
+	fi
+	summary_rule_resource=$refreshed_summary_rule
 	wait_for_summary_runtime "$summary_rule_resource"
 	wait_for_summary_output_proof "$summary_rule_resource"
 	require_current_base_data_after_output

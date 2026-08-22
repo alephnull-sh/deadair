@@ -2,6 +2,7 @@ BIN     := deadair
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/alephnull-sh/deadair/internal/cli.Version=$(VERSION)
 DIST    := dist
+GOVULNCHECK_VERSION := v1.7.0
 
 DARWIN_ARM64 := $(DIST)/$(BIN)_$(VERSION)_darwin-arm64
 LINUX_AMD64  := $(DIST)/$(BIN)_$(VERSION)_linux-amd64
@@ -19,7 +20,7 @@ CI_OUT_ABS := $(if $(filter /%,$(CI_OUT)),$(CI_OUT),$(CURDIR)/$(CI_OUT))
 SCAN_LAB_OUT ?= integration/scan-lab-out
 SCAN_LAB_OUT_ABS := $(if $(filter /%,$(SCAN_LAB_OUT)),$(SCAN_LAB_OUT),$(CURDIR)/$(SCAN_LAB_OUT))
 
-.PHONY: build static-build test race vet fmt check tidy-check validate release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down record-ci record-scan-lab record-sentinel-lab mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
+.PHONY: build static-build test race vet fmt check tidy-check validate vuln release integration elastic-integration integration-up integration-test integration-down opensearch-integration opensearch-integration-up opensearch-integration-test opensearch-integration-down record-ci record-scan-lab record-sentinel-lab mssp-lab mssp-lab-up mssp-lab-run mssp-lab-down
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/$(BIN) ./cmd/deadair
@@ -72,6 +73,9 @@ tidy-check:
 	fi
 
 validate: check static-build tidy-check
+
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 integration-up:
 	$(COMPOSE) up -d --wait
@@ -144,7 +148,9 @@ record-sentinel-lab: build
 	@test -n "$(DEADAIR_AZURE_RESOURCE_GROUP)" || (echo "DEADAIR_AZURE_RESOURCE_GROUP is required" >&2; exit 1)
 	@test -n "$(DEADAIR_SENTINEL_WORKSPACE)" || (echo "DEADAIR_SENTINEL_WORKSPACE is required" >&2; exit 1)
 	@test "$(DEADAIR_SENTINEL_CAPTURE_CONFIRM)" = "record-disposable-sentinel:$(DEADAIR_SENTINEL_WORKSPACE)" || (echo "Set DEADAIR_SENTINEL_CAPTURE_CONFIRM=record-disposable-sentinel:$(DEADAIR_SENTINEL_WORKSPACE) to confirm this is a disposable lab" >&2; exit 1)
-	DEADAIR_BACKEND=sentinel AZURE_TOKEN_CREDENTIALS=AzureCLICredential vhs docs/assets/sentinel-lab.tape
+	DEADAIR_BACKEND=sentinel \
+	AZURE_TOKEN_CREDENTIALS="$${AZURE_TOKEN_CREDENTIALS:-AzureCLICredential}" \
+	vhs docs/assets/sentinel-lab.tape
 
 mssp-lab-up:
 	$(COMPOSE) up -d --wait

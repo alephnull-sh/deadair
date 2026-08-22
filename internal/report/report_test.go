@@ -1012,6 +1012,170 @@ func TestHTMLAdvisoryFailureUsesGateLanguageWithoutHealthyClaim(t *testing.T) {
 	}
 }
 
+func TestHTMLPartialInputDoesNotClaimCompleteCoverage(t *testing.T) {
+	r := &Report{
+		GeneratedAt: time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Producer:    producer("dev"),
+		Backend:     "sentinel",
+		BackendMetadata: BackendMetadata{
+			Product: "Microsoft Sentinel",
+		},
+		Summary: Summary{
+			Rules: 1, EnabledRules: 1,
+			UnusedTelemetryAssessment: UnusedAssessmentNotApplicable,
+		},
+		PartialInputCoverage: []PartialInputCoverage{{
+			RuleID: "rule-1", RuleName: "Sign-ins across identity providers", Expression: "MissingIdentity_CL",
+		}},
+	}
+	path := filepath.Join(t.TempDir(), "sentinel-partial.html")
+	if err := r.WriteHTML(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	for _, want := range []string{"Gate passed", "1 partial rule input needs review", "No gated findings. Review 1 partial rule input below."} {
+		if !strings.Contains(html, want) {
+			t.Errorf("HTML partial-input report missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"No blind spots found", "No gated findings or incomplete rule inputs"} {
+		if strings.Contains(html, unwanted) {
+			t.Errorf("HTML partial-input report made contradictory claim %q", unwanted)
+		}
+	}
+}
+
+func TestHTMLImpairmentReasonsUseHumanLabels(t *testing.T) {
+	r := &Report{
+		GeneratedAt: time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Producer:    producer("dev"),
+		Backend:     "sentinel",
+		BackendMetadata: BackendMetadata{
+			Product: "Microsoft Sentinel",
+		},
+		Summary: Summary{
+			Rules: 1, EnabledRules: 1, ImpairedDetections: 1,
+			UnusedTelemetryAssessment: UnusedAssessmentNotApplicable,
+		},
+		ImpairedDetections: []ImpairedDetection{{
+			Name: "Delayed identity events", Severity: "high",
+			Reasons:       []string{ReasonMissingFields, ReasonLagBlindWindow},
+			MissingFields: []string{"UserPrincipalName"},
+			LagSources:    []string{"IdentitySignIn_CL"},
+		}},
+	}
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []string{ReasonMissingFields, ReasonLagBlindWindow} {
+		if !strings.Contains(string(encoded), code) {
+			t.Fatalf("JSON report lost machine reason %q: %s", code, encoded)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "sentinel-impaired.html")
+	if err := r.WriteHTML(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	for _, code := range []string{ReasonMissingFields, ReasonLagBlindWindow} {
+		if strings.Contains(html, code) {
+			t.Fatalf("HTML report exposed machine reason %q", code)
+		}
+	}
+	for _, want := range []string{"required fields are missing", "events may arrive too late for the rule", "Ingest delay may leave a blind window"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("HTML impairment report missing %q", want)
+		}
+	}
+}
+
+func TestHTMLCandidatePolicyPassDoesNotDenyNonGatingFindings(t *testing.T) {
+	r := &Report{
+		GeneratedAt: time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Producer:    producer("dev"),
+		Backend:     "elastic",
+		Scope:       ScanScope{Mode: "candidate"},
+		BackendMetadata: BackendMetadata{
+			Product: "Elastic Security",
+		},
+		Summary: Summary{Rules: 1, EnabledRules: 1, DeadDetections: 1},
+		Policy:  &PolicySummary{Version: 1, GateClasses: []string{FindingSchemaDrift}},
+		DeadDetections: []DeadDetection{{
+			ID: "rule-1", RuleID: "rule-1", Name: "Candidate sign-in rule", Severity: "high", Reason: ReasonDisconnected,
+		}},
+		Findings: []Finding{{
+			ID: "finding-1", Class: FindingDead, RuleID: "rule-1", RuleName: "Candidate sign-in rule", Reason: ReasonDisconnected,
+		}},
+	}
+	path := filepath.Join(t.TempDir(), "candidate-policy-pass.html")
+	if err := r.WriteHTML(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	for _, want := range []string{"Candidate passed the configured gate", "No gated candidate findings.", "Candidate sign-in rule", "no matching source"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("candidate policy-pass HTML missing %q", want)
+		}
+	}
+	if strings.Contains(html, "No candidate findings") {
+		t.Fatal("candidate policy-pass HTML denied a visible non-gating finding")
+	}
+	for _, want := range []string{"<strong>Policy</strong>", "0 gated · 0 accepted · 0 expired"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("candidate policy-pass HTML omitted policy context %q", want)
+		}
+	}
+}
+
+func TestHTMLKeepsExpectedFusionInEvidenceOnly(t *testing.T) {
+	r := &Report{
+		GeneratedAt: time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Producer:    producer("dev"),
+		Backend:     "sentinel",
+		Scope:       ScanScope{Mode: "installed"},
+		BackendMetadata: BackendMetadata{
+			Product: "Microsoft Sentinel",
+		},
+		Summary: Summary{Rules: 1, EnabledRules: 1, UnmappedRules: 1},
+		UnmappedRules: []RuleRef{{
+			RuleID: "BuiltInFusion", Name: "Advanced Multistage Attack Detection", Severity: "high",
+			AssessmentStatus: backend.ResolutionUnsupported, Detail: "Sentinel Fusion alert rules are not assessed",
+		}},
+	}
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), "Advanced Multistage Attack Detection") {
+		t.Fatal("JSON report lost Fusion coverage evidence")
+	}
+	html := renderHTMLForTest(t, r)
+	for _, unwanted := range []string{"Advanced Multistage Attack Detection", "Fusion alert rules are not assessed", "Rules not fully assessed", "coverage has gaps"} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("HTML promoted expected Fusion metadata %q", unwanted)
+		}
+	}
+	if !strings.Contains(html, "No gated findings") {
+		t.Fatal("HTML lost the qualified gate result")
+	}
+	if got := (&Report{Backend: "sentinel", Scope: ScanScope{Mode: "candidate"}, UnmappedRules: r.UnmappedRules}).VisibleUnmappedRules(); len(got) != 1 {
+		t.Fatal("candidate Fusion input was incorrectly hidden")
+	}
+}
+
 func TestRedactionKeepsMonitorableLineageJoinableToResolvedSources(t *testing.T) {
 	redactor, err := redactpkg.New([]byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
@@ -1172,6 +1336,226 @@ func TestWriteHTML(t *testing.T) {
 	}
 }
 
+func renderHTMLForTest(t *testing.T, r *Report) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "report.html")
+	if err := r.WriteHTML(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestHTMLHidesUnavailableSentinelStorageInventory(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	r := &Report{
+		SchemaVersion:   ReportSchemaVersion,
+		GeneratedAt:     now,
+		Producer:        producer("test"),
+		Backend:         "sentinel",
+		BackendMetadata: backendMetadata("sentinel", ""),
+		Summary: Summary{
+			Sources:                         1,
+			UnusedTelemetryAssessment:       UnusedAssessmentUnavailable,
+			UnusedTelemetryAssessmentDetail: "Azure source document inventory is unavailable",
+		},
+		Sources: []SourceHealth{{
+			Name:       "azure-loganalytics:///subscriptions/lab/workspaces/deadair/DeadairNetworkSecurity_CL",
+			Status:     "ok",
+			AgeSeconds: time.Hour.Seconds(),
+			Docs:       -1,
+			Consumers:  1,
+			Volume:     &VolumeHealth{Status: state.VolumeUnknown},
+			Schema:     &SchemaHealth{Status: state.SchemaOK},
+		}},
+	}
+
+	html := renderHTMLForTest(t, r)
+	wantHeader := `<thead><tr><th class="source-name">Source</th><th>Status</th><th class="source-age">Age</th><th>Detections</th><th>Schema</th><th>Ingest lag</th></tr></thead>`
+	for _, want := range []string{
+		wantHeader,
+		`<table class="source-table source-table-compact">`,
+		`<td class="source-name"><strong>azure-loganalytics:///subscriptions/lab/workspaces/deadair/DeadairNetworkSecurity_CL</strong></td>`,
+		`<td class="source-age">1h</td>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("Sentinel HTML missing %q", want)
+		}
+	}
+	for _, reject := range []string{
+		`<th>Documents</th>`,
+		`<th>Stored</th>`,
+		`<th>Volume</th>`,
+		`Stored unused telemetry`,
+		`<span class="badge status-unknown">`,
+		`>Not available<`,
+	} {
+		if strings.Contains(html, reject) {
+			t.Errorf("Sentinel HTML retained unavailable storage inventory %q", reject)
+		}
+	}
+
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized := string(data)
+	for _, want := range []string{
+		`"docs":-1`,
+		`"size_bytes":0`,
+		`"volume":{"status":"unknown"`,
+		`"unused_telemetry_assessment":"unavailable"`,
+	} {
+		if !strings.Contains(serialized, want) {
+			t.Errorf("JSON contract lost %q after HTML-only omission: %s", want, serialized)
+		}
+	}
+}
+
+func TestHTMLPreservesStorageInventoryForElasticAndOpenSearch(t *testing.T) {
+	for _, backendName := range []string{"elastic", "opensearch"} {
+		t.Run(backendName, func(t *testing.T) {
+			r := &Report{
+				GeneratedAt:     time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+				Backend:         backendName,
+				BackendMetadata: backendMetadata(backendName, ""),
+				Summary: Summary{
+					Sources:                         1,
+					UnusedTelemetryAssessment:       UnusedAssessmentUnavailable,
+					UnusedTelemetryAssessmentDetail: "source inventory was incomplete",
+				},
+				Sources: []SourceHealth{{Name: "logs-security-default", Status: "ok", Docs: -1}},
+			}
+
+			html := renderHTMLForTest(t, r)
+			for _, want := range []string{
+				`<th>Documents</th>`,
+				`<th>Stored</th>`,
+				`<th>Volume</th>`,
+				`Stored unused telemetry`,
+				`Not assessed: source inventory was incomplete.`,
+			} {
+				if !strings.Contains(html, want) {
+					t.Errorf("%s HTML lost %q", backendName, want)
+				}
+			}
+			if strings.Contains(html, `<table class="source-table source-table-compact">`) {
+				t.Errorf("%s HTML used the compact Sentinel source layout", backendName)
+			}
+		})
+	}
+}
+
+func TestHTMLShowsMeasuredZeroIngestLag(t *testing.T) {
+	r := &Report{
+		GeneratedAt:     time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Backend:         "elastic",
+		BackendMetadata: backendMetadata("elastic", ""),
+		Summary:         Summary{Sources: 1},
+		Sources: []SourceHealth{{
+			Name: "logs-endpoint.events.process-default", Status: "ok", AgeSeconds: 60,
+			IngestLag: &IngestLagHealth{Status: backend.EvidenceAssessed, SampleCount: 1},
+		}},
+	}
+
+	html := renderHTMLForTest(t, r)
+	if !strings.Contains(html, "p95 0s · max 0s") {
+		t.Fatalf("HTML did not preserve an assessed zero ingest delay:\n%s", html)
+	}
+	if strings.Contains(html, "p95 Not observed") || strings.Contains(html, "max Not observed") {
+		t.Fatal("HTML mislabeled measured zero ingest delay as unobserved")
+	}
+}
+
+func TestHTMLHidesUnavailableCapabilitiesAndUsesDashesForInapplicableCells(t *testing.T) {
+	r := &Report{
+		GeneratedAt:     time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Backend:         "elastic",
+		BackendMetadata: backendMetadata("elastic", ""),
+		Summary:         Summary{Sources: 1},
+		Sources:         []SourceHealth{{Name: "dns-query-events-prod", Status: "ok", Docs: 1}},
+	}
+
+	html := renderHTMLForTest(t, r)
+	for _, want := range []string{"Rule inventory", "Source resolution", "<td>—</td>"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("HTML missing %q", want)
+		}
+	}
+	for _, reject := range []string{"Dependency resolution", "Cross-workspace inputs", "Source lineage", "Rule provenance", ">Not assessed<"} {
+		if strings.Contains(html, reject) {
+			t.Errorf("HTML retained unavailable presentation %q", reject)
+		}
+	}
+}
+
+func TestHTMLExplainsSourceOnlyGateFailures(t *testing.T) {
+	r := &Report{
+		GeneratedAt:     time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Backend:         "elastic",
+		BackendMetadata: backendMetadata("elastic", ""),
+		Summary: Summary{
+			Sources: 2, VolumeLowSources: 1, SchemaDriftSources: 1,
+		},
+		Sources: []SourceHealth{
+			{Name: "logs-network_traffic.dns-default", Status: "ok", Volume: &VolumeHealth{Status: state.VolumeLow}},
+			{Name: "logs-endpoint.events.process-legacy", Status: "ok", Schema: &SchemaHealth{Status: state.SchemaDrift}},
+		},
+	}
+
+	html := renderHTMLForTest(t, r)
+	for _, want := range []string{
+		"Gate failed", "2 sources need attention", "Sources that need attention",
+		"logs-network_traffic.dns-default", "Volume is below its baseline.",
+		"logs-endpoint.events.process-legacy", "The field schema changed.",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("source-only HTML omitted %q", want)
+		}
+	}
+	if strings.Contains(html, "The scan found a live blind spot") {
+		t.Fatal("source-only gate used an overbroad blind-spot headline")
+	}
+}
+
+func TestHTMLKeepsSentinelStorageColumnsWhenEvidenceWasAssessed(t *testing.T) {
+	r := &Report{
+		GeneratedAt:     time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC),
+		Backend:         "sentinel",
+		BackendMetadata: backendMetadata("sentinel", ""),
+		Summary: Summary{
+			Sources:                   1,
+			UnusedSources:             1,
+			UnusedTelemetryAssessment: UnusedAssessmentComplete,
+		},
+		Sources: []SourceHealth{{
+			Name: "CustomSecurity_CL", Status: "ok", Docs: 42, SizeBytes: 2048,
+			Volume: &VolumeHealth{Status: state.VolumeLow},
+		}},
+		UnusedTelemetry: []UnusedSource{{Name: "UnusedSecurity_CL", Docs: 7, SizeBytes: 1024}},
+	}
+
+	html := renderHTMLForTest(t, r)
+	for _, want := range []string{
+		`<th>Documents</th>`,
+		`<th>Stored</th>`,
+		`<th>Volume</th>`,
+		`Stored unused telemetry`,
+		`status-low`,
+		`UnusedSecurity_CL`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("assessed Sentinel HTML lost %q", want)
+		}
+	}
+	if strings.Contains(html, `<table class="source-table source-table-compact">`) {
+		t.Fatal("assessed Sentinel HTML used the compact source layout")
+	}
+}
+
 func TestHTMLUsesCandidateGateDecision(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -1185,7 +1569,7 @@ func TestHTMLUsesCandidateGateDecision(t *testing.T) {
 			summary: Summary{
 				EnabledRules: 1, Sources: 1, DegradedSources: 1,
 			},
-			want:   []string{`class="gate gate-passed">Gate passed`, "Candidate rule passed"},
+			want:   []string{`class="gate gate-passed">Gate passed`, "Candidate passed the configured gate"},
 			reject: []string{"Gate failed", "Scan incomplete"},
 		},
 		{

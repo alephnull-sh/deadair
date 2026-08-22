@@ -368,12 +368,92 @@ type RuleRef struct {
 	Detail           string                   `json:"detail,omitempty"`
 }
 
+// VisibleUnmappedRules returns coverage gaps that warrant space in the primary
+// human report. Known non-query Sentinel rules stay in JSON and capability
+// evidence without being presented as operator work.
+func (r *Report) VisibleUnmappedRules() []RuleRef {
+	visible := make([]RuleRef, 0, len(r.UnmappedRules))
+	for _, rule := range r.UnmappedRules {
+		if r.Scope.Mode != "candidate" && strings.EqualFold(r.Backend, "sentinel") &&
+			strings.EqualFold(rule.RuleID, "BuiltInFusion") &&
+			rule.AssessmentStatus == backend.ResolutionUnsupported &&
+			rule.Detail == "Sentinel Fusion alert rules are not assessed" {
+			continue
+		}
+		visible = append(visible, rule)
+	}
+	return visible
+}
+
 // Impairment reasons: the rule fires, but with degraded vision.
 const (
 	ReasonMissingFields  = "missing-fields"   // declared fields absent from one or more fully assessed sources
 	ReasonLagBlindWindow = "lag-blind-window" // a source's ingest lag exceeds the query-window margin
 	ReasonSelectorEmpty  = "selector-empty"   // one selector is empty while the combined input still resolves
 )
+
+// ImpairedReasonLabel returns the plain-language label used in human reports.
+func ImpairedReasonLabel(reason string) string {
+	switch reason {
+	case ReasonMissingFields:
+		return "required fields are missing"
+	case ReasonLagBlindWindow:
+		return "events may arrive too late for the rule"
+	case ReasonSelectorEmpty:
+		return "one input selector has no matching source"
+	case ReasonSourcePlanIncompatible:
+		return "one or more sources are incompatible with this rule"
+	default:
+		return reason
+	}
+}
+
+// FindingClassLabel returns the plain-language label used in human diffs.
+func FindingClassLabel(class string) string {
+	switch class {
+	case FindingDead:
+		return "detection can't fire"
+	case FindingImpaired:
+		return "reduced visibility"
+	case FindingSourceDegraded:
+		return "source degraded"
+	case FindingVolumeLow:
+		return "low volume"
+	case FindingSchemaDrift:
+		return "schema changed"
+	case FindingUnused:
+		return "unused telemetry"
+	case FindingPartialInput:
+		return "partial input"
+	default:
+		return strings.ReplaceAll(class, "-", " ")
+	}
+}
+
+// FindingReasonLabel returns a plain-language reason while JSON keeps the
+// stable machine code.
+func FindingReasonLabel(class, reason string) string {
+	switch class {
+	case FindingDead:
+		return DeadReasonLabel(reason)
+	case FindingImpaired, FindingPartialInput:
+		return ImpairedReasonLabel(reason)
+	case FindingSourceDegraded:
+		switch reason {
+		case "stale":
+			return "source is stale"
+		case "empty":
+			return "source has no events"
+		}
+	case FindingVolumeLow:
+		return "volume is below its baseline"
+	case FindingSchemaDrift:
+		return "field schema changed"
+	case FindingUnused:
+		return "no enabled detection uses this source"
+	}
+	return strings.ReplaceAll(reason, "-", " ")
+}
 
 // ImpairedDetection is an enabled rule whose sources are alive but whose
 // effective visibility is reduced. Distinct from dead: it can still fire.

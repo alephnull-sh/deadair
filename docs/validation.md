@@ -38,6 +38,9 @@ workspace-scoped reader limited to the operations in the
 `DEADAIR_IT_SENTINEL=1`; it expects pre-seeded fixtures and never creates or changes Azure
 resources.
 
+The workspace used for the 2026-08-22 pass deliberately included missing, stale, late, and
+incompatible data paths. The recorded scan found them and exited `1`.
+
 The live workspace covers:
 
 - enabled Scheduled rules from the stable API and an NRT rule from the preview API;
@@ -48,7 +51,8 @@ The live workspace covers:
   onboarding before remote table or Logs evidence;
 - a native ASIM call whose semantic `PartialError` remains deliberately unassessed;
 - structural Basic-table to Analytics-summary-table to analytics-rule lineage;
-- a closed literal vendor filter with current predicate-qualified freshness evidence;
+- a fresh shared network table with a stale Palo Alto Networks/PAN-OS slice isolated by a closed
+  literal filter;
 - a successful native summary run after the current ARM definition became visible, plus an exact
   20-minute Basic-source to Analytics-output bin and count match;
 - rule-aware zero-row table permission probes;
@@ -109,7 +113,8 @@ no tenant, subscription, workspace ID, or credential is embedded in the test.
   Tabular or runtime parameters, dynamic table/watchlist/workspace selection, external data,
   `app()`, `resource()`, ADX/cluster, and ARG remain unassessed. A native ASIM `PartialError` is
   unassessed.
-- Filtered source activity was exercised against a current row in the live lab. It requires one direct local Analytics table
+- Filtered source activity was exercised against a stale Palo Alto Networks/PAN-OS slice while
+  other vendors kept the shared table fresh. It requires one direct local Analytics table
   followed by a closed, parser-supported literal filter. Escaped and verbatim literals fail closed
   because their exact KQL value cannot be reconstructed safely. The bounded result is
   informational and does not replace table-wide health or create a finding. The per-scan query cap
@@ -152,7 +157,7 @@ no tenant, subscription, workspace ID, or credential is embedded in the test.
   tested live; high workspace-count and region-count thresholds remain fixture-tested.
 - Basic and Auxiliary tables are reported as incompatible. Required-field and unused-telemetry
   findings are unavailable because Sentinel does not provide authoritative rule field metadata or
-  a cheap exact source document and storage inventory for this scan.
+  a bounded, authoritative per-table event and storage inventory for this scan.
 
 ### All backends
 

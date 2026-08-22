@@ -869,9 +869,21 @@ func TestSetupCommand(t *testing.T) {
 	if code := cli.Run([]string{"setup"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("setup exit = %d", code)
 	}
-	for _, want := range []string{"deadair_monitor", "feature_siemV2.read", "feature_indexPatterns.read", "DEADAIR_ES_URL", "deadair scan"} {
+	for _, want := range []string{"deadair setup elastic", "deadair setup opensearch", "deadair setup sentinel"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("setup output missing %q", want)
+		}
+	}
+	if strings.Contains(stdout.String(), "DEADAIR_ES_URL") {
+		t.Fatal("bare setup silently selected Elastic")
+	}
+	stdout.Reset()
+	if code := cli.Run([]string{"setup", "elastic"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("setup elastic exit = %d", code)
+	}
+	for _, want := range []string{"deadair_monitor", "feature_siemV2.read", "feature_indexPatterns.read", "DEADAIR_ES_URL", "deadair scan"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("setup elastic output missing %q", want)
 		}
 	}
 	if code := cli.Run([]string{"setup", "opensearch"}, &stdout, &stderr); code != 0 {
@@ -960,7 +972,7 @@ func TestBareInvocationShowsHelp(t *testing.T) {
 	if code := cli.Run(nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("bare invocation exit = %d, want 0", code)
 	}
-	for _, want := range []string{"COMMANDS", "GET STARTED", "deadair setup", "deadair check", "deadair scan", "https://github.com/alephnull-sh/deadair/blob/main/docs/usage.md"} {
+	for _, want := range []string{"COMMANDS", "GET STARTED", "deadair setup <backend>", "deadair check", "deadair scan", "https://github.com/alephnull-sh/deadair/blob/main/docs/usage.md"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("help missing %q", want)
 		}
@@ -1157,7 +1169,7 @@ func TestCheck(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	code = cli.Run([]string{"check", "--es-url", dataViewDenied.URL, "--kibana-url", dataViewDenied.URL}, &stdout, &stderr)
-	if code != report.ExitError || !strings.Contains(stdout.String(), "rule input discovery unavailable for 1 enabled rule(s)") ||
+	if code != report.ExitError || !strings.Contains(stdout.String(), "rule input discovery unavailable for 1 enabled rule") ||
 		!strings.HasPrefix(stdout.String(), "BLOCKED\n") || strings.Contains(stdout.String(), "next:") {
 		t.Fatalf("data-view capability check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}

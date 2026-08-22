@@ -28,6 +28,8 @@ jobs:
           go-version-file: go.mod
       - name: Validate source
         run: make validate
+      - name: Check reachable Go vulnerabilities
+        run: make vuln
       - name: Build six release targets
         env:
           VERSION: ${{ github.ref_name }}

@@ -164,8 +164,13 @@ func TestAssessmentConfigurationIDUsesResolvedSentinelRemoteMappings(t *testing.
 }
 
 func TestAssessmentConfigurationIDIgnoresSentinelRemoteFileForOtherBackends(t *testing.T) {
-	if _, err := assessmentConfigurationID(connOpts{sentinelRemotesFile: filepath.Join(t.TempDir(), "missing.json")}, nil); err != nil {
+	id, err := assessmentConfigurationID(connOpts{sentinelRemotesFile: filepath.Join(t.TempDir(), "missing.json")}, nil)
+	if err != nil {
 		t.Fatalf("non-Sentinel assessment read Sentinel remotes: %v", err)
+	}
+	const legacyID = "config-bda510fc298c3f9a1c65"
+	if id != legacyID {
+		t.Fatalf("non-Sentinel assessment ID = %q, want v0.6-compatible %q", id, legacyID)
 	}
 }
 
@@ -312,9 +317,10 @@ func TestSentinelScanDoesNotClaimUnusedTelemetryWithoutDocumentInventory(t *test
 		t.Run(name, func(t *testing.T) {
 			var output bytes.Buffer
 			render(&output)
-			if !strings.Contains(output.String(), sentinelUnusedTelemetryUnavailableDetail) ||
-				strings.Contains(output.String(), "enabled local rule inputs could not be resolved") {
-				t.Fatalf("Sentinel %s output used the wrong unused-telemetry explanation:\n%s", name, output.String())
+			if strings.Contains(output.String(), sentinelUnusedTelemetryUnavailableDetail) ||
+				strings.Contains(output.String(), "UNUSED NOT ASSESSED") ||
+				strings.Contains(output.String(), "unused telemetry: not assessed") {
+				t.Fatalf("Sentinel %s terminal output promoted a non-actionable inventory limitation:\n%s", name, output.String())
 			}
 		})
 	}
@@ -326,9 +332,17 @@ func TestSentinelScanDoesNotClaimUnusedTelemetryWithoutDocumentInventory(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(html), sentinelUnusedTelemetryUnavailableDetail) ||
-		strings.Contains(string(html), "enabled local rule inputs could not be resolved") {
-		t.Fatalf("Sentinel HTML used the wrong unused-telemetry explanation:\n%s", html)
+	for _, unwanted := range []string{
+		sentinelUnusedTelemetryUnavailableDetail,
+		"enabled local rule inputs could not be resolved",
+		"<th>Documents</th>",
+		"<th>Stored</th>",
+		"<th>Volume</th>",
+		"Stored unused telemetry",
+	} {
+		if strings.Contains(string(html), unwanted) {
+			t.Fatalf("Sentinel HTML promoted unavailable inventory as %q:\n%s", unwanted, html)
+		}
 	}
 	if len(probe.requestedFreshness) != 1 || probe.requestedFreshness[0] != "SecurityEvent" {
 		t.Fatalf("freshness requested for %v, want only the enabled rule's concrete source", probe.requestedFreshness)
@@ -547,7 +561,7 @@ func TestSentinelPredicateFreshnessUsesPolicyThresholdForEvidenceCompleteness(t 
 	t.Fatal("predicate freshness assessment missing")
 }
 
-func TestSentinelHelpAndSetupStateAuthenticationAndLimits(t *testing.T) {
+func TestSentinelHelpAndSetupKeepOnboardingFocused(t *testing.T) {
 	for _, command := range []string{"scan", "check", "serve"} {
 		var stdout, stderr bytes.Buffer
 		if code := Run([]string{command, "-h"}, &stdout, &stderr); code != report.ExitHealthy {
@@ -559,12 +573,14 @@ func TestSentinelHelpAndSetupStateAuthenticationAndLimits(t *testing.T) {
 			}
 		}
 		if command != "check" {
-			normalized := strings.Join(strings.Fields(stderr.String()), " ")
-			if !strings.Contains(normalized, "Tenant boundaries are not detected separately") {
-				t.Errorf("%s help does not state the tenant-boundary limit:\n%s", command, stderr.String())
-			}
-			if strings.Contains(stderr.String(), "Cross-subscription or cross-tenant") {
-				t.Errorf("%s help overclaims cross-tenant boundary detection:\n%s", command, stderr.String())
+			for _, unwanted := range []string{
+				"Tenant boundaries are not detected separately",
+				"references another subscription",
+				"filtered data that has gone quiet",
+			} {
+				if strings.Contains(stderr.String(), unwanted) {
+					t.Errorf("%s help includes Sentinel reference prose %q:\n%s", command, unwanted, stderr.String())
+				}
 			}
 		}
 	}
@@ -576,8 +592,8 @@ func TestSentinelHelpAndSetupStateAuthenticationAndLimits(t *testing.T) {
 	for _, want := range []string{
 		"az login", "Microsoft Sentinel Reader", "Log Analytics Reader",
 		"DEADAIR_AZURE_SUBSCRIPTION_ID", "DEADAIR_SENTINEL_WORKSPACE",
-		"Scheduled and NRT rules", "source document totals",
-		"Tenant boundaries are not detected separately",
+		"DEADAIR_SENTINEL_REMOTES", "docs/credentials/sentinel.md",
+		"docs/usage.md#microsoft-sentinel",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("setup sentinel output missing %q:\n%s", want, stdout.String())
@@ -588,5 +604,8 @@ func TestSentinelHelpAndSetupStateAuthenticationAndLimits(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "Cross-subscription or cross-tenant") {
 		t.Fatalf("setup overclaims cross-tenant boundary detection:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "Current limits:") || strings.Contains(stdout.String(), "source document totals remain unassessed") {
+		t.Fatalf("setup pasted reference caveats into onboarding:\n%s", stdout.String())
 	}
 }

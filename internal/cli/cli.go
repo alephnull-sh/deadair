@@ -84,7 +84,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  tune      suggest baseline settings from accumulated state")
 	fmt.Fprintln(w, "  version   print version")
 	fmt.Fprintf(w, "\n%s\n", h("GET STARTED"))
-	fmt.Fprintln(w, "  deadair setup     # print the read-only credential setup")
+	fmt.Fprintln(w, "  deadair setup <backend>  # elastic, opensearch, or sentinel")
 	fmt.Fprintln(w, "  deadair check     # confirm the credential can scan")
 	fmt.Fprintln(w, "  deadair scan      # assess live rules and telemetry")
 	if os.Getenv("DEADAIR_ES_URL") != "" {
@@ -94,7 +94,7 @@ func printHelp(w io.Writer) {
 	} else if strings.EqualFold(os.Getenv("DEADAIR_BACKEND"), "sentinel") && os.Getenv("DEADAIR_SENTINEL_WORKSPACE") != "" {
 		fmt.Fprintln(w, "\nconfigured: sentinel")
 	} else {
-		fmt.Fprintln(w, "\nnot configured yet — start with: deadair setup")
+		fmt.Fprintln(w, "\nnot configured yet — start with: deadair setup <backend>")
 	}
 	fmt.Fprintf(w, "\nRun \"deadair <command> -h\" for flags. Guide: %s\n", usageGuideURL)
 }
@@ -611,13 +611,13 @@ func collectFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules [
 	switch {
 	case unavailable == len(sources):
 		assessment.Status = backendpkg.EvidenceUnavailable
-		assessment.Detail = fmt.Sprintf("freshness is unavailable for %d consumed source(s)", unavailable)
+		assessment.Detail = fmt.Sprintf("freshness is unavailable for %s", countLabel(unavailable, "consumed source", "consumed sources"))
 	case unavailable > 0 || incomplete > 0:
 		assessment.Status = backendpkg.EvidenceIncomplete
-		assessment.Detail = fmt.Sprintf("freshness evidence incomplete for %d of %d consumed source(s)", unavailable+incomplete, len(sources))
+		assessment.Detail = fmt.Sprintf("freshness evidence incomplete for %d of %s", unavailable+incomplete, countLabel(len(sources), "consumed source", "consumed sources"))
 	default:
 		assessment.Status = backendpkg.EvidenceAssessed
-		assessment.Detail = fmt.Sprintf("bounded freshness evidence collected for %d consumed source(s)", assessed)
+		assessment.Detail = fmt.Sprintf("bounded freshness evidence collected for %s", countLabel(assessed, "consumed source", "consumed sources"))
 	}
 	return evidence, assessment, nil
 }
@@ -672,7 +672,7 @@ func collectIngestLagEvidence(ctx context.Context, c backendpkg.Backend, rules [
 		assessment.Status = backendpkg.EvidenceDisabled
 		assessment.Detail = "relevant sources had no documents to sample"
 	} else if assessment.Status == backendpkg.EvidenceAssessed {
-		assessment.Detail = fmt.Sprintf("paired recent-event samples requested for %d relevant source(s)", len(sources))
+		assessment.Detail = fmt.Sprintf("paired recent-event samples requested for %s", countLabel(len(sources), "relevant source", "relevant sources"))
 	}
 	return evidence, assessment, nil
 }
@@ -1366,6 +1366,7 @@ func printSummary(w io.Writer, r *report.Report) {
 
 func printPlainSummary(w io.Writer, r *report.Report) {
 	s := r.Summary
+	visibleUnmapped := r.VisibleUnmappedRules()
 	fmt.Fprintf(w, "deadair scan — %s — %s\n", r.Backend, r.GeneratedAt.Format(time.RFC3339))
 	printPlainGateStatus(w, r)
 	counts := map[string]int{}
@@ -1374,22 +1375,26 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 	}
 	fmt.Fprintf(w, "sources:    %d (%d ok, %d stale, %d empty, %d unknown, %d maintenance)\n",
 		s.Sources, counts["ok"], counts["stale"], counts["empty"], counts["unknown"], counts["maintenance"])
-	fmt.Fprintf(w, "detections: %d enabled / %d total (%d unmapped)\n", s.EnabledRules, s.Rules, s.UnmappedRules)
+	fmt.Fprintf(w, "detections: %d enabled / %d total", s.EnabledRules, s.Rules)
+	if len(visibleUnmapped) > 0 {
+		fmt.Fprintf(w, " (%d not fully assessed)", len(visibleUnmapped))
+	}
+	fmt.Fprintln(w)
 	if len(r.InputResolutions) > 0 {
-		resolution := s.InputResolution
+		resolution := humanInputResolution(r)
 		fmt.Fprintf(w, "inputs:     %d resolved, %d empty, %d incompatible, %d unsupported, %d unavailable, %d remote, %d ambiguous\n",
 			resolution.Resolved, resolution.Empty, resolution.Incompatible, resolution.Unsupported, resolution.Unavailable,
 			resolution.Remote, resolution.Ambiguous)
 	}
 	if r.Policy != nil {
-		fmt.Fprintf(w, "policy:     %d finding(s) gate, %d accepted, %d expired acceptance(s)\n",
+		fmt.Fprintf(w, "policy:     %d gated, %d accepted, %d expired\n",
 			s.GatedFindings, r.Policy.AcceptedActive, r.Policy.AcceptedExpired)
 	}
 	if s.VolumeLowSources > 0 {
-		fmt.Fprintf(w, "volume:     %d source(s) below same weekday/hour baseline\n", s.VolumeLowSources)
+		fmt.Fprintf(w, "volume:     %s below same weekday/hour baseline\n", countLabel(s.VolumeLowSources, "source", "sources"))
 	}
 	if s.SchemaDriftSources > 0 {
-		fmt.Fprintf(w, "schema:     %d source(s) changed field_caps since previous snapshot\n", s.SchemaDriftSources)
+		fmt.Fprintf(w, "schema:     %s changed field_caps since previous snapshot\n", countLabel(s.SchemaDriftSources, "source", "sources"))
 	}
 	if checks := unassessedChecks(r); len(checks) > 0 {
 		fmt.Fprintln(w, "checks:")
@@ -1398,7 +1403,7 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 		}
 	}
 	if len(r.DeadDetections) > 0 {
-		fmt.Fprintf(w, "\n%s\n", color(w, "31;1", fmt.Sprintf("DEAD: %d enabled detection(s) cannot fire right now", s.DeadDetections)))
+		fmt.Fprintf(w, "\n%s\n", color(w, "31;1", fmt.Sprintf("DEAD: %s cannot fire right now", countLabel(s.DeadDetections, "enabled detection", "enabled detections"))))
 		for i, d := range r.DeadDetections {
 			// severity-sorted, so the cut tail is always the least severe
 			if i >= 15 {
@@ -1413,18 +1418,27 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 		}
 	}
 	if len(r.ImpairedDetections) > 0 {
-		fmt.Fprintf(w, "\n%s\n", color(w, "33;1", fmt.Sprintf("IMPAIRED: %d enabled detection(s) run with reduced visibility", s.ImpairedDetections)))
+		verb := "run"
+		if s.ImpairedDetections == 1 {
+			verb = "runs"
+		}
+		fmt.Fprintf(w, "\n%s\n", color(w, "33;1", fmt.Sprintf("IMPAIRED: %s %s with reduced visibility", countLabel(s.ImpairedDetections, "enabled detection", "enabled detections"), verb)))
 		for i, d := range r.ImpairedDetections {
 			if i >= 15 {
 				fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", s.ImpairedDetections-15)
 				break
 			}
-			fmt.Fprintf(w, "  [%s] %s — %s%s\n", d.Severity, d.Name, strings.Join(d.Reasons, ", "), impairedDetail(d))
+			fmt.Fprintf(w, "  [%s] %s — %s%s\n", d.Severity, d.Name, strings.Join(impairedReasonLabels(d.Reasons), ", "), impairedDetail(d))
 		}
 	}
+	printPlainSourceFindings(w, sourceAttentionItems(r))
 	if len(r.PartialInputCoverage) > 0 {
-		fmt.Fprintf(w, "\npartial input coverage: %d selector(s) are missing while their combined rule input still resolves\n",
-			s.PartialInputs)
+		verb := "are"
+		if s.PartialInputs == 1 {
+			verb = "is"
+		}
+		fmt.Fprintf(w, "\npartial input coverage: %s %s missing while the combined rule input still resolves\n",
+			countLabel(s.PartialInputs, "selector", "selectors"), verb)
 		for i, coverage := range r.PartialInputCoverage {
 			if i >= 10 {
 				fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", s.PartialInputs-10)
@@ -1437,11 +1451,11 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 			fmt.Fprintf(w, "  [%s] %s — missing selector: %s\n", coverage.Severity, coverage.RuleName, dependency)
 		}
 	}
-	if len(r.UnmappedRules) > 0 || len(r.RemoteRules) > 0 {
-		fmt.Fprintf(w, "\ninput assessment: %d unmapped rule(s), %d remote rule(s); neither is treated as dead\n",
-			len(r.UnmappedRules), len(r.RemoteRules))
+	if len(visibleUnmapped) > 0 || len(r.RemoteRules) > 0 {
+		fmt.Fprintf(w, "\ninput assessment: %s, %s; these are not treated as dead\n",
+			countLabel(len(visibleUnmapped), "unmapped rule", "unmapped rules"), countLabel(len(r.RemoteRules), "remote rule", "remote rules"))
 		shown := 0
-		for _, rule := range r.UnmappedRules {
+		for _, rule := range visibleUnmapped {
 			if shown >= 10 {
 				break
 			}
@@ -1461,11 +1475,11 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 		}
 	}
 	printPlainSentinelSignals(w, r)
-	if s.UnusedTelemetryAssessment == report.UnusedAssessmentUnavailable {
+	if s.UnusedTelemetryAssessment == report.UnusedAssessmentUnavailable && !strings.EqualFold(r.Backend, "sentinel") {
 		fmt.Fprintf(w, "\nunused telemetry: not assessed because %s\n", s.UnusedTelemetryExplanation())
 	} else if s.UnusedSources > 0 {
-		fmt.Fprintf(w, "\nunused telemetry: %d source(s), %s stored with no enabled detection reading it\n",
-			s.UnusedSources, humanBytes(s.UnusedBytes))
+		fmt.Fprintf(w, "\nunused telemetry: %s, %s stored with no enabled detection reading it\n",
+			countLabel(s.UnusedSources, "source", "sources"), humanBytes(s.UnusedBytes))
 		for i, u := range r.UnusedTelemetry {
 			if i >= 5 {
 				fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", s.UnusedSources-5)
@@ -1473,10 +1487,38 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 			}
 			fmt.Fprintf(w, "  %s (%s", u.Name, humanBytes(u.SizeBytes))
 			if u.DisabledConsumers > 0 {
-				fmt.Fprintf(w, ", %d disabled rule(s) reference it", u.DisabledConsumers)
+				fmt.Fprintf(w, ", %s reference it", countLabel(u.DisabledConsumers, "disabled rule", "disabled rules"))
 			}
 			fmt.Fprintln(w, ")")
 		}
+	}
+}
+
+func humanInputResolution(r *report.Report) report.InputResolutionSummary {
+	resolution := r.Summary.InputResolution
+	hidden := len(r.UnmappedRules) - len(r.VisibleUnmappedRules())
+	if hidden > resolution.Unsupported {
+		hidden = resolution.Unsupported
+	}
+	resolution.Unsupported -= hidden
+	return resolution
+}
+
+func printPlainSourceFindings(w io.Writer, items []sourceAttention) {
+	if len(items) == 0 {
+		return
+	}
+	verb := "need"
+	if len(items) == 1 {
+		verb = "needs"
+	}
+	fmt.Fprintf(w, "\nSOURCE FINDINGS: %s %s attention\n", countLabel(len(items), "source", "sources"), verb)
+	for i, item := range items {
+		if i >= 15 {
+			fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", len(items)-i)
+			break
+		}
+		fmt.Fprintf(w, "  %s — %s\n", item.name, strings.Join(item.reasons, "; "))
 	}
 }
 
@@ -1650,7 +1692,7 @@ func impairedDetail(d report.ImpairedDetection) string {
 		parts = append(parts, "missing "+strings.Join(d.MissingFields, ", "))
 	}
 	if len(d.LagSources) > 0 {
-		parts = append(parts, fmt.Sprintf("ingest lag p95 %s (max %s) in %s exceeds window margin",
+		parts = append(parts, fmt.Sprintf("p95 ingest delay %s (max %s) exceeds the rule's lookback margin in %s",
 			humanDuration(d.P95LagSeconds), humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
 	}
 	if len(d.IncompatibleSources) > 0 {
@@ -1660,6 +1702,14 @@ func impairedDetail(d report.ImpairedDetection) string {
 		return ""
 	}
 	return " (" + strings.Join(parts, "; ") + ")"
+}
+
+func impairedReasonLabels(reasons []string) []string {
+	labels := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		labels = append(labels, report.ImpairedReasonLabel(reason))
+	}
+	return labels
 }
 
 func incompatibleSourceDetail(sources []string) string {
@@ -1755,7 +1805,7 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 		fmt.Fprintf(w, "DEAD     [%s] %s — %s\n", x.Severity, x.Name, report.DeadReasonLabel(x.Reason))
 	}
 	for _, x := range d.NewlyImpaired {
-		fmt.Fprintf(w, "IMPAIRED [%s] %s — %s\n", x.Severity, x.Name, strings.Join(x.Reasons, ", "))
+		fmt.Fprintf(w, "IMPAIRED [%s] %s — %s\n", x.Severity, x.Name, strings.Join(impairedReasonLabels(x.Reasons), ", "))
 	}
 	for _, s := range d.NewlyDegraded {
 		fmt.Fprintf(w, "DEGRADED %s — %s\n", s.Name, s.Status)
@@ -1770,7 +1820,8 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 			if name == "" {
 				name = finding.RuleName
 			}
-			fmt.Fprintf(w, "FINDING  %s — %s (%s)\n", name, finding.Reason, finding.Class)
+			fmt.Fprintf(w, "FINDING  %s — %s (%s)\n", name,
+				report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 		}
 	}
 	for _, finding := range d.NewlyGatedFindings {
@@ -1778,7 +1829,8 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 		if name == "" {
 			name = finding.RuleName
 		}
-		fmt.Fprintf(w, "NEW GATE %s — %s (%s)\n", name, finding.Reason, finding.Class)
+		fmt.Fprintf(w, "NEW GATE %s — %s (%s)\n", name,
+			report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 	}
 	for _, x := range d.RecoveredDead {
 		fmt.Fprintf(w, "recovered detection: %s\n", x.Name)
@@ -1796,7 +1848,8 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 			if name == "" {
 				name = finding.RuleName
 			}
-			fmt.Fprintf(w, "recovered finding: %s — %s (%s)\n", name, finding.Reason, finding.Class)
+			fmt.Fprintf(w, "recovered finding: %s — %s (%s)\n", name,
+				report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 		}
 	}
 	for _, finding := range d.NoLongerGated {
@@ -1804,7 +1857,8 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 		if name == "" {
 			name = finding.RuleName
 		}
-		fmt.Fprintf(w, "no longer gated: %s — %s (%s)\n", name, finding.Reason, finding.Class)
+		fmt.Fprintf(w, "no longer gated: %s — %s (%s)\n", name,
+			report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 	}
 	for _, n := range d.NewSources {
 		fmt.Fprintf(w, "new source: %s\n", n)
@@ -1872,17 +1926,17 @@ func runTune(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	fmt.Fprintf(stdout, "deadair tune — %d source(s), %d sample(s), %d bucket(s)\n",
-		tune.Sources, tune.TotalSamples, tune.TotalBuckets)
+	fmt.Fprintf(stdout, "deadair tune — %s, %s, %s\n",
+		countLabel(tune.Sources, "source", "sources"), countLabel(tune.TotalSamples, "sample", "samples"), countLabel(tune.TotalBuckets, "bucket", "buckets"))
 	fmt.Fprintf(stdout, "suggested: --volume-min-samples %d --volume-hysteresis %d --volume-z-threshold %.1f\n",
 		tune.Suggested.VolumeMinSamples, tune.Suggested.VolumeHysteresis, tune.Suggested.VolumeZThreshold)
 	for i, src := range tune.SourceSummaries {
 		if i >= 10 {
-			fmt.Fprintf(stdout, "… and %d more source(s)\n", len(tune.SourceSummaries)-10)
+			fmt.Fprintf(stdout, "… and %s\n", countLabel(len(tune.SourceSummaries)-10, "more source", "more sources"))
 			break
 		}
-		fmt.Fprintf(stdout, "%s: %d samples across %d bucket(s), mean %.1f docs/hour, stddev %.1f\n",
-			src.Name, src.Samples, src.Buckets, src.MeanPerHour, src.StdPerHour)
+		fmt.Fprintf(stdout, "%s: %s across %s, mean %.1f docs/hour, stddev %.1f\n",
+			src.Name, countLabel(src.Samples, "sample", "samples"), countLabel(src.Buckets, "bucket", "buckets"), src.MeanPerHour, src.StdPerHour)
 	}
 	return 0
 }

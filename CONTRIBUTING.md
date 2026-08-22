@@ -15,6 +15,7 @@ make validate
 This runs the same fork-safe checks as pull-request CI: formatting, vet, unit tests, the race
 detector, a static build, and a `go mod tidy` comparison. It needs no SIEM credentials and does not
 start Docker. The tidy check uses a temporary module file, so it does not rewrite tracked files.
+CI also runs `make vuln`; run it locally after dependency or toolchain changes.
 
 Keep tests close to the behavior they cover. Table-driven tests work well for parsers and
 normalization. Run the relevant package while working, then run `make validate` before opening the

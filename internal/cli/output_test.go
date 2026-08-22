@@ -131,6 +131,21 @@ func TestCoverageHidesOnlyExpectedPredicateFreshnessDisablement(t *testing.T) {
 	}
 }
 
+func TestCoverageHidesRequiredFieldsWhenNoRuleDeclaresThem(t *testing.T) {
+	r := &report.Report{Assessments: []report.RuntimeAssessment{{
+		Name: report.AssessmentRequiredFields, Status: backend.EvidenceDisabled,
+		Detail: "enabled rules did not declare required fields",
+	}}}
+	if checks := unassessedChecks(r); len(checks) != 0 {
+		t.Fatalf("not-applicable required-fields check should be hidden, got %v", checks)
+	}
+	r.Assessments[0].Detail = "required-field checks were disabled by configuration"
+	checks := unassessedChecks(r)
+	if len(checks) != 1 || checks[0] != "required fields disabled" {
+		t.Fatalf("unexpected required-fields disablement should remain visible, got %v", checks)
+	}
+}
+
 func TestCoverageChecksUseOneLineEach(t *testing.T) {
 	r := &report.Report{Assessments: []report.RuntimeAssessment{
 		{Name: report.AssessmentSourceResolution, Status: backend.EvidenceIncomplete},
@@ -179,6 +194,173 @@ func TestPrintSummaryUsesPlainLanguageReasons(t *testing.T) {
 	}
 	if strings.Contains(output.String(), " — disconnected") || strings.Contains(output.String(), " — starved") {
 		t.Errorf("human report exposes machine reason codes:\n%s", output.String())
+	}
+}
+
+func TestHumanOutputsKeepImpairmentReasonCodesInJSONOnly(t *testing.T) {
+	r := &report.Report{
+		Backend: "sentinel",
+		Summary: report.Summary{ImpairedDetections: 1},
+		ImpairedDetections: []report.ImpairedDetection{{
+			Name: "Delayed identity events", Severity: "high",
+			Reasons:       []string{report.ReasonMissingFields, report.ReasonLagBlindWindow},
+			MissingFields: []string{"UserPrincipalName"},
+			LagSources:    []string{"IdentitySignIn_CL"},
+			P95LagSeconds: 1900,
+			MaxLagSeconds: 2100,
+		}},
+	}
+	for name, render := range map[string]func(*bytes.Buffer){
+		"plain":  func(output *bytes.Buffer) { printPlainSummary(output, r) },
+		"visual": func(output *bytes.Buffer) { printVisualSummary(output, r) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output bytes.Buffer
+			render(&output)
+			text := output.String()
+			for _, raw := range []string{report.ReasonMissingFields, report.ReasonLagBlindWindow} {
+				if strings.Contains(text, raw) {
+					t.Fatalf("%s report exposed machine reason %q:\n%s", name, raw, text)
+				}
+			}
+			if !strings.Contains(text, "required fields are missing") && !strings.Contains(text, "missing UserPrincipalName") {
+				t.Fatalf("%s report omitted the field problem:\n%s", name, text)
+			}
+			if !strings.Contains(text, "lookback margin") {
+				t.Fatalf("%s report omitted the ingest-delay boundary:\n%s", name, text)
+			}
+		})
+	}
+}
+
+func TestHumanDiffsUseFindingLabels(t *testing.T) {
+	d := &report.DiffResult{
+		NewlyImpaired: []report.ImpairedDetection{{
+			Name: "Delayed identity events", Severity: "high", Reasons: []string{report.ReasonLagBlindWindow},
+		}},
+		NewFindings: []report.Finding{{
+			Class: report.FindingSchemaDrift, Reason: report.FindingSchemaDrift, Source: "IdentitySignIn_CL",
+		}},
+		NewlyGatedFindings: []report.Finding{{
+			Class: report.FindingPartialInput, Reason: report.ReasonSelectorEmpty, RuleName: "Cross-provider sign-ins",
+		}},
+	}
+	for name, render := range map[string]func(*bytes.Buffer){
+		"plain":  func(output *bytes.Buffer) { printPlainDiff(output, d) },
+		"visual": func(output *bytes.Buffer) { printVisualDiff(output, d) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output bytes.Buffer
+			render(&output)
+			text := output.String()
+			for _, raw := range []string{report.ReasonLagBlindWindow, report.FindingSchemaDrift, report.FindingPartialInput, report.ReasonSelectorEmpty} {
+				if strings.Contains(text, raw) {
+					t.Fatalf("%s diff exposed machine code %q:\n%s", name, raw, text)
+				}
+			}
+			for _, want := range []string{"events may arrive too late for the rule", "field schema changed", "partial input"} {
+				if !strings.Contains(text, want) && !strings.Contains(strings.ToLower(text), want) {
+					t.Fatalf("%s diff omitted %q:\n%s", name, want, text)
+				}
+			}
+		})
+	}
+}
+
+func TestFleetSummaryOmitsUnavailableUnusedInventoryForSentinel(t *testing.T) {
+	f := &report.FleetReport{Instances: []*report.Report{
+		{Instance: "sentinel-soc", Backend: "sentinel", Summary: report.Summary{UnusedTelemetryAssessment: report.UnusedAssessmentUnavailable}},
+		{Instance: "elastic-soc", Backend: "elastic", Summary: report.Summary{UnusedTelemetryAssessment: report.UnusedAssessmentUnavailable}},
+	}}
+	var output bytes.Buffer
+	printFleetSummary(&output, f)
+	lines := strings.Split(output.String(), "\n")
+	var sentinelLine, elasticLine string
+	for _, line := range lines {
+		if strings.Contains(line, "sentinel-soc") {
+			sentinelLine = line
+		}
+		if strings.Contains(line, "elastic-soc") {
+			elasticLine = line
+		}
+	}
+	if sentinelLine == "" || strings.Contains(sentinelLine, "unused") || strings.Contains(sentinelLine, "0 B") {
+		t.Fatalf("Sentinel fleet line promoted unavailable inventory: %q", sentinelLine)
+	}
+	if !strings.Contains(elasticLine, "unused not assessed") {
+		t.Fatalf("Elastic fleet line lost its incomplete-inventory warning: %q", elasticLine)
+	}
+}
+
+func TestTerminalNamesEverySourceOnlyGateCause(t *testing.T) {
+	r := &report.Report{
+		Backend: "elastic",
+		Summary: report.Summary{
+			Sources: 3, DegradedSources: 1, VolumeLowSources: 1, SchemaDriftSources: 1,
+		},
+		Sources: []report.SourceHealth{
+			{Name: "auth-stale", Status: "stale"},
+			{Name: "dns-low", Status: "ok", Volume: &report.VolumeHealth{Status: "low"}},
+			{Name: "endpoint-schema", Status: "ok", Schema: &report.SchemaHealth{Status: "drift"}},
+		},
+	}
+	for name, render := range map[string]func(*bytes.Buffer){
+		"plain":  func(output *bytes.Buffer) { printPlainSummary(output, r) },
+		"visual": func(output *bytes.Buffer) { printVisualSummary(output, r) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output bytes.Buffer
+			render(&output)
+			text := output.String()
+			for _, want := range []string{
+				"GATE FAILED", "SOURCE FINDINGS", "auth-stale", "no recent events",
+				"dns-low", "volume below baseline", "endpoint-schema", "field schema changed",
+			} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("%s source-only gate omitted %q:\n%s", name, want, text)
+				}
+			}
+		})
+	}
+}
+
+func TestSentinelHumanOutputKeepsFusionInEvidenceOnly(t *testing.T) {
+	r := &report.Report{
+		Backend: "sentinel",
+		Scope:   report.ScanScope{Mode: "installed"},
+		Assessments: []report.RuntimeAssessment{{
+			Name: report.AssessmentSourceResolution, Status: backend.EvidenceIncomplete,
+			Detail: "one or more rule inputs could not be assessed locally",
+		}},
+		Summary: report.Summary{
+			Rules: 1, EnabledRules: 1, UnmappedRules: 1,
+			InputResolution: report.InputResolutionSummary{Unsupported: 1},
+		},
+		InputResolutions: []backend.InputResolution{{
+			RuleID: "BuiltInFusion", Status: backend.ResolutionUnsupported,
+		}},
+		UnmappedRules: []report.RuleRef{{
+			RuleID: "BuiltInFusion", Name: "Advanced Multistage Attack Detection", Severity: "high",
+			AssessmentStatus: backend.ResolutionUnsupported, Detail: "Sentinel Fusion alert rules are not assessed",
+		}},
+	}
+	for name, render := range map[string]func(*bytes.Buffer){
+		"plain":  func(output *bytes.Buffer) { printPlainSummary(output, r) },
+		"visual": func(output *bytes.Buffer) { printVisualSummary(output, r) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var output bytes.Buffer
+			render(&output)
+			text := output.String()
+			for _, unwanted := range []string{"Advanced Multistage Attack Detection", "NOT ASSESSED", "unsupported input", "Fusion alert rules", "source resolution incomplete"} {
+				if strings.Contains(text, unwanted) {
+					t.Fatalf("%s promoted expected Fusion coverage metadata %q:\n%s", name, unwanted, text)
+				}
+			}
+		})
+	}
+	if len(r.UnmappedRules) != 1 || r.UnmappedRules[0].RuleID != "BuiltInFusion" {
+		t.Fatal("human rendering mutated Fusion evidence")
 	}
 }
 

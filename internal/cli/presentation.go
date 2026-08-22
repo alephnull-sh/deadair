@@ -7,7 +7,36 @@ import (
 	"strings"
 
 	"github.com/alephnull-sh/deadair/internal/report"
+	"github.com/alephnull-sh/deadair/internal/state"
 )
+
+type sourceAttention struct {
+	name    string
+	reasons []string
+}
+
+func sourceAttentionItems(r *report.Report) []sourceAttention {
+	items := make([]sourceAttention, 0, r.Summary.DegradedSources+r.Summary.VolumeLowSources+r.Summary.SchemaDriftSources)
+	for _, source := range r.Sources {
+		var reasons []string
+		switch source.Status {
+		case "stale":
+			reasons = append(reasons, "no recent events")
+		case "empty":
+			reasons = append(reasons, "no events in the measured window")
+		}
+		if source.Volume != nil && source.Volume.Status == state.VolumeLow {
+			reasons = append(reasons, "volume below baseline")
+		}
+		if source.Schema != nil && source.Schema.Status == state.SchemaDrift {
+			reasons = append(reasons, "field schema changed")
+		}
+		if len(reasons) > 0 {
+			items = append(items, sourceAttention{name: source.Name, reasons: reasons})
+		}
+	}
+	return items
+}
 
 func interactiveOutput(w io.Writer) bool {
 	if os.Getenv("TERM") == "dumb" {
@@ -23,6 +52,7 @@ func interactiveOutput(w io.Writer) bool {
 
 func printVisualSummary(w io.Writer, r *report.Report) {
 	s := r.Summary
+	visibleUnmapped := r.VisibleUnmappedRules()
 	fmt.Fprintln(w, color(w, "1", "deadair"))
 	context := []string{strings.ToUpper(r.Backend)}
 	if r.Instance != "" && !strings.EqualFold(r.Instance, r.Backend) {
@@ -70,13 +100,14 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 		}
 	}
 	if len(r.InputResolutions) > 0 {
-		appendInput(s.InputResolution.Resolved, "resolved input", "resolved inputs", "32")
-		appendInput(s.InputResolution.Empty, "missing input", "missing inputs", "31")
-		appendInput(s.InputResolution.Incompatible, "incompatible input", "incompatible inputs", "33")
-		appendInput(s.InputResolution.Unsupported, "unsupported input", "unsupported inputs", "33")
-		appendInput(s.InputResolution.Unavailable, "unavailable input", "unavailable inputs", "33")
-		appendInput(s.InputResolution.Remote, "remote input", "remote inputs", "36")
-		appendInput(s.InputResolution.Ambiguous, "ambiguous input", "ambiguous inputs", "33")
+		resolution := humanInputResolution(r)
+		appendInput(resolution.Resolved, "resolved input", "resolved inputs", "32")
+		appendInput(resolution.Empty, "missing input", "missing inputs", "31")
+		appendInput(resolution.Incompatible, "incompatible input", "incompatible inputs", "33")
+		appendInput(resolution.Unsupported, "unsupported input", "unsupported inputs", "33")
+		appendInput(resolution.Unavailable, "unavailable input", "unavailable inputs", "33")
+		appendInput(resolution.Remote, "remote input", "remote inputs", "36")
+		appendInput(resolution.Ambiguous, "ambiguous input", "ambiguous inputs", "33")
 	}
 	if disabled := s.Rules - s.EnabledRules; disabled > 0 {
 		appendInput(disabled, "disabled detection", "disabled detections", "2")
@@ -91,7 +122,7 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 		}
 	}
 	if r.Policy != nil {
-		fmt.Fprintf(w, "%s  %d gate  ·  %d accepted  ·  %d expired\n",
+		fmt.Fprintf(w, "%s  %d gated  ·  %d accepted  ·  %d expired\n",
 			color(w, "36;1", "POLICY"), r.Summary.GatedFindings, r.Policy.AcceptedActive, r.Policy.AcceptedExpired)
 	}
 
@@ -119,6 +150,18 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 		}
 	}
 
+	if sourceFindings := sourceAttentionItems(r); len(sourceFindings) > 0 {
+		visualHeading(w, "33;1", "SOURCE FINDINGS", len(sourceFindings))
+		for i, item := range sourceFindings {
+			if i >= 15 {
+				visualMore(w, len(sourceFindings)-i)
+				break
+			}
+			fmt.Fprintf(w, "  %s\n", color(w, "1", item.name))
+			fmt.Fprintf(w, "  %s\n", color(w, "2", strings.Join(item.reasons, "  ·  ")))
+		}
+	}
+
 	if len(r.PartialInputCoverage) > 0 {
 		visualHeading(w, "33;1", "PARTIAL INPUT", len(r.PartialInputCoverage))
 		for i, coverage := range r.PartialInputCoverage {
@@ -135,10 +178,10 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 		}
 	}
 
-	if len(r.UnmappedRules) > 0 || len(r.RemoteRules) > 0 {
-		visualHeading(w, "33;1", "NOT ASSESSED", len(r.UnmappedRules)+len(r.RemoteRules))
+	if len(visibleUnmapped) > 0 || len(r.RemoteRules) > 0 {
+		visualHeading(w, "33;1", "NOT ASSESSED", len(visibleUnmapped)+len(r.RemoteRules))
 		shown := 0
-		for _, rule := range r.UnmappedRules {
+		for _, rule := range visibleUnmapped {
 			if shown >= 10 {
 				break
 			}
@@ -158,14 +201,14 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 			fmt.Fprintf(w, "  %s\n", color(w, "1", rule.Name))
 			printVisualFindingDetail(w, rule.Severity, "remote dependency")
 		}
-		if remaining := len(r.UnmappedRules) + len(r.RemoteRules) - shown; remaining > 0 {
+		if remaining := len(visibleUnmapped) + len(r.RemoteRules) - shown; remaining > 0 {
 			visualMore(w, remaining)
 		}
 	}
 
 	printVisualSentinelSignals(w, r)
 
-	if s.UnusedTelemetryAssessment == report.UnusedAssessmentUnavailable {
+	if s.UnusedTelemetryAssessment == report.UnusedAssessmentUnavailable && !strings.EqualFold(r.Backend, "sentinel") {
 		visualHeading(w, "33;1", "UNUSED NOT ASSESSED", 0)
 		fmt.Fprintf(w, "  %s\n", color(w, "2", s.UnusedTelemetryExplanation()))
 	} else if len(r.UnusedTelemetry) > 0 {
@@ -300,7 +343,7 @@ func visualImpairmentEvidence(d report.ImpairedDetection) []string {
 	}
 	if len(d.LagSources) > 0 {
 		parts = append(parts,
-			fmt.Sprintf("p95 %s (max %s) ingest lag exceeds window in %s",
+			fmt.Sprintf("p95 ingest delay %s (max %s) exceeds the rule's lookback margin in %s",
 				humanDuration(d.P95LagSeconds), humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
 	}
 	if len(d.IncompatibleSources) > 0 {
@@ -308,7 +351,7 @@ func visualImpairmentEvidence(d report.ImpairedDetection) []string {
 	}
 	if len(parts) == 0 {
 		for _, reason := range d.Reasons {
-			parts = append(parts, strings.ReplaceAll(reason, "-", " "))
+			parts = append(parts, report.ImpairedReasonLabel(reason))
 		}
 	}
 	return parts
@@ -319,12 +362,31 @@ func unassessedChecks(r *report.Report) []string {
 	for _, assessment := range r.Assessments {
 		if assessment.Status == "assessed" ||
 			(assessment.Name == report.AssessmentCandidateParsing && assessment.Status == "disabled") ||
-			expectedPredicateFreshnessDisabled(assessment) {
+			expectedHiddenSentinelFusionResolution(r, assessment) ||
+			expectedPredicateFreshnessDisabled(assessment) ||
+			expectedRequiredFieldsDisabled(assessment) {
 			continue
 		}
 		checks = append(checks, strings.ReplaceAll(assessment.Name, "_", " ")+" "+string(assessment.Status))
 	}
 	return checks
+}
+
+func expectedHiddenSentinelFusionResolution(r *report.Report, assessment report.RuntimeAssessment) bool {
+	return assessment.Name == report.AssessmentSourceResolution &&
+		assessment.Status == "incomplete" &&
+		strings.EqualFold(r.Backend, "sentinel") &&
+		r.Scope.Mode != "candidate" &&
+		len(r.UnmappedRules) > 0 &&
+		len(r.VisibleUnmappedRules()) == 0 &&
+		len(r.RemoteRules) == 0
+}
+
+func expectedRequiredFieldsDisabled(assessment report.RuntimeAssessment) bool {
+	if assessment.Name != report.AssessmentRequiredFields || assessment.Status != "disabled" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(assessment.Detail), "did not declare required fields")
 }
 
 func expectedPredicateFreshnessDisabled(assessment report.RuntimeAssessment) bool {
@@ -406,9 +468,9 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 			if name == "" {
 				name = finding.RuleName
 			}
-			visualHeading(w, "33;1", strings.ToUpper(finding.Class), 1)
+			visualHeading(w, "33;1", strings.ToUpper(report.FindingClassLabel(finding.Class)), 1)
 			fmt.Fprintf(w, "  %s\n", color(w, "1", name))
-			fmt.Fprintf(w, "  %s\n", color(w, "2", finding.Reason))
+			fmt.Fprintf(w, "  %s\n", color(w, "2", report.FindingReasonLabel(finding.Class, finding.Reason)))
 		}
 	}
 	if len(d.NewlyGatedFindings) > 0 {
@@ -419,7 +481,7 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 				name = finding.RuleName
 			}
 			fmt.Fprintf(w, "  %s\n", color(w, "1", name))
-			fmt.Fprintf(w, "  %s\n", color(w, "2", finding.Reason+"  ·  "+finding.Class))
+			fmt.Fprintf(w, "  %s\n", color(w, "2", report.FindingReasonLabel(finding.Class, finding.Reason)+"  ·  "+report.FindingClassLabel(finding.Class)))
 		}
 	}
 
@@ -443,7 +505,7 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 			if name == "" {
 				name = finding.RuleName
 			}
-			fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "RECOVERED"), name, finding.Reason)
+			fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "RECOVERED"), name, report.FindingReasonLabel(finding.Class, finding.Reason))
 		}
 	}
 	for _, finding := range d.NoLongerGated {
@@ -451,7 +513,7 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 		if name == "" {
 			name = finding.RuleName
 		}
-		fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "NO LONGER GATED"), name, finding.Reason)
+		fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "NO LONGER GATED"), name, report.FindingReasonLabel(finding.Class, finding.Reason))
 	}
 	for _, n := range d.NewSources {
 		fmt.Fprintf(w, "\n%s  %s\n", color(w, "32;1", "SOURCE ADDED"), n)

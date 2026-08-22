@@ -23,6 +23,8 @@ jobs:
           go-version-file: go.mod
       - name: Format, vet, unit, race, static build, and module checks
         run: make validate
+      - name: Check reachable Go vulnerabilities
+        run: make vuln
       - name: Cross-compile release targets
         env:
           CGO_ENABLED: "0"

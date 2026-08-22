@@ -1,7 +1,7 @@
 # Usage guide
 
 Start here for first scans, triage, CI gates, stateful checks, fleet scans, exporter mode, and safe
-report sharing. For credentials, run `deadair setup` or open the relevant guide under
+report sharing. For credentials, run `deadair setup <backend>` or open the relevant guide under
 [credentials/](credentials/).
 
 ## First scan
@@ -76,6 +76,10 @@ deadair check
 deadair scan --json-out sentinel-report.json
 ```
 
+The disposable demo intentionally includes broken data paths. Its scan should print `GATE FAILED`
+and exit `1`, meaning the scan completed and the configured gate found the seeded problems. Exit
+`2` means the scan itself could not complete.
+
 `DEADAIR_SENTINEL_WORKSPACE_ID` can override the discovered Log Analytics customer ID, but deadair
 still verifies it against the workspace returned by ARM. Workload identity, managed identity, and
 service-principal authentication use the same scan variables. See the
@@ -112,13 +116,14 @@ present in the ARM catalog.
 
 A source used by both Scheduled and NRT rules stays incomplete rather than being measured with the
 wrong freshness clock. Basic and Auxiliary tables are incompatible with this analytics-rule
-evidence path. Sentinel does not expose authoritative rule-required fields or cheap exact document
-and storage totals, so required-field and unused-telemetry findings are unavailable. The CLI
-currently targets Azure public cloud endpoints.
+evidence path. Sentinel does not expose authoritative rule-required fields or a bounded,
+authoritative per-table event and storage inventory, so required-field and unused-telemetry
+findings are unavailable. The CLI currently targets Azure public cloud endpoints.
 
 Filtered source activity catches a gap that table-wide freshness cannot: one vendor, device, or
 operation can disappear while the shared table still looks healthy. The disposable lab exercised
-this path with a current literal vendor row. deadair runs the advisory check only when a
+this path with current FortiGate data beside a stale Palo Alto Networks/PAN-OS slice. deadair runs
+the advisory check only when a
 query starts at one direct local table and immediately applies a closed,
 parser-supported literal filter. Remote, joined, unioned, dynamic, escaped-literal, and
 function-backed sources do not qualify. The result appears in `rule_source_freshness`; it does not
@@ -257,11 +262,11 @@ A finding from the checked-in lab report:
 
 | Evidence | Value |
 |---|---|
-| Rule | `Lab registry persistence` |
-| Configured patterns | `deadair-lab-registry-*` |
+| Rule | `Sysmon registry run-key modification` |
+| Configured patterns | `winlogbeat-sysmon-*` |
 | Matched sources | none |
 | Impact | the rule currently has no source to query |
-| Lab explanation | the disposable lab intentionally does not create a matching registry source |
+| Lab explanation | the disposable lab intentionally does not create a matching Sysmon source |
 
 That is an expected coverage gap in the lab. A production regression looks similar but has a change
 behind it: a Windows rule still queries `winlogbeat-*`, telemetry moves to
@@ -354,8 +359,8 @@ informational because deadair does not turn uncertainty into a finding.
 If an enabled local input is unsupported, unavailable, or ambiguous, unused telemetry is marked
 `unavailable` and withheld rather than turning incomplete coverage into a cost finding. Candidate
 reports mark it `not-applicable`. Sentinel also withholds unused telemetry because its workspace
-table inventory does not provide the cheap exact document and storage totals required by that
-finding.
+table inventory does not provide the bounded, authoritative per-table event and storage evidence
+required by that finding.
 
 The full source evidence is in `input_resolutions`. Each record includes the declared selector or
 ordered expression, status, resolution method, observation time, logical aliases, and resolved
@@ -373,8 +378,9 @@ sources. Sentinel reports can also include:
 `dependency_evidence` explains dependency-resolution outcomes. A required dependency's outcome also
 appears in authoritative input resolution and can affect the rule verdict. `source_lineage`,
 `rule_provenance`, `rule_source_freshness`, and `summary_rule_runs` are informational and do not
-change gates. On 2026-08-22, the disposable live lab proved a current literal vendor predicate and
-matched a Basic-plan source bin to its successful summary execution and Analytics destination count.
+change gates. On 2026-08-22, the disposable live lab isolated a stale Palo Alto Networks/PAN-OS
+slice from a fresh shared table and matched a Basic-plan source bin to its successful summary
+execution and Analytics destination count.
 
 Summary lineage describes ARM structure; `summary_rule_runs` describes a bounded latest completed
 native run. In the live lab, `LASummaryLogs.RuleLastModifiedTime` advanced between bins while the ARM

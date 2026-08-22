@@ -800,6 +800,18 @@ func applySentinelKQLResolution(rule *backend.Rule, resolution KQLResolution) {
 			unassessedDependency = true
 		}
 	}
+	// A native dependency probe can settle only the dependency it names. Keep
+	// an independent unsupported or ambiguous query leg as its own resolver
+	// outcome so the supported legs can still be inspected without allowing
+	// their success to resolve the whole rule.
+	if resolution.BlockingStatus != "" && (len(rule.Patterns) > 0 || len(rule.OptionalPatterns) > 0 || deferredNativeResolution) {
+		rule.Dependencies = append(rule.Dependencies, backend.DependencyRef{
+			Kind:       sentinelKQLBlockingDependencyKind(resolution.BlockingStatus),
+			Required:   true,
+			Expression: resolution.BlockingReason,
+		})
+		return
+	}
 	// The syntax pass deliberately reports every remote reference as Remote.
 	// A literal workspace() dependency is assessable only after ResolveInputs
 	// verifies its explicit allowlist mapping and remote ARM catalog.
@@ -809,6 +821,18 @@ func applySentinelKQLResolution(rule *backend.Rule, resolution KQLResolution) {
 		rule.InputStatus = resolution.Status
 		rule.InputDetail = resolution.Reason
 	}
+}
+
+const (
+	sentinelKQLUnsupportedDependency = "sentinel_kql_unsupported"
+	sentinelKQLAmbiguousDependency   = "sentinel_kql_ambiguous"
+)
+
+func sentinelKQLBlockingDependencyKind(status backend.ResolutionStatus) string {
+	if status == backend.ResolutionAmbiguous {
+		return sentinelKQLAmbiguousDependency
+	}
+	return sentinelKQLUnsupportedDependency
 }
 
 func hasFunctionDependency(dependencies []Dependency) bool {
@@ -2111,14 +2135,14 @@ func (c *Client) ReadinessEvidence(ctx context.Context, rules []backend.Rule, so
 			return backend.ReadinessEvidence{
 				Status:    backend.EvidenceAssessed,
 				Attempted: true,
-				Detail:    fmt.Sprintf("bounded read evidence collected for %d Sentinel dependency path(s)", dependencyAttempts),
+				Detail:    fmt.Sprintf("bounded read evidence collected for %s", counted(dependencyAttempts, "Sentinel dependency path", "Sentinel dependency paths")),
 			}, nil
 		}
 		if dependencyInventoryAssessments > 0 {
 			return backend.ReadinessEvidence{
 				Status:  backend.EvidenceAssessed,
 				Limited: true,
-				Detail:  fmt.Sprintf("ARM inventory evidence collected for %d Sentinel dependency path(s), but no runtime Logs query was attempted", dependencyInventoryAssessments),
+				Detail:  fmt.Sprintf("ARM inventory evidence collected for %s, but no runtime Logs query was attempted", counted(dependencyInventoryAssessments, "Sentinel dependency path", "Sentinel dependency paths")),
 			}, nil
 		}
 		return backend.ReadinessEvidence{
@@ -2150,7 +2174,7 @@ func (c *Client) ReadinessEvidence(ctx context.Context, rules []backend.Rule, so
 	return backend.ReadinessEvidence{
 		Status:    backend.EvidenceAssessed,
 		Attempted: true,
-		Detail:    fmt.Sprintf("zero-row permission evidence collected for %d consumed table(s) and %d Sentinel dependency path(s)", len(targets), dependencyAttempts),
+		Detail:    fmt.Sprintf("zero-row permission evidence collected for %s and %s", counted(len(targets), "consumed table", "consumed tables"), counted(dependencyAttempts, "Sentinel dependency path", "Sentinel dependency paths")),
 	}, nil
 }
 
@@ -2245,7 +2269,9 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 		}
 		selectors := make([]string, 0, len(outcomes))
 		for _, outcome := range outcomes {
-			selectors = append(selectors, outcome.selector)
+			if outcome.selector != "" {
+				selectors = append(selectors, outcome.selector)
+			}
 		}
 
 		authoritative := backend.InputResolution{
@@ -2317,6 +2343,21 @@ func (c *Client) initialRuleOutcomes(ctx context.Context, rule backend.Rule, loc
 	}
 	for _, dependency := range rule.Dependencies {
 		switch dependency.Kind {
+		case sentinelKQLUnsupportedDependency, sentinelKQLAmbiguousDependency:
+			status := backend.ResolutionUnsupported
+			detail := "KQL query contains an unsupported input"
+			if dependency.Kind == sentinelKQLAmbiguousDependency {
+				status = backend.ResolutionAmbiguous
+				detail = "KQL query contains an ambiguous input"
+			}
+			if strings.TrimSpace(dependency.Expression) != "" {
+				detail = dependency.Expression
+			}
+			outcomes = append(outcomes, sentinelSelectorOutcome{
+				selectorKind: "kql_query", method: "kql_dependency_analysis",
+				status: status, detail: detail,
+			})
+			continue
 		case "sentinel_watchlist":
 			outcome := sentinelSelectorOutcome{
 				selector: dependency.Name, selectorKind: "sentinel_watchlist",

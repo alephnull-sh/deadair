@@ -38,25 +38,25 @@ const (
 	sentinelEmptyAnalyticsID    = "76666666-6666-4666-8666-666666666666"
 	sentinelPredicateRuleID     = "77777777-7777-4777-8777-777777777777"
 	sentinelNRTRuleID           = "78888888-8888-4888-8888-888888888888"
-	sentinelFreshTable          = "DeadairFresh_CL"
-	sentinelStaleTable          = "DeadairStale_CL"
-	sentinelLagTable            = "DeadairLag_CL"
-	sentinelUnusedTable         = "DeadairUnused_CL"
-	sentinelMissingTable        = "DeadairRemoved_CL"
-	sentinelBasicTable          = "DeadairBasic_CL"
-	sentinelAuxiliaryTable      = "DeadairAuxiliary_CL"
-	sentinelEmptyAnalyticsTable = "DeadairEmptyAnalytics_CL"
-	sentinelPredicateTable      = "DeadairPredicate_CL"
-	sentinelWatchlistAlias      = "DeadairVIPs"
-	sentinelRemoteTable         = "DeadairRemote_CL"
-	sentinelSummaryRule         = "deadair-basic-summary"
-	sentinelSummaryTable        = "DeadairBasicSummary_CL"
+	sentinelFreshTable          = "WorkforceSignIn_CL"
+	sentinelStaleTable          = "RemoteAccessAuth_CL"
+	sentinelLagTable            = "SaaSSignIn_CL"
+	sentinelUnusedTable         = "ADFSAuthentication_CL"
+	sentinelMissingTable        = "PartnerSSOAuth_CL"
+	sentinelSummarySourceTable  = "FirewallTrafficRaw_CL"
+	sentinelAuxiliaryTable      = "IdentityAuditArchive_CL"
+	sentinelEmptyAnalyticsTable = "SaaSAudit_CL"
+	sentinelNetworkTable        = "PerimeterSecurity_CL"
+	sentinelWatchlistAlias      = "PrivilegedAccounts"
+	sentinelRemoteTable         = "RegionalRemoteAccess_CL"
+	sentinelSummaryRule         = "firewall-deny-summary"
+	sentinelSummaryDisplay      = "[lab] Summarize denied firewall connections"
+	sentinelSummaryTable        = "FirewallDenySummary_CL"
 	sentinelWatchlistRuleID     = "79911111-1111-4111-8111-111111111111"
 	sentinelASIMRuleID          = "79922222-2222-4222-8222-222222222222"
 	sentinelRemoteRuleID        = "79933333-3333-4333-8333-333333333333"
 	sentinelSummaryRuleID       = "79944444-4444-4444-8444-444444444444"
-	sentinelSummaryOutputMarker = "deadair-summary-runtime"
-	sentinelSummarySourcePrefix = "summary-source-"
+	sentinelDeniedFlowPrefix    = "denied-flow-"
 	sentinelSummaryBinSize      = int64(20)
 	sentinelSummaryRevisionSkew = 30 * time.Second
 )
@@ -126,7 +126,7 @@ func TestSentinelReadOnlyLab(t *testing.T) {
 		requireSentinelRule(t, rulesByID, sentinelEmptyAnalyticsID),
 		requireSentinelRule(t, rulesByID, sentinelPredicateRuleID),
 		nrtRule,
-		{ID: "deadair-live-basic-plan", Enabled: true, Patterns: []string{sentinelBasicTable}},
+		{ID: "live-firewall-basic-plan", Enabled: true, Patterns: []string{sentinelSummarySourceTable}},
 		watchlistRule,
 		asimRule,
 		remoteRule,
@@ -152,10 +152,11 @@ func TestSentinelReadOnlyLab(t *testing.T) {
 		sentinelStaleTable,
 		sentinelLagTable,
 		sentinelUnusedTable,
-		sentinelBasicTable,
+		sentinelSummarySourceTable,
 		sentinelAuxiliaryTable,
 		sentinelEmptyAnalyticsTable,
-		sentinelPredicateTable,
+		sentinelNetworkTable,
+		sentinelSummaryTable,
 	} {
 		if _, ok := sourcesByName[name]; !ok {
 			t.Errorf("table inventory does not contain %s", name)
@@ -164,6 +165,7 @@ func TestSentinelReadOnlyLab(t *testing.T) {
 	if _, ok := sourcesByName[sentinelMissingTable]; ok {
 		t.Errorf("deleted fixture %s is still present", sentinelMissingTable)
 	}
+	assertSentinelSourceSchemas(ctx, t, client, sourcesByName, remoteSource)
 	remote, ok := sourcesByName[remoteSource]
 	if !ok {
 		t.Fatalf("configured remote table inventory does not contain %s", remoteSource)
@@ -302,7 +304,7 @@ func TestSentinelWriteDenials(t *testing.T) {
 	missingRule := "https://management.azure.com" + workspacePath +
 		"/providers/Microsoft.SecurityInsights/alertRules/79999999-9999-4999-8999-999999999999?api-version=2025-09-01"
 	missingTable := "https://management.azure.com" + workspacePath +
-		"/tables/DeadairWriteDenialMissing_CL?api-version=2025-07-01"
+		"/tables/WriteDenialMissing_CL?api-version=2025-07-01"
 	sharedKeys := "https://management.azure.com" + workspacePath + "/sharedKeys?api-version=2025-07-01"
 
 	assertSentinelARMStatus(ctx, t, token.Token, http.MethodGet, missingRule, http.StatusNotFound,
@@ -746,41 +748,155 @@ func requireSentinelSources(t *testing.T, sources map[string]backend.Source, nam
 	return out
 }
 
+func assertSentinelSourceSchemas(ctx context.Context, t *testing.T, client *sentinel.Client,
+	sources map[string]backend.Source, remoteSource string) {
+	t.Helper()
+	expected := map[string]map[string]string{
+		sentinelFreshTable: {
+			"TimeGenerated": "datetime", "SignInId": "string", "UserPrincipalName": "string",
+			"ClientIpAddress": "string", "AuthenticationResult": "string",
+		},
+		sentinelStaleTable: {
+			"TimeGenerated": "datetime", "SignInId": "string", "UserPrincipalName": "string",
+			"ClientIpAddress": "string", "AuthenticationResult": "string",
+		},
+		sentinelLagTable: {
+			"TimeGenerated": "datetime", "SignInId": "string", "UserPrincipalName": "string",
+			"ClientIpAddress": "string", "AuthenticationResult": "string", "ApplicationName": "string",
+		},
+		sentinelUnusedTable: {
+			"TimeGenerated": "datetime", "SignInId": "string", "UserPrincipalName": "string",
+			"ClientIpAddress": "string", "AuthenticationResult": "string", "RelyingParty": "string",
+		},
+		sentinelNetworkTable: {
+			"TimeGenerated": "datetime", "SessionId": "string", "DeviceVendor": "string",
+			"DeviceProduct": "string", "SourceIpAddress": "string", "DestinationIpAddress": "string",
+			"DestinationPort": "int", "DeviceAction": "string",
+		},
+		sentinelSummarySourceTable: {
+			"TimeGenerated": "datetime", "FlowId": "string", "DeviceVendor": "string",
+			"DeviceProduct": "string", "SourceIpAddress": "string", "DestinationIpAddress": "string",
+			"DestinationPort": "int", "DeviceAction": "string",
+		},
+		sentinelAuxiliaryTable: {
+			"TimeGenerated": "datetime", "ActivityId": "string", "ActorUserPrincipalName": "string",
+			"OperationName": "string", "Result": "string",
+		},
+		sentinelEmptyAnalyticsTable: {
+			"TimeGenerated": "datetime", "ActivityId": "string", "ActorUserPrincipalName": "string",
+			"OperationName": "string", "Result": "string", "ServiceName": "string",
+		},
+		sentinelSummaryTable: {
+			"TimeGenerated": "datetime", "DeviceVendor": "string", "DeviceProduct": "string",
+			"DeniedConnections": "long",
+		},
+		remoteSource: {
+			"TimeGenerated": "datetime", "SignInId": "string", "UserPrincipalName": "string",
+			"ClientIpAddress": "string", "AuthenticationResult": "string",
+		},
+	}
+	selected := make([]backend.Source, 0, len(expected))
+	for sourceName := range expected {
+		source, ok := sources[sourceName]
+		if !ok {
+			t.Fatalf("table inventory does not contain schema fixture %s", sourceName)
+		}
+		selected = append(selected, source)
+	}
+	schemas, err := client.Schemas(ctx, selected)
+	if err != nil {
+		t.Fatalf("read Sentinel source schemas: %v", err)
+	}
+	for sourceName, expectedFields := range expected {
+		schema, ok := schemas[sourceName]
+		if !ok {
+			t.Errorf("schema inventory does not contain %s", sourceName)
+			continue
+		}
+		actual := make(map[string][]string, len(schema.Fields))
+		for _, field := range schema.Fields {
+			actual[field.Name] = field.Types
+		}
+		for fieldName, fieldType := range expectedFields {
+			if !containsSentinelString(actual[fieldName], fieldType) {
+				t.Errorf("%s field %s types = %v, want %s", sourceName, fieldName, actual[fieldName], fieldType)
+			}
+		}
+		for _, obsolete := range []string{"EventID", "SourceIPAddress", "FlowID", "Action"} {
+			if _, exists := actual[obsolete]; exists {
+				t.Errorf("%s still exposes generic fixture field %s", sourceName, obsolete)
+			}
+		}
+	}
+}
+
+func containsSentinelString(values []string, expected string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, expected) {
+			return true
+		}
+	}
+	return false
+}
+
 func assertSentinelRuleInventory(t *testing.T, rules map[string]backend.Rule, remoteWorkspace string) {
 	t.Helper()
 	scheduled := requireSentinelRule(t, rules, sentinelFreshRuleID)
-	if scheduled.RuleType != "scheduled" || fmt.Sprint(scheduled.Patterns) != "["+sentinelFreshTable+"]" {
+	if scheduled.RuleType != "scheduled" || scheduled.Name != "[lab] Suspicious interactive sign-in" ||
+		fmt.Sprint(scheduled.Patterns) != "["+sentinelFreshTable+"]" {
 		t.Errorf("scheduled rule = %+v", scheduled)
+	}
+	for _, expected := range []struct {
+		id   string
+		name string
+	}{
+		{sentinelStaleRuleID, "[lab] VPN password spray"},
+		{sentinelLagRuleID, "[lab] Cloud sign-in impossible travel"},
+		{sentinelMissingRuleID, "[lab] Partner SSO telemetry missing"},
+		{sentinelPartialRuleID, "[lab] Sign-ins across primary and partner IdPs"},
+		{sentinelLetJoinRuleID, "[lab] Interactive sign-in followed by cloud app access"},
+		{sentinelAuxiliaryRuleID, "[lab] Privileged identity operations in archive"},
+		{sentinelEmptyAnalyticsID, "[lab] Cloud audit activity stopped"},
+	} {
+		if rule := requireSentinelRule(t, rules, expected.id); rule.Name != expected.name {
+			t.Errorf("rule %s name = %q, want %q", expected.id, rule.Name, expected.name)
+		}
 	}
 	nrt := requireSentinelRule(t, rules, sentinelNRTRuleID)
 	if nrt.RuleType != "nrt" || nrt.Interval != time.Minute || nrt.Lookback != time.Minute ||
 		nrt.TimestampOverride != "ingestion_time()" || nrt.Enabled ||
-		nrt.Name != "deadair lab - nrt dependency" || nrt.Severity != "low" {
+		nrt.Name != "[lab] Suspicious interactive sign-in (NRT)" || nrt.Severity != "low" {
 		t.Errorf("NRT rule = %+v", nrt)
 	}
-	for _, id := range []string{sentinelFunctionBareID, sentinelFunctionCallID} {
-		function := requireSentinelRule(t, rules, id)
-		if fmt.Sprint(function.Patterns) != "["+sentinelFreshTable+"]" || function.InputStatus != "" {
+	for _, expected := range []struct {
+		id   string
+		name string
+	}{
+		{sentinelFunctionBareID, "[lab] Recent identity sign-ins via saved function"},
+		{sentinelFunctionCallID, "[lab] Recent identity sign-ins via function call"},
+	} {
+		function := requireSentinelRule(t, rules, expected.id)
+		if function.Name != expected.name || fmt.Sprint(function.Patterns) != "["+sentinelFreshTable+"]" || function.InputStatus != "" {
 			t.Errorf("workspace-function rule = %+v", function)
 		}
 	}
 	parameterized := requireSentinelRule(t, rules, sentinelParameterizedID)
-	if fmt.Sprint(parameterized.Patterns) != "["+sentinelFreshTable+"]" || parameterized.InputStatus != "" {
+	if parameterized.Name != "[lab] High-risk account sign-in" ||
+		fmt.Sprint(parameterized.Patterns) != "["+sentinelFreshTable+"]" || parameterized.InputStatus != "" {
 		t.Errorf("parameterized function rule = %+v, want resolved %s input", parameterized, sentinelFreshTable)
 	}
 	predicate := requireSentinelRule(t, rules, sentinelPredicateRuleID)
-	if predicate.RuleType != "scheduled" || !predicate.Enabled || predicate.Name != "deadair lab - predicate freshness" ||
-		fmt.Sprint(predicate.Patterns) != "["+sentinelPredicateTable+"]" || len(predicate.PredicateFreshness) != 1 {
+	if predicate.RuleType != "scheduled" || !predicate.Enabled || predicate.Name != "[lab] Palo Alto firewall telemetry stopped" ||
+		predicate.Interval != 5*time.Minute || predicate.Lookback != 3*time.Hour ||
+		fmt.Sprint(predicate.Patterns) != "["+sentinelNetworkTable+"]" || len(predicate.PredicateFreshness) != 1 {
 		t.Errorf("predicate freshness rule = %+v", predicate)
 	} else {
 		selector := predicate.PredicateFreshness[0]
-		if selector.Source != sentinelPredicateTable || selector.Expression != "DeviceVendor == 'Deadair Labs'" ||
-			fmt.Sprint(selector.Fields) != "[DeviceVendor]" {
+		if selector.Source != sentinelNetworkTable ||
+			selector.Expression != "DeviceVendor == 'Palo Alto Networks' and DeviceProduct == 'PAN-OS'" ||
+			fmt.Sprint(selector.Fields) != "[DeviceProduct DeviceVendor]" {
 			t.Errorf("predicate freshness selector = %+v", selector)
 		}
-	}
-	for _, id := range []string{sentinelStaleRuleID, sentinelLagRuleID, sentinelLetJoinRuleID, sentinelEmptyAnalyticsID} {
-		requireSentinelRule(t, rules, id)
 	}
 	fusion := requireSentinelRule(t, rules, "BuiltInFusion")
 	if fusion.RuleType != "fusion" || fusion.Name != "Advanced Multistage Attack Detection" || !fusion.Enabled {
@@ -795,27 +911,27 @@ func assertSentinelRuleInventory(t *testing.T, rules map[string]backend.Rule, re
 		}
 		return rule
 	}
-	watchlist := assertExpansion(sentinelWatchlistRuleID, "deadair expansion - literal watchlist dependency")
+	watchlist := assertExpansion(sentinelWatchlistRuleID, "[lab] Privileged account activity")
 	if len(watchlist.Dependencies) != 1 || watchlist.InputStatus != "" ||
 		watchlist.Dependencies[0].Kind != "sentinel_watchlist" ||
 		watchlist.Dependencies[0].Name != sentinelWatchlistAlias || !watchlist.Dependencies[0].Required {
 		t.Errorf("watchlist expansion inventory = %+v", watchlist)
 	}
-	asim := assertExpansion(sentinelASIMRuleID, "deadair expansion - native ASIM dependency")
+	asim := assertExpansion(sentinelASIMRuleID, "[lab] ASIM authentication activity")
 	if len(asim.Dependencies) != 1 || asim.InputStatus != "" ||
 		asim.Dependencies[0].Kind != "sentinel_asim_parser" || asim.Dependencies[0].Name != "_Im_Authentication" ||
 		asim.Dependencies[0].Expression != `_Im_Authentication(starttime=ago(1d),endtime=now())` ||
 		!asim.Dependencies[0].Required {
 		t.Errorf("ASIM expansion inventory = %+v", asim)
 	}
-	remote := assertExpansion(sentinelRemoteRuleID, "deadair expansion - remote workspace dependency")
+	remote := assertExpansion(sentinelRemoteRuleID, "[lab] Regional VPN authentication")
 	if len(remote.Dependencies) != 1 || remote.InputStatus != "" ||
 		remote.Dependencies[0].Kind != "sentinel_workspace_table" || remote.Dependencies[0].Name != sentinelRemoteTable ||
 		remote.Dependencies[0].Scope != remoteWorkspace || !remote.Dependencies[0].Monitorable ||
 		!remote.Dependencies[0].Required {
 		t.Errorf("remote expansion inventory = %+v", remote)
 	}
-	summaryConsumer := assertExpansion(sentinelSummaryRuleID, "deadair expansion - summary table consumer")
+	summaryConsumer := assertExpansion(sentinelSummaryRuleID, "[lab] Firewall deny volume from summary data")
 	if summaryConsumer.InputStatus != "" || fmt.Sprint(summaryConsumer.Patterns) != "["+sentinelSummaryTable+"]" {
 		t.Errorf("summary-consumer expansion inventory = %+v", summaryConsumer)
 	}
@@ -865,9 +981,9 @@ func assertSentinelResolutions(t *testing.T, resolutions []backend.InputResoluti
 	assert(sentinelAuxiliaryRuleID, "", false, backend.ResolutionIncompatible)
 	assert(sentinelAuxiliaryRuleID, sentinelAuxiliaryTable, true, backend.ResolutionIncompatible)
 	assert(sentinelEmptyAnalyticsID, "", false, backend.ResolutionResolved, sentinelEmptyAnalyticsTable)
-	assert(sentinelPredicateRuleID, "", false, backend.ResolutionResolved, sentinelPredicateTable)
-	assert("deadair-live-basic-plan", "", false, backend.ResolutionIncompatible)
-	assert("deadair-live-basic-plan", sentinelBasicTable, true, backend.ResolutionIncompatible)
+	assert(sentinelPredicateRuleID, "", false, backend.ResolutionResolved, sentinelNetworkTable)
+	assert("live-firewall-basic-plan", "", false, backend.ResolutionIncompatible)
+	assert("live-firewall-basic-plan", sentinelSummarySourceTable, true, backend.ResolutionIncompatible)
 	assert(sentinelWatchlistRuleID, "", false, backend.ResolutionUnsupported)
 	assert(sentinelWatchlistRuleID, sentinelWatchlistAlias, true, backend.ResolutionResolved)
 	assert(sentinelASIMRuleID, "", false, backend.ResolutionUnsupported)
@@ -905,12 +1021,15 @@ func assertSentinelDependencyEvidence(t *testing.T, resolutions []backend.InputR
 
 func assertSentinelSummaryLineage(t *testing.T, evidence []backend.LineageEvidence, resolutions []backend.InputResolution) {
 	t.Helper()
+	expectedEdgeID := strings.ToLower("/summaryLogs/" + sentinelSummaryRule + "#input=telemetry_table:" + sentinelSummarySourceTable)
 	for _, item := range evidence {
-		if item.Kind == "sentinel_summary_rule" && item.Name == sentinelSummaryRule &&
-			item.Input.Name == sentinelBasicTable && item.Output.Name == sentinelSummaryTable {
+		if item.Kind == "sentinel_summary_rule" &&
+			strings.Contains(strings.ToLower(item.ID), expectedEdgeID) &&
+			item.Name == sentinelSummaryDisplay &&
+			item.Input.Name == sentinelSummarySourceTable && item.Output.Name == sentinelSummaryTable {
 			if item.Status != backend.EvidenceAssessed || item.Input.Kind != "telemetry_table" ||
 				item.Output.Kind != "telemetry_table" || item.Method != "arm-summary-rule-kql" {
-				t.Fatalf("summary lineage = %+v, want assessed Basic-to-Analytics structural evidence", item)
+				t.Fatalf("summary lineage = %+v, want assessed firewall Basic-to-Analytics structural evidence", item)
 			}
 			for _, resolution := range resolutions {
 				if resolution.RuleID == sentinelSummaryRuleID && !resolution.Diagnostic &&
@@ -923,7 +1042,7 @@ func assertSentinelSummaryLineage(t *testing.T, evidence []backend.LineageEviden
 				item.Output.Name, sentinelSummaryRuleID)
 		}
 	}
-	t.Fatalf("summary lineage does not contain %s -> %s: %+v", sentinelBasicTable, sentinelSummaryTable, evidence)
+	t.Fatalf("summary lineage does not contain %s -> %s: %+v", sentinelSummarySourceTable, sentinelSummaryTable, evidence)
 }
 
 func assertSentinelPredicateFreshness(ctx context.Context, t *testing.T, client *sentinel.Client,
@@ -933,9 +1052,25 @@ func assertSentinelPredicateFreshness(ctx context.Context, t *testing.T, client 
 	if len(rule.PredicateFreshness) != 1 {
 		t.Fatalf("predicate rule exposes %d selectors, want exactly one", len(rule.PredicateFreshness))
 	}
-	source, ok := sources[sentinelPredicateTable]
+	source, ok := sources[sentinelNetworkTable]
 	if !ok {
-		t.Fatalf("table inventory does not contain predicate fixture %s", sentinelPredicateTable)
+		t.Fatalf("table inventory does not contain predicate fixture %s", sentinelNetworkTable)
+	}
+	tableEvidence, err := client.FreshnessEvidenceFor(ctx, []backend.FreshnessRequest{{
+		Source: source, Basis: backend.FreshnessEventTime,
+	}})
+	if err != nil {
+		t.Fatalf("read table-wide network freshness evidence: %v", err)
+	}
+	tableFreshness := tableEvidence[sentinelNetworkTable]
+	if tableFreshness.Status != backend.EvidenceAssessed ||
+		tableFreshness.Method != "bounded-max-event-time" || tableFreshness.Window != 24*time.Hour ||
+		tableFreshness.LastEvent.IsZero() || tableFreshness.Detail != "" {
+		t.Fatalf("table-wide network freshness = %+v, want assessed 24h bounded event-time evidence", tableFreshness)
+	}
+	tableAge := tableFreshness.ObservedAt.Sub(tableFreshness.LastEvent)
+	if tableAge < -5*time.Minute || tableAge > 30*time.Minute {
+		t.Fatalf("table-wide network freshness age = %s, want a current row within the 30m threshold", tableAge)
 	}
 	evidence, err := client.RulePredicateFreshnessEvidenceFor(ctx, []backend.RulePredicateFreshnessRequest{{
 		RuleID: rule.ID, BackendObjectID: rule.BackendObjectID, Source: source,
@@ -949,21 +1084,21 @@ func assertSentinelPredicateFreshness(ctx context.Context, t *testing.T, client 
 	}
 	item := evidence[0]
 	if item.RuleID != sentinelPredicateRuleID || item.BackendObjectID != rule.BackendObjectID ||
-		item.Source != sentinelPredicateTable || fmt.Sprint(item.Fields) != "[DeviceVendor]" ||
+		item.Source != sentinelNetworkTable || fmt.Sprint(item.Fields) != "[DeviceProduct DeviceVendor]" ||
 		item.Freshness.Status != backend.EvidenceAssessed ||
 		item.Freshness.Method != "bounded-predicate-max-event-time" ||
 		item.Freshness.Window != 24*time.Hour || item.Freshness.LastEvent.IsZero() || item.Freshness.Detail != "" {
 		t.Fatalf("predicate-qualified freshness = %+v, want assessed 24h bounded event-time evidence", item)
 	}
 	age := item.Freshness.ObservedAt.Sub(item.Freshness.LastEvent)
-	if age < -5*time.Minute || age > 30*time.Minute {
-		t.Fatalf("predicate-qualified freshness age = %s, want a current Deadair Labs row within the 30m freshness threshold", age)
+	if age < time.Hour || age > 2*time.Hour+5*time.Minute || !tableFreshness.LastEvent.After(item.Freshness.LastEvent) {
+		t.Fatalf("predicate-qualified freshness age = %s with table-wide age %s, want a stale Palo Alto/PAN-OS advisory over a fresh network table", age, tableAge)
 	}
 	serialized, err := json.Marshal(item)
 	if err != nil {
 		t.Fatalf("serialize predicate freshness evidence: %v", err)
 	}
-	if strings.Contains(string(serialized), "Deadair Labs") {
+	if strings.Contains(string(serialized), "Palo Alto Networks") || strings.Contains(string(serialized), "PAN-OS") {
 		t.Fatalf("predicate literal leaked into serialized rule-source freshness evidence: %s", serialized)
 	}
 }
@@ -987,7 +1122,7 @@ func assertSentinelSummaryRun(t *testing.T, evidence []backend.SummaryRuleRunEvi
 			len(matching), expectedRuleID, expectedOutputID, evidence)
 	}
 	item := matching[0]
-	if item.Rule.Name != sentinelSummaryRule || item.Rule.Kind != "sentinel_summary_rule" ||
+	if item.Rule.Name != sentinelSummaryDisplay || item.Rule.Kind != "sentinel_summary_rule" ||
 		!strings.EqualFold(item.Rule.Scope, workspaceID) || item.Output.Name != sentinelSummaryTable ||
 		item.Output.Kind != "telemetry_table" || !strings.EqualFold(item.Output.Scope, workspaceID) ||
 		item.Status != backend.EvidenceAssessed || item.Method != "lasummarylogs-latest-7d" ||
@@ -1080,20 +1215,21 @@ func assertSentinelSummaryOutput(ctx context.Context, t *testing.T, credential a
 	queryTarget := "https://api.loganalytics.io/v1/workspaces/" + url.PathEscape(workspaceCustomerID) + "/query"
 	destinationQuery := fmt.Sprintf(`%s
 | where TimeGenerated between (ago(7d) .. now())
-| where _RuleName == %q and _BinSize == %d and Marker == %q and EventCount >= 1
-| summarize arg_max(TimeGenerated, EventCount, Marker, _RuleName, _RuleLastModifiedTime, _BinSize, _BinStartTime)
-| project TimeGenerated, EventCount, Marker, RuleName=_RuleName, RuleModifiedAt=_RuleLastModifiedTime, BinSize=_BinSize, BinStartTime=_BinStartTime`,
-		sentinelSummaryTable, sentinelSummaryRule, sentinelSummaryBinSize, sentinelSummaryOutputMarker)
+| where _RuleName == %q and _BinSize == %d and DeniedConnections >= 1
+| summarize arg_max(TimeGenerated, DeviceVendor, DeviceProduct, DeniedConnections, _RuleName, _RuleLastModifiedTime, _BinSize, _BinStartTime)
+| project TimeGenerated, DeviceVendor, DeviceProduct, DeniedConnections, RuleName=_RuleName, RuleModifiedAt=_RuleLastModifiedTime, BinSize=_BinSize, BinStartTime=_BinStartTime`,
+		sentinelSummaryTable, sentinelSummaryRule, sentinelSummaryBinSize)
 	destinationRow := readSentinelLogsRow(ctx, t, token.Token, queryTarget, destinationQuery,
 		"summary destination output", []sentinelLiveLogsColumn{
-			{Name: "TimeGenerated", Type: "datetime"}, {Name: "EventCount", Type: "long"},
-			{Name: "Marker", Type: "string"}, {Name: "RuleName", Type: "string"},
+			{Name: "TimeGenerated", Type: "datetime"}, {Name: "DeviceVendor", Type: "string"},
+			{Name: "DeviceProduct", Type: "string"}, {Name: "DeniedConnections", Type: "long"},
+			{Name: "RuleName", Type: "string"},
 			{Name: "RuleModifiedAt", Type: "datetime"}, {Name: "BinSize", Type: "long"},
 			{Name: "BinStartTime", Type: "datetime"},
 		})
-	var generatedAt, marker, ruleName, ruleModifiedAt, binStartAt string
-	var eventCount, binSize int64
-	for i, destination := range []any{&generatedAt, &eventCount, &marker, &ruleName, &ruleModifiedAt, &binSize, &binStartAt} {
+	var generatedAt, deviceVendor, deviceProduct, ruleName, ruleModifiedAt, binStartAt string
+	var deniedConnections, binSize int64
+	for i, destination := range []any{&generatedAt, &deviceVendor, &deviceProduct, &deniedConnections, &ruleName, &ruleModifiedAt, &binSize, &binStartAt} {
 		if err := json.Unmarshal(destinationRow[i], destination); err != nil {
 			t.Fatalf("decode summary destination output cell %d: %v", i, err)
 		}
@@ -1102,7 +1238,7 @@ func assertSentinelSummaryOutput(ctx context.Context, t *testing.T, credential a
 	nativeModified, modifiedErr := time.Parse(time.RFC3339Nano, ruleModifiedAt)
 	binStart, binStartErr := time.Parse(time.RFC3339Nano, binStartAt)
 	if generatedErr != nil || modifiedErr != nil || binStartErr != nil || generated.IsZero() || binStart.IsZero() ||
-		eventCount < 1 || marker != sentinelSummaryOutputMarker || ruleName != sentinelSummaryRule ||
+		deviceVendor != "Fortinet" || deviceProduct != "FortiGate" || deniedConnections < 1 || ruleName != sentinelSummaryRule ||
 		binSize != sentinelSummaryBinSize || nativeModified.After(armModifiedAt.Add(sentinelSummaryRevisionSkew)) ||
 		nativeModified.Add(sentinelSummaryRevisionSkew).Before(armModifiedAt) {
 		t.Fatalf("summary destination output does not prove the strict fixture definition and bin: row=%v", destinationRow)
@@ -1111,32 +1247,36 @@ func assertSentinelSummaryOutput(ctx context.Context, t *testing.T, credential a
 	binEnd := binStart.Add(time.Duration(binSize) * time.Minute)
 	sourceQuery := fmt.Sprintf(`%s
 | where TimeGenerated >= datetime(%s) and TimeGenerated < datetime(%s)
-| summarize SourceEventCount=count(), arg_max(TimeGenerated, Marker)
-| project SourceEventCount, SourceMarker=Marker`, sentinelBasicTable,
-		binStart.UTC().Format(time.RFC3339Nano), binEnd.UTC().Format(time.RFC3339Nano))
+| where DeviceAction == "Deny" and FlowId matches regex "^denied-flow-[0-9]+$"
+| where DeviceVendor == %q and DeviceProduct == %q
+| summarize SourceDeniedCount=count(), arg_max(TimeGenerated, FlowId, DeviceVendor, DeviceProduct)
+| project SourceDeniedCount, SourceFlowId=FlowId, DeviceVendor, DeviceProduct`, sentinelSummarySourceTable,
+		binStart.UTC().Format(time.RFC3339Nano), binEnd.UTC().Format(time.RFC3339Nano), deviceVendor, deviceProduct)
 	searchTarget := "https://api.loganalytics.io/v1/workspaces/" + url.PathEscape(workspaceCustomerID) + "/search?timespan=P1D"
 	sourceRow := readSentinelLogsRow(ctx, t, token.Token, searchTarget, sourceQuery,
-		"Basic-plan summary source", []sentinelLiveLogsColumn{
-			{Name: "SourceEventCount", Type: "long"}, {Name: "SourceMarker", Type: "string"},
+		"Basic-plan firewall summary source", []sentinelLiveLogsColumn{
+			{Name: "SourceDeniedCount", Type: "long"}, {Name: "SourceFlowId", Type: "string"},
+			{Name: "DeviceVendor", Type: "string"}, {Name: "DeviceProduct", Type: "string"},
 		})
-	var sourceEventCount int64
-	var sourceMarker string
-	for i, destination := range []any{&sourceEventCount, &sourceMarker} {
+	var sourceDeniedCount int64
+	var sourceFlowID, sourceVendor, sourceProduct string
+	for i, destination := range []any{&sourceDeniedCount, &sourceFlowID, &sourceVendor, &sourceProduct} {
 		if err := json.Unmarshal(sourceRow[i], destination); err != nil {
-			t.Fatalf("decode Basic-plan summary source cell %d: %v", i, err)
+			t.Fatalf("decode Basic-plan firewall summary source cell %d: %v", i, err)
 		}
 	}
-	sourceMarkerSuffix := strings.TrimPrefix(sourceMarker, sentinelSummarySourcePrefix)
-	validSourceMarker := sourceMarkerSuffix != ""
-	for _, character := range sourceMarkerSuffix {
+	flowIDSuffix := strings.TrimPrefix(sourceFlowID, sentinelDeniedFlowPrefix)
+	validFlowID := flowIDSuffix != ""
+	for _, character := range flowIDSuffix {
 		if character < '0' || character > '9' {
-			validSourceMarker = false
+			validFlowID = false
 			break
 		}
 	}
-	if !strings.HasPrefix(sourceMarker, sentinelSummarySourcePrefix) || !validSourceMarker ||
-		sourceEventCount < 1 || sourceEventCount != eventCount {
-		t.Fatalf("Basic-plan source does not match the exact materialized summary bin and count: source=%v destination=%v",
+	if !strings.HasPrefix(sourceFlowID, sentinelDeniedFlowPrefix) || !validFlowID ||
+		sourceVendor != deviceVendor || sourceProduct != deviceProduct ||
+		sourceDeniedCount < 1 || sourceDeniedCount != deniedConnections {
+		t.Fatalf("Basic-plan firewall source does not match the exact materialized deny-summary bin and count: source=%v destination=%v",
 			sourceRow, destinationRow)
 	}
 }

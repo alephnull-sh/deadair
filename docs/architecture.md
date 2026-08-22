@@ -153,7 +153,7 @@ scan.
 | `setup` | print least-privilege credential setup for a backend |
 | `check` | verify connectivity, required privileges, and optional capabilities |
 | `scan` | produce a terminal, JSON, or HTML report |
-| `scan --rule` | evaluate candidate rule JSON or ndjson without installing it |
+| `scan --rule` | evaluate a backend-native candidate rule file without installing it |
 | `diff` | compare two reports and fail on regressions |
 | `serve` | run periodic scans and expose cached Prometheus metrics |
 | `tune` | suggest baseline settings from accumulated state |
