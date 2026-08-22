@@ -93,9 +93,10 @@ DEADAIR_SENTINEL_REMOTE_WORKSPACE=<remote-workspace-resource-name> \
 go test -tags=integration ./integration -run '^TestSentinelReadOnlyLab$' -v
 ```
 
-See [integration/README.md](../integration/README.md) for the scanner identity contract and required
-fixture names. Authentication uses the `EnvironmentCredential` path in `DefaultAzureCredential`;
-no tenant, subscription, workspace ID, or credential is embedded in the test.
+See the [integration guide](https://github.com/alephnull-sh/deadair/blob/main/integration/README.md)
+for the scanner identity contract and required fixture names. Authentication uses the
+`EnvironmentCredential` path in `DefaultAzureCredential`; no tenant, subscription, workspace ID, or
+credential is embedded in the test.
 
 ## Current limits
 

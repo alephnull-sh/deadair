@@ -5,6 +5,7 @@ title: Detections that run but can't see
 author: Nikhil Satyakrishna
 description: A read-only look at enabled detections that run on schedule, report success, and quietly stop seeing their data, plus what native SIEM health views already cover.
 date: 2026-07-16
+updated: 2026-08-22
 hero_image: /assets/coverage-hero.png
 ---
 
@@ -20,7 +21,7 @@ alerts" can still mean "the search completed over data that could not have match
 
 deadair compares each enabled rule's configured inputs with the concrete indices, data streams, or
 tables visible to its read-only credential. It resolves those inputs with backend-native evidence,
-then checks the sources it finds. Four failures matter:
+then checks the sources it finds. The common failures are:
 
 - **No matching source.** Inputs that positively resolve to no aliases, indices, data streams, or
   Sentinel tables. For example, a rule copied from a NetFlow-enabled tenant still searches
@@ -32,6 +33,8 @@ then checks the sources it finds. Four failures matter:
   matches again.
 - **Ingest-lag blind windows.** For eligible Elastic and Sentinel Scheduled rules, events land too
   late to fall inside the rule's window even though the source is otherwise healthy.
+- **Incompatible table plans.** A Sentinel analytics rule reads a Basic or Auxiliary table directly,
+  which that rule path cannot use.
 
 A production-shaped no-match failure is a Beats-to-Agent migration. An enabled Windows rule still
 queries `winlogbeat-*`, while current events now land in
@@ -54,17 +57,20 @@ Here is a scan from a disposable Elastic lab. Every rule is enabled; the lab del
 missing input, stale source, missing-field, ingest-lag, and unused-telemetry conditions.
 
 <figure class="bordered">
-  <img src="{{ '/assets/scan-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Real deadair scan of a disposable Elastic lab showing missing, stale, late, and unused telemetry">
-  <figcaption>This is output from the real CLI against Elastic 9.4.4. The terminal view is a summary; the JSON report retains each rule's configured patterns and matched sources.</figcaption>
+  <a href="{{ '/assets/scan-lab.gif' | relative_url }}"><img loading="lazy" src="{{ '/assets/scan-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Real deadair scan of a disposable Elastic lab showing missing, stale, late, and schema-incompatible telemetry"></a>
+  <figcaption>This is output from the real CLI against Elastic 9.4.4. The terminal view is a summary. Click the image to play the short recording.</figcaption>
 </figure>
 
 ## Resolving sources and affected rules
 
-For each rule input, deadair asks the backend for native resolution evidence. Elastic and OpenSearch
-resolve aliases, data streams, indices, selectors, and exclusions. Sentinel combines KQL dependency
-analysis with its table catalog and bounded Logs queries. A no-match finding requires positive empty
-evidence. Unsupported, unavailable, remote, and ambiguous inputs remain unassessed. A stale-or-empty
-finding includes the degraded source names and health evidence.
+Elastic and OpenSearch resolve aliases, data streams, and indices directly. Sentinel has no equivalent
+endpoint, so deadair reads each rule's KQL and checks the concrete tables it can prove through the
+catalog and bounded Logs queries. It follows only functions, watchlists, and remote workspaces whose
+inputs are fixed; it does not guess at runtime-selected sources.
+
+A no-match finding requires positive empty evidence. Finding a name in KQL is not enough, and a
+permission failure is not proof that a table is absent. A stale-or-empty finding includes the degraded
+source names and the evidence used to judge them.
 
 For each degraded source, the report lists the enabled rules that resolve to it. A failed connector
 can then be triaged as a set of affected detections instead of an isolated freshness alert. Prebuilt
@@ -75,7 +81,8 @@ The report can only see sources available to the monitoring role. If that role c
 expected source, deadair cannot distinguish hidden from absent. Before acting on no-match findings,
 check that one known-good rule and source pair appears in the report.
 
-## When a field quietly disappears
+<span id="when-a-field-quietly-disappears"></span>
+## When a live source still cannot match
 
 Missing fields are hard to spot because the index can stay live, volume can look normal, and the rule
 can keep reporting success. An integration upgrade may rename a field, change its mapping, or stop
@@ -88,6 +95,27 @@ available when a rule populates it, and custom rules may omit it. `field_caps` s
 mapped and searchable, but not whether recent events contain values. Broad patterns also need to be
 checked per index because one backing index may expose the field while another does not. The report
 records the declared dependency and the concrete sources where it is not searchable throughout.
+
+`CommonSecurityLog` exposes another blind spot in Sentinel. Several firewalls can share the table, so
+one vendor can stop sending while another keeps it fresh. A rule filtered to PAN-OS does not care that
+FortiGate wrote a row two minutes ago. In a
+[Sentinel thread about silent firewalls](https://www.reddit.com/r/AzureSentinel/comments/1ergp0a/),
+one practical recommendation was to filter `CommonSecurityLog` by `DeviceVendor` when several
+firewalls share the table.
+
+deadair can make the same check when a rule reads one local Analytics table and uses a fixed literal
+filter. The lab reproduced it in `PerimeterSecurity_CL`: FortiGate stayed current while the PAN-OS
+slice went stale. The result appears in the report but does not fail the gate.
+
+<figure class="bordered">
+  <a href="{{ '/assets/sentinel-lab.gif' | relative_url }}"><img loading="lazy" src="{{ '/assets/sentinel-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Real deadair scan of a disposable Microsoft Sentinel lab showing missing, stale, late, incompatible, partial, and filtered telemetry paths"></a>
+  <figcaption>This disposable Sentinel workspace contains deliberately broken data paths. <strong>Gate failed</strong> means the scan completed and found them. Click the image to play the short recording.</figcaption>
+</figure>
+
+Sentinel has a second source problem: analytics rules cannot query Basic or Auxiliary tables directly.
+A summary rule can read the lower-cost raw table, write an Analytics table, and give the detection a
+usable source. deadair records that path and the latest `LASummaryLogs` run when one exists. In the
+lab, the summary completed and the raw and summary counts matched for the same 20-minute bin.
 
 ## Ingest lag
 
@@ -121,9 +149,10 @@ every 5 minutes has a one-minute margin. With 3 minutes of fixed lag, it catches
 events** in this model. Real schedulers add jitter, retries, manual runs, deduplication, timestamp
 fallback, and rule-type differences.
 
-The model applies to rules windowing on `@timestamp`. Elastic recommends overriding the timestamp with
-`event.ingested`, or widening the additional look-back. deadair reads the timestamp field, `from`,
-interval, and measured source lag to find rules with too little margin.
+On Elastic, deadair reads the timestamp field, `from`, interval, and paired `@timestamp` and
+`event.ingested` samples. On Sentinel Scheduled rules, `queryPeriod` and `queryFrequency` provide the
+same window and cadence, while `TimeGenerated` and `ingestion_time()` provide the paired sample.
+Sentinel NRT rules use ingestion-time freshness instead of this Scheduled-rule calculation.
 
 ## The check I got wrong
 
@@ -139,7 +168,8 @@ Retention does matter for rule types whose operation depends on historical data.
 rules, for example, use `history_window_start` to define their baseline. That needs a rule-type-specific
 check, not a general lookback-versus-retention comparison.
 
-## Existing Elastic coverage
+<span id="existing-elastic-coverage"></span>
+## What native health already covers
 
 Elastic already has several related health views. [SIEM Readiness](https://www.elastic.co/docs/solutions/security/get-started/siem-readiness)
 tracks coverage, quality, continuity, and retention. Its data rule coverage view calls out enabled
@@ -151,21 +181,27 @@ execution means the search completed, not that it produced an alert. The
 [common rule settings](https://www.elastic.co/docs/solutions/security/detect-and-alert/common-rule-settings)
 document timestamp override and additional look-back for ingestion delay.
 
+Sentinel's [`SentinelHealth`](https://learn.microsoft.com/en-us/azure/sentinel/monitor-analytics-rule-integrity)
+records Scheduled and NRT rule runs, including failures and alerts generated. `LASummaryLogs` records
+summary-rule runs. Neither says whether the exact table or filtered slice needed by a detection is
+current.
+
+Cross-subscription rules have another failure mode: the scanner can still read a remote workspace
+after the rule creator loses access. For an installed Scheduled or NRT rule, deadair records a
+matching recent `SentinelHealth` success when one exists. That check has fixture coverage; the live
+lab covered two workspaces in one subscription.
+
 For each enabled rule, deadair resolves the concrete sources, records their state and declared-field
 availability, and compares source lag with rule timing. It also lists sources that no enabled rule
 reads.
 
 ## Implementation and limits
 
-deadair runs outside the SIEM with a read-only credential. It does not fetch full event records. Its
-Elastic checks use counts, timestamps, mappings, `field_caps`, size-0 freshness aggregations, and a
-bounded recent sample for paired ingest-lag timestamps. Sentinel uses ARM metadata and bounded Logs
-queries, with unavailable evidence left unassessed.
+deadair uses read-only credentials. It reads metadata and bounded timestamp samples rather than full
+events. In the Sentinel lab, that credential could list rules and tables but could not delete them or
+retrieve shared keys.
 
-The current backends are Elastic Security, OpenSearch Security Analytics, and Microsoft Sentinel.
-The examples and native-health comparison on this page focus on Elastic, where the original
-investigation and simulation ran. The [usage guide](usage.md#microsoft-sentinel) and
-[validation status](validation.md) describe Sentinel's evidence model and live-tested boundary.
-deadair checks whether a rule can see the data it expects. It does not assess the rule logic.
+Setup and test boundaries are in the [usage](usage.md) and [validation](validation.md) guides. deadair
+checks whether a rule can see the data it expects. It does not assess the rule logic.
 
 <p style="margin-top:2rem"><a href="https://github.com/alephnull-sh/deadair">deadair on GitHub →</a></p>

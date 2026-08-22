@@ -1,8 +1,9 @@
 # Usage guide
 
 Start here for first scans, triage, CI gates, stateful checks, fleet scans, exporter mode, and safe
-report sharing. For credentials, run `deadair setup <backend>` or open the relevant guide under
-[credentials/](credentials/).
+report sharing. For credentials, run `deadair setup <backend>` or open the guide for
+[Elastic](credentials/elastic.md), [OpenSearch](credentials/opensearch.md), or
+[Microsoft Sentinel](credentials/sentinel.md).
 
 ## First scan
 
@@ -670,8 +671,8 @@ deadair serve --interval 5m --state-file deadair-state.json
 ```
 
 Metrics are exposed on `127.0.0.1:9317` by default. Prometheus scrapes the cached last scan; a
-scrape does not trigger a SIEM API call. Grafana and Alertmanager examples are in
-[contrib/](../contrib/).
+scrape does not trigger a SIEM API call. Grafana and Alertmanager examples are in the
+[repository's `contrib` directory](https://github.com/alephnull-sh/deadair/tree/main/contrib).
 
 For fleets, route failed scans by `deadair_instance_up`. No-match findings usually go to detection
 engineering or onboarding after credential scope is checked. Findings where all matched sources are
