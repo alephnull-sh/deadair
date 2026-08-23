@@ -130,18 +130,16 @@ For a full MSSP deployment shape, see [mssp.md](mssp.md).
   authorized recipient after reviewing the remaining evidence.
 - Use `--ca-cert` for private CAs. Reserve `--insecure-skip-verify` for labs.
 
-## Know the limits
+<span id="know-the-limits"></span>
 
-- deadair proves a rule can see its observable data prerequisites. It does not prove the rule logic
-  is correct or that an attack simulation will produce an alert.
+## Know what the result means
+
+- deadair checks whether a rule can see its observable data prerequisites. It does not evaluate
+  rule logic, replay events, or tune detections.
 - Findings describe observed evidence, not root cause. Pattern changes, onboarding scope, source
   outages, and credential visibility can produce similar first-order symptoms.
-- It does not evaluate events inline and it does not tune detections.
 - Unmapped Elastic and OpenSearch cross-cluster inputs are listed as `remote_rules`. Scan the remote
   cluster as its own fleet instance if you need coverage proof.
-- Sentinel can assess explicitly mapped literal `workspace()` references. A rule that crosses a
-  subscription boundary still needs an exact successful `SentinelHealth` event after the latest
-  rule change and within its expected run cadence before deadair can corroborate execution, even
-  when the scanner can read the source. deadair does
-  not separately identify tenant boundaries, and Azure Lighthouse layouts are not live-validated.
-- deadair has backends for Elastic Security, OpenSearch Security Analytics, and Microsoft Sentinel.
+- Sentinel can assess mapped literal `workspace()` references. Cross-subscription execution also
+  needs a recent matching `SentinelHealth` event for the rule. See the
+  [Sentinel usage guide](usage.md#cross-workspace-rules) for the evidence rules.

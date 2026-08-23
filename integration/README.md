@@ -57,8 +57,8 @@ Expansion `verify` passed, finding a recent Basic-plan denied-flow row and confi
 source-bin count.
 `TestSentinelReadOnlyLab` passed with the scanner authenticated only through certificate-backed
 `EnvironmentCredential`, and all three write-denial probes passed with exact HTTP 403 responses.
-These results apply only to the named workspaces and identity; they do not cover every tenant,
-region, RBAC layout, or KQL construct.
+The [validation record](../docs/validation.md#sentinel-live-conformance) separates these live cases
+from the paths covered by fixtures.
 
 ```sh
 DEADAIR_IT_SENTINEL=1 \
@@ -288,24 +288,9 @@ between completed bins while the ARM definition stayed unchanged, so deadair tre
 timestamp sanity check and lower bound. It does not claim that the field identifies the exact ARM
 revision.
 
-A successful run proves only the named workspaces and scanner identity. It does not prove:
-
-- cross-tenant Azure Lighthouse;
-- cross-subscription or cross-tenant creator-credential execution;
-- a positive installed Content Hub package association.
-
-Same-subscription mapped evidence remains conclusive for source availability. Cross-subscription
-and cross-tenant execution stays unassessed without recent per-rule `SentinelHealth` evidence. The
-current Content Hub fixture covers a readable, empty installed-package inventory, not a positive
-installed package association.
-
-The same-subscription fixture does not reproduce unreadable onboarding or the 20-workspace
-incompatibility path; local fixtures cover those cases. Microsoft limits an analytics-rule query to
-20 workspaces, and deadair counts the home workspace. Microsoft recommends no more than five for
-performance. The single-region lab also does not reproduce Azure Monitor's region-scope boundary:
-a missing location is unavailable, while 20 or more distinct normalized workspace regions is
-incompatible after any required alias proof. Azure Monitor warns at five regions, but deadair does
-not emit a separate finding for that guidance threshold.
+The [validation record](../docs/validation.md#microsoft-sentinel) tracks the remaining fixture-only
+paths, including cross-tenant execution, positive Content Hub associations, and high workspace or
+region counts.
 
 ## Full integration pass
 

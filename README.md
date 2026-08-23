@@ -13,9 +13,8 @@
 </p>
 
 <p align="center">
-  <strong>Open-source SIEM detection health.</strong><br>
-  Find enabled detections that are blind because their telemetry is missing, stale, late, or
-  schema-incompatible.
+  <strong>deadair checks whether enabled SIEM detections still have the telemetry they need.</strong><br>
+  It reports missing or stale data, ingest delays, and schema mismatches.
 </p>
 
 <p align="center">
@@ -89,10 +88,10 @@ Exit codes are stable: `0` passes the configured gate, `1` means gated findings,
 | Measure | checks source freshness and timing, plus schema and storage where the backend supports them |
 | Report | emits terminal, JSON, HTML, fleet rollups, and Prometheus metrics with the evidence behind each verdict |
 
-Sentinel follows the same rule-to-source model. Its adapter also understands literal watchlists,
-saved functions, ASIM parsers, mapped workspaces, and summary-table lineage. When Azure provides
-enough evidence, deadair can show that one filtered slice of a shared table has gone quiet or that a
-summary pipeline has fallen behind. Those two checks are advisory; they do not change the gate.
+Sentinel follows the same rule-to-source model and adds literal watchlists, saved functions, ASIM
+parsers, mapped workspaces, and summary-table lineage. It also shows when a filtered slice of a
+shared table has gone quiet or a summary pipeline has fallen behind.
+
 The [usage guide](docs/usage.md#microsoft-sentinel) describes the evidence rules, and the
 [validation record](docs/validation.md#sentinel-live-conformance) records the live test coverage.
 

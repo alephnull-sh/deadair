@@ -208,13 +208,9 @@ topologies have not been live-validated. See Microsoft's
 and [failure guidance](https://learn.microsoft.com/en-us/azure/sentinel/troubleshoot-analytics-rules#permanent-failure-due-to-lost-access-across-subscriptionstenants).
 
 These runtime tables are opt-in. `_SentinelHealth()` requires Sentinel auditing and health
-monitoring to be enabled. `LASummaryLogs` requires the summary-rule diagnostic setting and does not
-contain rows until summary events have been emitted. The live lab produced a successful
-`LASummaryLogs` run and matched its 20-minute Analytics output to the Basic source rows from the
-same bin; contract tests cover the exact `SentinelHealth` matching path. A missing table or row stays
-unavailable or incomplete and never creates a finding or gate. The
-existing Logs query permission is enough unless
-the workspace uses table-level RBAC; in that case, the custom role also needs
+monitoring. `LASummaryLogs` requires the Summary Logs diagnostic setting and appears only after a
+summary event is emitted. Missing runtime evidence does not create a finding. With table-level RBAC,
+the custom role also needs
 `Microsoft.OperationalInsights/workspaces/query/SentinelHealth/read` and
 `Microsoft.OperationalInsights/workspaces/query/LASummaryLogs/read`, or the broader
 `Microsoft.OperationalInsights/workspaces/query/*/read` action.
@@ -375,20 +371,14 @@ sources. Sentinel reports can also include:
   summary rule; and
 - `rule_provenance` for exact native template and Content Hub template/package IDs and versions.
 
-`dependency_evidence` explains dependency-resolution outcomes. A required dependency's outcome also
-appears in authoritative input resolution and can affect the rule verdict. `source_lineage`,
-`rule_provenance`, `rule_source_freshness`, and `summary_rule_runs` are informational and do not
-change gates. On 2026-08-22, the disposable live lab isolated a stale Palo Alto Networks/PAN-OS
-slice from a fresh shared table and matched a Basic-plan source bin to its successful summary
-execution and Analytics destination count.
+`dependency_evidence` explains dependency-resolution outcomes. A required dependency can affect the
+rule verdict through authoritative input resolution. `source_lineage`, `rule_provenance`,
+`rule_source_freshness`, and `summary_rule_runs` add context without changing the gate.
 
-Summary lineage describes ARM structure; `summary_rule_runs` describes a bounded latest completed
-native run. In the live lab, `LASummaryLogs.RuleLastModifiedTime` advanced between bins while the ARM
-definition stayed unchanged. deadair therefore uses that field as a timestamp sanity check and
-lower bound, not as proof of an exact rule revision. In-progress `Started` rows do not replace the
-last completed run. A successful run older than its configured cadence and delay plus the documented
-eight-hour retry allowance is retained as incomplete evidence. Neither section proves end-to-end
-detection health.
+Summary lineage records ARM structure. `summary_rule_runs` records the latest completed native run
+inside its bounded window. In-progress rows do not replace the last completed run, and an overdue
+success is retained as incomplete evidence. The [validation record](validation.md#sentinel-live-conformance)
+describes the live filtered-source and summary-runtime cases.
 
 `--include` and `--exclude` do not change detection verdicts. They do scope source-level reporting
 and source-level findings such as degraded, low-volume, schema-drifted, or unused sources, so a
@@ -490,7 +480,8 @@ GitHub for an OIDC token; Azure RBAC still decides what the identity can read or
 read-only workspace roles from the [Sentinel credential guide](credentials/sentinel.md), leave
 Azure Login's cleanup enabled, and run only trusted, pinned actions after the login step. An Azure
 CLI login is shared by later steps in the same job. The disposable lab used a certificate-backed
-`EnvironmentCredential`; this hosted OIDC path has not been live-validated.
+`EnvironmentCredential`; the hosted OIDC path is covered by Action wrapper tests, not a live Azure
+run.
 
 `sentinel-workspace-id` can supply the optional Log Analytics customer-ID override, and
 `sentinel-remotes-file` can point to the explicit JSON mapping used by cross-workspace rules. The

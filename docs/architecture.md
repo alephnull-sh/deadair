@@ -71,7 +71,7 @@ renamed or removed. Checked-in JSON Schemas describe the single-instance and fle
 | `ambiguous` | not assessed | the rule exposes competing input declarations without enough evidence to choose safely |
 | `incompatible` | assessed | the input names a known source whose configuration cannot be used by the rule type |
 
-The terminal report is intentionally concise. JSON is the diagnostic artifact: dead detections
+The terminal report is a summary. JSON is the diagnostic artifact: dead detections
 include `patterns` and, when matched sources exist, `sources`; impaired detections include their
 field or timing evidence.
 
@@ -169,7 +169,7 @@ State is a local JSON file written `0600` on POSIX systems. It stores:
 - active and recovered finding lifecycle state
 - timestamps used for pruning old inactive sources
 
-State is local by design. deadair does not create indices, tables, or hidden objects in the SIEM.
+State stays local. deadair does not create indices, tables, or hidden objects in the SIEM.
 
 ## Fleet model
 
@@ -193,9 +193,9 @@ Fleet behavior:
 | OpenSearch Security Analytics | trusted CI on 2.19.6 and 3.7.0 |
 | Microsoft Sentinel | recorded opt-in conformance in disposable UK South workspaces |
 
-The Sentinel run is not part of scheduled CI and has narrower proof boundaries than the trusted
-Elastic and OpenSearch matrix. See [validation status](validation.md) for the exact live cases and
-unproved paths. Other backend versions may work but are not covered by the current matrix.
+Sentinel conformance is manual. See [validation status](validation.md) for the live cases and the
+paths covered by contract tests. Other backend versions may work but are not covered by the current
+matrix.
 
 ## Security properties
 
@@ -229,4 +229,3 @@ deadair does not provide:
 - ingest pipeline management
 - built-in dashboards or alert delivery
 - a UI
-- a Splunk backend
