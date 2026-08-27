@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -1942,6 +1943,13 @@ func runTune(args []string, stdout, stderr io.Writer) int {
 }
 
 func runServe(args []string, stderr io.Writer) int {
+	return runServeWithContext(args, stderr, nil)
+}
+
+// runServeWithContext permits deterministic lifecycle tests. A nil parent
+// uses the process signal context, which is deliberately created only after
+// the listening socket has been acquired.
+func runServeWithContext(args []string, stderr io.Writer, parent context.Context) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { serveUsage(stderr) }
@@ -1957,6 +1965,10 @@ func runServe(args []string, stderr io.Writer) int {
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintf(stderr, "deadair: serve does not accept positional arguments: %q\n", fs.Arg(0))
+		return report.ExitError
+	}
+	if *interval <= 0 {
+		fmt.Fprintln(stderr, "deadair: --interval must be greater than zero")
 		return report.ExitError
 	}
 	if err := validateScanOptions(o, ""); err != nil {
@@ -1986,56 +1998,101 @@ func runServe(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "deadair: warning: exporter bound beyond loopback — metric labels enumerate your log sources; put an authenticated proxy (mTLS/reverse proxy) in front")
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	listener, err := net.Listen("tcp", *bind)
+	if err != nil {
+		fmt.Fprintf(stderr, "deadair: %v\n", err)
+		return report.ExitError
+	}
+
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if parent == nil {
+		ctx, cancel = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	} else {
+		ctx, cancel = context.WithCancel(parent)
+	}
 	defer cancel()
 
 	srv := &exporter.Server{}
-	httpSrv := &http.Server{Addr: *bind, Handler: srv.Handler()}
-
-	go func() {
-		scan := func() {
-			run := func(inst fleetInstance, io connOpts) (scanResult, error) {
-				sctx, cancel := context.WithTimeout(ctx, io.timeout)
-				defer cancel()
-				return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
-			}
-			f, commits := scanFleet(insts, o, run)
-			if redactionEnabled {
-				f.RedactWith(redactor)
-			}
-			for _, e := range f.Errors {
-				fmt.Fprintf(stderr, "deadair: scan failed (%s): %s\n", e.Instance, e.Error)
-			}
-			srv.Update(f)
-			for _, c := range commits {
-				if err := c.commitState(); err != nil {
-					printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
-				}
+	scan := func(scanCtx context.Context) {
+		run := func(inst fleetInstance, io connOpts) (scanResult, error) {
+			sctx, cancel := context.WithTimeout(scanCtx, io.timeout)
+			defer cancel()
+			return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
+		}
+		f, commits := scanFleet(insts, o, run)
+		if scanCtx.Err() != nil {
+			return
+		}
+		if redactionEnabled {
+			f.RedactWith(redactor)
+		}
+		for _, e := range f.Errors {
+			fmt.Fprintf(stderr, "deadair: scan failed (%s): %s\n", e.Instance, e.Error)
+		}
+		srv.Update(f)
+		for _, c := range commits {
+			if err := c.commitState(); err != nil {
+				printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
 			}
 		}
-		scan()
-		t := time.NewTicker(*interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				scan()
-			}
-		}
-	}()
-	go func() {
-		<-ctx.Done()
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(sctx)
-	}()
+	}
 
-	fmt.Fprintf(stderr, "deadair: serving metrics on http://%s/metrics (scan interval %s)\n", *bind, *interval)
-	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	fmt.Fprintf(stderr, "deadair: serving metrics on http://%s/metrics (scan interval %s)\n", listener.Addr(), *interval)
+	if err := serveMetrics(ctx, listener, srv.Handler(), *interval, scan); err != nil {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
 	}
 	return 0
+}
+
+// serveMetrics owns the listener and coordinates the scan worker with HTTP
+// shutdown. The caller must bind before entering so a bind failure cannot
+// race a backend scan or state commit.
+func serveMetrics(parent context.Context, listener net.Listener, handler http.Handler, interval time.Duration, scan func(context.Context)) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	httpSrv := &http.Server{Handler: handler}
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		if ctx.Err() != nil {
+			return
+		}
+		scan(ctx)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				scan(ctx)
+			}
+		}
+	}()
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-ctx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = httpSrv.Shutdown(shutdownCtx)
+		// Shutdown can run before Serve has registered the listener when the
+		// parent is already cancelled. Closing it explicitly covers that race.
+		_ = listener.Close()
+	}()
+
+	err := httpSrv.Serve(listener)
+	stopping := parent.Err() != nil
+	cancel()
+	<-shutdownDone
+	workers.Wait()
+	if err != nil && err != http.ErrServerClosed && !stopping {
+		return err
+	}
+	return nil
 }

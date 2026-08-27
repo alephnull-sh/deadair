@@ -181,6 +181,9 @@ Default bind address is `127.0.0.1:9317`. Put it behind authenticated scraping i
 not local to the host.
 
 Prometheus scrapes the cached last scan. Scrape volume does not hit customer SIEM APIs.
+If an instance scan fails, its health series changes to `deadair_instance_up == 0` while its other
+series retain the last successful report. Treat those retained values as historical until the
+instance recovers; a tenant that has never scanned successfully has no report-data series.
 
 ## Redaction
 
@@ -212,7 +215,7 @@ Route by the type of work, not by the tool.
 | Signal | Suggested owner |
 |---|---|
 | `deadair_up == 0` | platform owner for the deadair host |
-| `deadair_instance_up == 0` | tenant onboarding, credential, or network owner |
+| `deadair_instance_up == 0` | tenant onboarding, credential, or network owner; other series for that instance are last-known-good |
 | no matching source | detection engineering or tenant onboarding, after checking credential scope |
 | all matching sources stale or empty | telemetry pipeline owner, with detection engineering copied |
 | impaired detections | detection engineering plus parser or pipeline owner |

@@ -15,6 +15,8 @@ Included examples:
   thresholds to your scan interval and environment.
 
 Fleet users should route `DeadairInstanceScanFailing` by the `instance` label.
+The bundled report-derived alerts match `deadair_instance_up == 1` on the instance label, so
+last-known-good series do not keep firing while that instance's current scan is failing.
 
 Metric labels can contain tenant and source names. Keep the exporter on loopback or behind an
 authenticated scrape path. Use `serve --redact` when Prometheus is shared beyond the restricted

@@ -29,10 +29,10 @@ groups:
           severity: warning
         annotations:
           summary: "deadair scan failed for {{ $labels.instance }}"
-          description: "The last scan for this instance failed. Check tenant credentials, network reachability, and SIEM API health."
+          description: "The last scan for this instance failed. Other series retain its last successful report; check tenant credentials, network reachability, and SIEM API health."
 
       - alert: DeadairDeadDetections
-        expr: deadair_detections_dead > 0
+        expr: (deadair_detections_dead > 0) and on(instance) (deadair_instance_up == 1)
         for: 30m
         labels:
           severity: critical
@@ -41,7 +41,7 @@ groups:
           description: "Enabled detection rules are disconnected or starved of data. See the deadair report for blast radius."
 
       - alert: DeadairImpairedDetections
-        expr: deadair_detections_impaired > 0
+        expr: (deadair_detections_impaired > 0) and on(instance) (deadair_instance_up == 1)
         for: 30m
         labels:
           severity: warning
@@ -50,7 +50,7 @@ groups:
           description: "Truncated lookback, missing fields, or ingest-lag blind windows. See the deadair report."
 
       - alert: DeadairSourceStale
-        expr: deadair_source_freshness_seconds > 6 * 3600
+        expr: (deadair_source_freshness_seconds > 6 * 3600) and on(instance) (deadair_instance_up == 1)
         for: 30m
         labels:
           severity: warning
@@ -59,7 +59,7 @@ groups:
           description: "No new events in {{ $labels.source }} — every detection reading it is degraded."
 
       - alert: DeadairVolumeLow
-        expr: deadair_source_volume_low == 1
+        expr: (deadair_source_volume_low == 1) and on(instance) (deadair_instance_up == 1)
         for: 15m
         labels:
           severity: warning
@@ -68,7 +68,7 @@ groups:
           description: "Volume is below the same weekday/hour baseline after warmup and hysteresis."
 
       - alert: DeadairSchemaDrift
-        expr: deadair_source_schema_drift == 1
+        expr: (deadair_source_schema_drift == 1) and on(instance) (deadair_instance_up == 1)
         labels:
           severity: info
         annotations:

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/alephnull-sh/deadair/internal/report"
@@ -16,19 +17,65 @@ import (
 
 // Server holds the snapshot rendered at /metrics.
 type Server struct {
-	snapshot atomic.Pointer[report.FleetReport]
-	healthy  atomic.Bool
+	updateMu sync.Mutex
+	snapshot atomic.Pointer[exportSnapshot]
 }
 
-// Update stores a new fleet snapshot. Instances that failed this cycle keep
-// last-known-good data out of the listing but flip deadair_up to 0.
+type exportSnapshot struct {
+	fleet      *report.FleetReport
+	successful map[string]struct{}
+	healthy    bool
+}
+
+// Update stores a new fleet snapshot. Instances that failed this cycle retain
+// their last-known-good report data while their current instance-up status is
+// false. The mutex serializes merges; scrapes read one immutable snapshot.
 func (s *Server) Update(f *report.FleetReport) {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+
+	previous := s.snapshot.Load()
 	if f == nil {
-		s.healthy.Store(false)
+		if previous == nil {
+			s.snapshot.Store(&exportSnapshot{})
+			return
+		}
+		next := *previous
+		next.healthy = false
+		next.successful = map[string]struct{}{}
+		s.snapshot.Store(&next)
 		return
 	}
-	s.snapshot.Store(f)
-	s.healthy.Store(len(f.Errors) == 0 && len(f.Instances) > 0)
+
+	priorReports := make(map[string]*report.Report)
+	if previous != nil && previous.fleet != nil {
+		for _, r := range previous.fleet.Instances {
+			if r != nil {
+				priorReports[r.Instance] = r
+			}
+		}
+	}
+
+	merged := *f
+	merged.Instances = make([]*report.Report, 0, len(f.Instances)+len(f.Errors))
+	successful := make(map[string]struct{}, len(f.Instances))
+	for _, r := range f.Instances {
+		if r == nil {
+			continue
+		}
+		merged.Instances = append(merged.Instances, r)
+		successful[r.Instance] = struct{}{}
+	}
+	for _, failure := range f.Errors {
+		if prior := priorReports[failure.Instance]; prior != nil {
+			merged.Instances = append(merged.Instances, prior)
+		}
+	}
+	s.snapshot.Store(&exportSnapshot{
+		fleet:      &merged,
+		successful: successful,
+		healthy:    len(f.Errors) == 0 && len(f.Instances) > 0,
+	})
 }
 
 // Handler returns the /metrics handler.
@@ -43,20 +90,36 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 	var b strings.Builder
 
 	up := 0
-	if s.healthy.Load() {
+	snapshot := s.snapshot.Load()
+	if snapshot != nil && snapshot.healthy {
 		up = 1
 	}
 	fmt.Fprintf(&b, "# HELP deadair_up Whether the most recent scan cycle succeeded for every instance.\n# TYPE deadair_up gauge\ndeadair_up %d\n", up)
 
-	f := s.snapshot.Load()
+	var f *report.FleetReport
+	if snapshot != nil {
+		f = snapshot.fleet
+	}
 	if f != nil {
 		fmt.Fprintf(&b, "# HELP deadair_last_scan_timestamp_seconds Unix time of the last scan cycle.\n# TYPE deadair_last_scan_timestamp_seconds gauge\ndeadair_last_scan_timestamp_seconds %d\n", f.GeneratedAt.Unix())
 
 		fmt.Fprintf(&b, "# HELP deadair_instance_up Whether the last scan of this instance succeeded.\n# TYPE deadair_instance_up gauge\n")
+		emitted := make(map[string]struct{}, len(f.Instances)+len(f.Errors))
 		for _, r := range f.Instances {
-			fmt.Fprintf(&b, "deadair_instance_up{instance=%s} 1\n", label(r.Instance))
+			if r == nil {
+				continue
+			}
+			value := 0
+			if _, ok := snapshot.successful[r.Instance]; ok {
+				value = 1
+			}
+			fmt.Fprintf(&b, "deadair_instance_up{instance=%s} %d\n", label(r.Instance), value)
+			emitted[r.Instance] = struct{}{}
 		}
 		for _, e := range f.Errors {
+			if _, ok := emitted[e.Instance]; ok {
+				continue
+			}
 			fmt.Fprintf(&b, "deadair_instance_up{instance=%s} 0\n", label(e.Instance))
 		}
 

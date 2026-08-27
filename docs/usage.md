@@ -665,6 +665,14 @@ Metrics are exposed on `127.0.0.1:9317` by default. Prometheus scrapes the cache
 scrape does not trigger a SIEM API call. Grafana and Alertmanager examples are in the
 [repository's `contrib` directory](https://github.com/alephnull-sh/deadair/tree/main/contrib).
 
+On a failed cycle, `deadair_up` and the affected `deadair_instance_up` series change immediately,
+and `deadair_last_scan_timestamp_seconds` records that cycle. Other metrics for the failed instance
+retain its last successful report so dashboards do not lose their previous evidence. A first-cycle
+failure exports only health and cycle-time metrics for that instance; it does not fabricate report
+data. Always gate retained metrics with `deadair_instance_up` when current scan health matters.
+The bundled Prometheus rules apply that gate to every report-derived alert; custom rules should do
+the same with `and on(instance) (deadair_instance_up == 1)`.
+
 For fleets, route failed scans by `deadair_instance_up`. No-match findings usually go to detection
 engineering or onboarding after credential scope is checked. Findings where all matched sources are
 stale or empty usually belong to telemetry pipeline owners.
