@@ -306,6 +306,7 @@
           "enum": ["ok", "stale", "empty", "unknown", "maintenance"]
         },
         "age_seconds": { "type": "number" },
+        "age_unavailable": { "type": "boolean" },
         "age_lower_bound": { "type": "boolean" },
         "docs": { "type": "integer" },
         "size_bytes": { "type": "integer" },
@@ -608,6 +609,7 @@
         "last_event": { "type": "string", "format": "date-time" },
         "freshness_status": { "type": "string", "enum": ["ok", "stale", "empty", "unknown", "maintenance"] },
         "age_seconds": { "type": "number" },
+        "age_unavailable": { "type": "boolean" },
         "age_lower_bound": { "type": "boolean" },
         "expected_downtime": { "type": "boolean" },
         "detail": { "type": "string" }

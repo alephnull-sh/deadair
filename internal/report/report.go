@@ -161,6 +161,7 @@ type RuleSourceFreshness struct {
 	LastEvent        *time.Time             `json:"last_event,omitempty"`
 	FreshnessStatus  string                 `json:"freshness_status"`
 	AgeSeconds       float64                `json:"age_seconds,omitempty"`
+	AgeUnavailable   bool                   `json:"age_unavailable,omitempty"`
 	AgeLowerBound    bool                   `json:"age_lower_bound,omitempty"`
 	ExpectedDowntime bool                   `json:"expected_downtime,omitempty"`
 	Detail           string                 `json:"detail,omitempty"`
@@ -257,12 +258,13 @@ type InputResolutionSummary struct {
 
 // SourceHealth is one source with its verdict and known blast-radius size.
 type SourceHealth struct {
-	Name          string  `json:"name"`
-	Status        string  `json:"status"`
-	AgeSeconds    float64 `json:"age_seconds,omitempty"`
-	AgeLowerBound bool    `json:"age_lower_bound,omitempty"`
-	Docs          int64   `json:"docs"`
-	SizeBytes     int64   `json:"size_bytes"`
+	Name           string  `json:"name"`
+	Status         string  `json:"status"`
+	AgeSeconds     float64 `json:"age_seconds,omitempty"`
+	AgeUnavailable bool    `json:"age_unavailable,omitempty"`
+	AgeLowerBound  bool    `json:"age_lower_bound,omitempty"`
+	Docs           int64   `json:"docs"`
+	SizeBytes      int64   `json:"size_bytes"`
 	// ExpectedDowntime is true when an expected downtime window suppressed a
 	// stale or empty verdict for this source.
 	ExpectedDowntime bool             `json:"expected_downtime,omitempty"`
@@ -764,6 +766,7 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 			Name:             s.Name,
 			Status:           string(a.Status),
 			AgeSeconds:       a.Age.Seconds(),
+			AgeUnavailable:   a.AgeUnavailable,
 			AgeLowerBound:    a.AgeLowerBound,
 			Docs:             s.Docs,
 			SizeBytes:        s.SizeBytes,
@@ -1286,8 +1289,9 @@ func buildRuleSourceFreshness(rules []backend.Rule, in []backend.RulePredicateFr
 			Status: freshness.Status, Method: freshness.Method, ObservedAt: freshness.ObservedAt,
 			WindowSeconds: freshness.Window.Seconds(), LastEvent: lastEvent,
 			FreshnessStatus: string(assessment.Status), AgeSeconds: assessment.Age.Seconds(),
-			AgeLowerBound: assessment.AgeLowerBound, ExpectedDowntime: assessment.ExpectedDowntime,
-			Detail: freshness.Detail,
+			AgeUnavailable: assessment.AgeUnavailable, AgeLowerBound: assessment.AgeLowerBound,
+			ExpectedDowntime: assessment.ExpectedDowntime,
+			Detail:           freshness.Detail,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

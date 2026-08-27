@@ -44,6 +44,7 @@ func TestMetrics(t *testing.T) {
 		{Name: `quoted"src`, Status: "ok", AgeSeconds: 12.5, Consumers: 3},
 		{Name: "stale-src", Status: "stale", AgeSeconds: 100000, Consumers: 1},
 		{Name: "bounded-src", Status: "stale", AgeSeconds: 86400, AgeLowerBound: true},
+		{Name: "future-src", Status: "stale", AgeUnavailable: true, Consumers: 1},
 	}
 	r.Summary.DeadDetections = 2
 	r.Summary.ImpairedDetections = 3
@@ -57,7 +58,7 @@ func TestMetrics(t *testing.T) {
 		"deadair_up 1",
 		`deadair_instance_up{instance="acme-prod"} 1`,
 		`deadair_sources{instance="acme-prod",status="ok"} 1`,
-		`deadair_sources{instance="acme-prod",status="stale"} 2`,
+		`deadair_sources{instance="acme-prod",status="stale"} 3`,
 		`deadair_detections_dead{instance="acme-prod"} 2`,
 		`deadair_detections_impaired{instance="acme-prod"} 3`,
 		`deadair_unused_telemetry_bytes{instance="acme-prod"} 42`,
@@ -66,6 +67,7 @@ func TestMetrics(t *testing.T) {
 		`deadair_input_resolutions{instance="acme-prod",status="unavailable"} 1`,
 		`deadair_input_resolutions{instance="acme-prod",status="incompatible"} 3`,
 		`deadair_source_freshness_seconds{instance="acme-prod",source="quoted\"src"} 12.5`,
+		`deadair_source_freshness_seconds{instance="acme-prod",source="stale-src"} 100000`,
 		`deadair_source_consumers{instance="acme-prod",source="stale-src"} 1`,
 	} {
 		if !strings.Contains(body, want) {
@@ -74,7 +76,7 @@ func TestMetrics(t *testing.T) {
 	}
 	for _, help := range []string{
 		"# HELP deadair_input_resolutions Backend-native rule input resolution evidence by outcome.",
-		"# HELP deadair_source_freshness_seconds Seconds since the exact last event observed in the source; lower-bound ages are omitted.",
+		"# HELP deadair_source_freshness_seconds Seconds since the exact last event observed in the source; unavailable and lower-bound ages are omitted.",
 	} {
 		if !strings.Contains(body, help) {
 			t.Errorf("missing HELP line %q in:\n%s", help, body)
@@ -82,6 +84,9 @@ func TestMetrics(t *testing.T) {
 	}
 	if strings.Contains(body, `deadair_source_freshness_seconds{instance="acme-prod",source="bounded-src"}`) {
 		t.Errorf("lower-bound source age was exported as exact:\n%s", body)
+	}
+	if strings.Contains(body, `deadair_source_freshness_seconds{instance="acme-prod",source="future-src"}`) {
+		t.Errorf("unavailable future-timestamp age was exported as exact:\n%s", body)
 	}
 
 	// A failed cycle keeps the last snapshot but flips up to 0.

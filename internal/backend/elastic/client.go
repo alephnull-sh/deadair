@@ -937,14 +937,16 @@ func firstMillis(values []json.RawMessage) (int64, bool) {
 	return parsed.UnixMilli(), true
 }
 
-// fillFreshness resolves LastEvent for sources that lack it, with bounded
-// concurrency. Failures are tolerated: a source we cannot date reports as
-// status "unknown" rather than failing the scan.
+// fillFreshness resolves LastEvent for sources that lack one or whose stream
+// statistic is beyond the future-skew allowance, with bounded concurrency.
+// A successful all-future result remains visible to health; a failed query
+// clears the timestamp so permission and mapping failures remain unknown.
 func (c *Client) fillFreshness(ctx context.Context, sources []backend.Source) {
 	sem := make(chan struct{}, c.concurrency())
 	var wg sync.WaitGroup
 	for i := range sources {
-		if !sources[i].LastEvent.IsZero() || sources[i].Docs == 0 {
+		if sources[i].Docs == 0 || (!sources[i].LastEvent.IsZero() &&
+			backend.FreshnessTimestampAcceptable(sources[i].LastEvent, time.Now().UTC())) {
 			continue
 		}
 		wg.Add(1)
@@ -952,31 +954,57 @@ func (c *Client) fillFreshness(ctx context.Context, sources []backend.Source) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if ts, err := c.maxTimestamp(ctx, s.Name); err == nil {
-				s.LastEvent = ts
+			timestamps, err := c.maxTimestamp(ctx, s.Name)
+			if err != nil {
+				s.LastEvent = time.Time{}
+				return
+			}
+			switch {
+			case !timestamps.acceptable.IsZero():
+				s.LastEvent = timestamps.acceptable
+			case !timestamps.observed.IsZero() &&
+				!backend.FreshnessTimestampAcceptable(timestamps.observed, time.Now().UTC()):
+				s.LastEvent = timestamps.observed
+			default:
+				s.LastEvent = time.Time{}
 			}
 		}(&sources[i])
 	}
 	wg.Wait()
 }
 
-func (c *Client) maxTimestamp(ctx context.Context, index string) (time.Time, error) {
-	body := strings.NewReader(`{"size":0,"track_total_hits":false,"aggs":{"latest":{"max":{"field":"@timestamp"}}}}`)
+type maxTimestampResult struct {
+	acceptable time.Time
+	observed   time.Time
+}
+
+func (c *Client) maxTimestamp(ctx context.Context, index string) (maxTimestampResult, error) {
+	body := strings.NewReader(fmt.Sprintf(`{"size":0,"track_total_hits":false,"aggs":{"latest_acceptable":{"filter":{"range":{"@timestamp":{"lte":"now+%dm"}}},"aggs":{"latest":{"max":{"field":"@timestamp"}}}},"latest_observed":{"max":{"field":"@timestamp"}}}}`,
+		int(backend.FreshnessFutureSkew/time.Minute)))
 	var out struct {
 		Aggregations struct {
-			Latest struct {
+			LatestAcceptable struct {
+				Latest struct {
+					Value *float64 `json:"value"`
+				} `json:"latest"`
+			} `json:"latest_acceptable"`
+			LatestObserved struct {
 				Value *float64 `json:"value"`
-			} `json:"latest"`
+			} `json:"latest_observed"`
 		} `json:"aggregations"`
 	}
 	path := "/" + url.PathEscape(index) + "/_search"
 	if err := c.do(ctx, http.MethodPost, c.ESURL, path, body, &out); err != nil {
-		return time.Time{}, err
+		return maxTimestampResult{}, err
 	}
-	if out.Aggregations.Latest.Value == nil {
-		return time.Time{}, nil
+	result := maxTimestampResult{}
+	if out.Aggregations.LatestAcceptable.Latest.Value != nil {
+		result.acceptable = time.UnixMilli(int64(*out.Aggregations.LatestAcceptable.Latest.Value))
 	}
-	return time.UnixMilli(int64(*out.Aggregations.Latest.Value)), nil
+	if out.Aggregations.LatestObserved.Value != nil {
+		result.observed = time.UnixMilli(int64(*out.Aggregations.LatestObserved.Value))
+	}
+	return result, nil
 }
 
 type fieldCapability struct {

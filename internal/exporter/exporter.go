@@ -109,10 +109,10 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 
-		fmt.Fprintf(&b, "# HELP deadair_source_freshness_seconds Seconds since the exact last event observed in the source; lower-bound ages are omitted.\n# TYPE deadair_source_freshness_seconds gauge\n")
+		fmt.Fprintf(&b, "# HELP deadair_source_freshness_seconds Seconds since the exact last event observed in the source; unavailable and lower-bound ages are omitted.\n# TYPE deadair_source_freshness_seconds gauge\n")
 		for _, r := range f.Instances {
 			for _, src := range r.Sources {
-				if src.AgeLowerBound {
+				if src.AgeLowerBound || src.AgeUnavailable {
 					continue
 				}
 				// maintenance carries a real age too; dropping it would trip

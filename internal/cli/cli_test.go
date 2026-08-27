@@ -73,7 +73,8 @@ func fixtureServerCapabilities(t *testing.T, version string, resolveStatus, data
 		]`)
 	})
 	mux.HandleFunc("/winlogbeat-2026.07/_search", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"aggregations":{"latest":{"value":%d}}}`, now.Add(-26*time.Hour).UnixMilli())
+		latest := now.Add(-26 * time.Hour).UnixMilli()
+		fmt.Fprintf(w, `{"aggregations":{"latest_acceptable":{"latest":{"value":%d}},"latest_observed":{"value":%d}}}`, latest, latest)
 	})
 	mux.HandleFunc("/logs-endpoint.events.process-default/_search", func(w http.ResponseWriter, r *http.Request) {
 		eventTime := now.Add(-2 * time.Minute).UnixMilli()
@@ -613,7 +614,8 @@ func opensearchFixtureServer(t *testing.T) *httptest.Server {
 		]`)
 	})
 	mux.HandleFunc("/os-stale-2026/_search", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"aggregations":{"latest":{"value":%d}}}`, now.Add(-26*time.Hour).UnixMilli())
+		latest := now.Add(-26 * time.Hour).UnixMilli()
+		fmt.Fprintf(w, `{"aggregations":{"latest_acceptable":{"latest":{"value":%d}},"latest_observed":{"value":%d}}}`, latest, latest)
 	})
 	mux.HandleFunc("/_resolve/index/", func(w http.ResponseWriter, r *http.Request) {
 		expression := strings.TrimPrefix(r.URL.Path, "/_resolve/index/")

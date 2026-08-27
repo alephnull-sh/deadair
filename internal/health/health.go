@@ -35,6 +35,9 @@ func (s Status) Degraded() bool { return s == StatusStale || s == StatusEmpty }
 type Assessment struct {
 	Status Status
 	Age    time.Duration // time since last event; 0 when unknown
+	// AgeUnavailable means no non-negative exact age can be reported for the
+	// observed timestamp. It is distinct from a bounded lower-bound age.
+	AgeUnavailable bool
 	// AgeLowerBound marks Age as the minimum age proved by a bounded empty
 	// freshness query, rather than an exact age derived from LastEvent.
 	AgeLowerBound    bool
@@ -88,6 +91,12 @@ func (c Check) Evaluate(s backend.Source) Assessment {
 			return Assessment{Status: StatusStale, Age: freshness.Window, AgeLowerBound: true}
 		}
 		return Assessment{Status: StatusUnknown}
+	}
+	if !backend.FreshnessTimestampAcceptable(s.LastEvent, t) {
+		if inDowntime {
+			return Assessment{Status: StatusMaintenance, AgeUnavailable: true, ExpectedDowntime: true}
+		}
+		return Assessment{Status: StatusStale, AgeUnavailable: true}
 	}
 	age := t.Sub(s.LastEvent)
 	if age > c.MaxStale {

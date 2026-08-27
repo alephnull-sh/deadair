@@ -1521,7 +1521,7 @@ func TestFreshnessEvidenceQueriesOnlyRequestedSources(t *testing.T) {
 	for _, query := range queries {
 		if strings.Contains(query, "UntargetedTable") ||
 			strings.Contains(query, "AuxiliaryTable") || strings.Contains(query, "BasicTable_CL") || strings.Contains(query, "UpdatingTable") ||
-			!strings.Contains(query, "ago(24h)") || !strings.Contains(query, "max(IngestionTime)") {
+			!strings.Contains(query, "ago(24h)") || !strings.Contains(query, "IngestionTime <= now() + 5m") || !strings.Contains(query, "max(IngestionTime)") {
 			t.Errorf("unexpected or unbounded freshness query %q", query)
 		}
 	}
@@ -1593,8 +1593,9 @@ func TestRuleAwareFreshnessUsesTheRuleClockAndLeavesSharedSourcesIncomplete(t *t
 			nrtQuery = query
 		}
 	}
-	if len(queries) != 2 || !strings.Contains(scheduledQuery, "max(TimeGenerated)") || strings.Contains(scheduledQuery, "max(IngestionTime)") ||
-		!strings.Contains(nrtQuery, "max(IngestionTime)") {
+	if len(queries) != 2 || !strings.Contains(scheduledQuery, "TimeGenerated <= now() + 5m") ||
+		!strings.Contains(scheduledQuery, "max(TimeGenerated)") || strings.Contains(scheduledQuery, "max(IngestionTime)") ||
+		!strings.Contains(nrtQuery, "IngestionTime <= now() + 5m") || !strings.Contains(nrtQuery, "max(IngestionTime)") {
 		t.Fatalf("rule-aware freshness queries = %v", queries)
 	}
 }

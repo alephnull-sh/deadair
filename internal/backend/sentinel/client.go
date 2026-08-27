@@ -1392,9 +1392,9 @@ func (c *Client) FreshnessEvidenceFor(ctx context.Context, requests []backend.Fr
 				if target.queryReference == "" {
 					evidence.Detail = "table name cannot be represented safely in KQL"
 				} else {
-					query := fmt.Sprintf("%s | where TimeGenerated >= ago(%dh) | summarize LastEvent=max(TimeGenerated)", target.queryReference, int(freshnessWindow/time.Hour))
+					query := fmt.Sprintf("%s | where TimeGenerated >= ago(%dh) and TimeGenerated <= now() + %dm | summarize LastEvent=max(TimeGenerated)", target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessFutureSkew/time.Minute))
 					if request.Basis == backend.FreshnessIngestionTime {
-						query = fmt.Sprintf("%s | extend IngestionTime=ingestion_time() | where IngestionTime >= ago(%dh) | summarize LastEvent=max(IngestionTime)", target.queryReference, int(freshnessWindow/time.Hour))
+						query = fmt.Sprintf("%s | extend IngestionTime=ingestion_time() | where IngestionTime >= ago(%dh) and IngestionTime <= now() + %dm | summarize LastEvent=max(IngestionTime)", target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessFutureSkew/time.Minute))
 					}
 					result, queryErr := c.queryLogsForSource(ctx, query, target)
 					if queryErr == nil {

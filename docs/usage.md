@@ -297,7 +297,10 @@ jq '.dead_detections[] | select(.reason == "disconnected") | {name, patterns}' r
 
 Human reports spell this out; JSON uses `starved`. The rule patterns resolve correctly, but every
 matched source is degraded. A source is `stale` when it has documents but no recent event inside
-`--max-stale`; it is `empty` when it exists with zero documents.
+`--max-stale`; it is `empty` when it exists with zero documents. Timestamps up to five minutes
+ahead are accepted for ordinary clock skew. A timestamp farther in the future is treated as stale
+because it cannot establish current source freshness. Its JSON source age is marked unavailable,
+and the exporter omits the exact-age gauge for that source.
 
 For example, a rule queries `logs-system.auth-*` and resolves to
 `logs-system.auth-default`, but the newest event is three days old. The pattern is not the problem.

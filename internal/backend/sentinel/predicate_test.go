@@ -222,7 +222,7 @@ func TestRulePredicateFreshnessEvidenceUsesRuleClockAndFailsClosed(t *testing.T)
 		t.Fatalf("Logs queries = %v, want two", queries)
 	}
 	for _, query := range queries {
-		if !strings.Contains(query, "ago(24h)") || !strings.Contains(query, " | where Device") {
+		if !strings.Contains(query, "ago(24h)") || !strings.Contains(query, "<= now() + 5m") || !strings.Contains(query, " | where Device") {
 			t.Errorf("predicate freshness query is not bounded/canonical: %q", query)
 		}
 	}

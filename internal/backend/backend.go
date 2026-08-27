@@ -300,6 +300,17 @@ type FreshnessEvidence struct {
 	Detail     string
 }
 
+// FreshnessFutureSkew is the maximum clock skew accepted when deciding
+// whether a source timestamp is usable as freshness evidence. Backends apply
+// the same allowance when selecting an acceptable latest event.
+const FreshnessFutureSkew = 5 * time.Minute
+
+// FreshnessTimestampAcceptable reports whether timestamp is no farther ahead
+// than the shared clock-skew allowance at observedAt.
+func FreshnessTimestampAcceptable(timestamp, observedAt time.Time) bool {
+	return !timestamp.After(observedAt.Add(FreshnessFutureSkew))
+}
+
 // FreshnessBasis identifies the timestamp that determines whether a rule can
 // see newly available data. Event-time rules and ingestion-time rules cannot
 // safely share one freshness observation.

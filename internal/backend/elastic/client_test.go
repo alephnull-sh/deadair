@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/alephnull-sh/deadair/internal/backend"
+	"github.com/alephnull-sh/deadair/internal/health"
 )
 
 func TestRulesPagination(t *testing.T) {
@@ -778,7 +779,7 @@ func TestSources(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("freshness fallback used %s, want POST", r.Method)
 		}
-		fmt.Fprintf(w, `{"aggregations":{"latest":{"value":%d}}}`, plainTS.UnixMilli())
+		fmt.Fprintf(w, `{"aggregations":{"latest_acceptable":{"latest":{"value":%d}},"latest_observed":{"value":%d}}}`, plainTS.UnixMilli(), plainTS.UnixMilli())
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -818,6 +819,94 @@ func TestSources(t *testing.T) {
 	}
 	if !plain.LastEvent.Equal(plainTS) {
 		t.Errorf("plain index LastEvent = %v, want %v (freshness fallback)", plain.LastEvent, plainTS)
+	}
+}
+
+func TestSourcesHandlesFutureTimestampEvidence(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	futureTS := now.Add(backend.FreshnessFutureSkew + time.Hour)
+	usableTS := now.Add(-10 * time.Minute)
+	var searches atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_data_stream/_stats", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"data_streams":[
+			{"data_stream":"logs-future","store_size_bytes":10,"maximum_timestamp":%d},
+			{"data_stream":"logs-only-future","store_size_bytes":10,"maximum_timestamp":%d},
+			{"data_stream":"logs-future-error","store_size_bytes":10,"maximum_timestamp":%d},
+			{"data_stream":"logs-future-unmapped","store_size_bytes":10,"maximum_timestamp":%d}
+		]}`, futureTS.UnixMilli(), futureTS.UnixMilli(), futureTS.UnixMilli(), futureTS.UnixMilli())
+	})
+	mux.HandleFunc("/_cat/indices", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[
+			{"index":".ds-logs-future-2026.08.27-000001","docs.count":"2","store.size":"10"},
+			{"index":".ds-logs-only-future-2026.08.27-000001","docs.count":"1","store.size":"10"},
+			{"index":".ds-logs-future-error-2026.08.27-000001","docs.count":"1","store.size":"10"},
+			{"index":".ds-logs-future-unmapped-2026.08.27-000001","docs.count":"1","store.size":"10"},
+			{"index":"plain-only-future","docs.count":"1","store.size":"10"}
+		]`)
+	})
+	mux.HandleFunc("/logs-future/_search", func(w http.ResponseWriter, r *http.Request) {
+		searches.Add(1)
+		var body struct {
+			Aggregations struct {
+				LatestAcceptable struct {
+					Filter struct {
+						Range map[string]struct {
+							LTE string `json:"lte"`
+						} `json:"range"`
+					} `json:"filter"`
+				} `json:"latest_acceptable"`
+			} `json:"aggs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if got := body.Aggregations.LatestAcceptable.Filter.Range["@timestamp"].LTE; got != "now+5m" {
+			t.Errorf("freshness upper bound = %q, want now+5m", got)
+		}
+		fmt.Fprintf(w, `{"aggregations":{"latest_acceptable":{"latest":{"value":%d}},"latest_observed":{"value":%d}}}`, usableTS.UnixMilli(), futureTS.UnixMilli())
+	})
+	mux.HandleFunc("/logs-only-future/_search", func(w http.ResponseWriter, r *http.Request) {
+		searches.Add(1)
+		fmt.Fprintf(w, `{"aggregations":{"latest_acceptable":{"latest":{"value":null}},"latest_observed":{"value":%d}}}`, futureTS.UnixMilli())
+	})
+	mux.HandleFunc("/logs-future-error/_search", func(w http.ResponseWriter, r *http.Request) {
+		searches.Add(1)
+		http.Error(w, "forbidden", http.StatusForbidden)
+	})
+	mux.HandleFunc("/logs-future-unmapped/_search", func(w http.ResponseWriter, r *http.Request) {
+		searches.Add(1)
+		fmt.Fprint(w, `{"aggregations":{"latest_acceptable":{"latest":{"value":null}},"latest_observed":{"value":null}}}`)
+	})
+	mux.HandleFunc("/plain-only-future/_search", func(w http.ResponseWriter, r *http.Request) {
+		searches.Add(1)
+		fmt.Fprintf(w, `{"aggregations":{"latest_acceptable":{"latest":{"value":null}},"latest_observed":{"value":%d}}}`, futureTS.UnixMilli())
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	sources, err := (&Client{ESURL: srv.URL, KibanaURL: srv.URL}).Sources(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]backend.Source, len(sources))
+	for _, source := range sources {
+		byName[source.Name] = source
+	}
+	if searches.Load() != 5 || len(sources) != 5 || !byName["logs-future"].LastEvent.Equal(usableTS) ||
+		!byName["logs-only-future"].LastEvent.Equal(futureTS) || !byName["plain-only-future"].LastEvent.Equal(futureTS) ||
+		!byName["logs-future-error"].LastEvent.IsZero() || !byName["logs-future-unmapped"].LastEvent.IsZero() {
+		t.Fatalf("future timestamp evidence = searches %d, sources %+v; want bounded recovery %v, retained all-future value %v, and unknown on query failure", searches.Load(), sources, usableTS, futureTS)
+	}
+	check := health.Check{MaxStale: time.Hour, Now: func() time.Time { return now }}
+	if got := check.Evaluate(byName["plain-only-future"]); got.Status != health.StatusStale {
+		t.Fatalf("plain all-future health = %+v, want stale", got)
+	}
+	for _, name := range []string{"logs-future-error", "logs-future-unmapped"} {
+		if got := check.Evaluate(byName[name]); got.Status != health.StatusUnknown {
+			t.Fatalf("%s health = %+v, want unknown", name, got)
+		}
 	}
 }
 

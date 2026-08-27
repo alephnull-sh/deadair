@@ -19,6 +19,9 @@ func TestEvaluate(t *testing.T) {
 		{"fresh", backend.Source{Docs: 10, LastEvent: now.Add(-5 * time.Minute)}, StatusOK},
 		{"boundary is not stale", backend.Source{Docs: 10, LastEvent: now.Add(-30 * time.Minute)}, StatusOK},
 		{"stale", backend.Source{Docs: 10, LastEvent: now.Add(-31 * time.Minute)}, StatusStale},
+		{"future skew just within allowance", backend.Source{Docs: 10, LastEvent: now.Add(backend.FreshnessFutureSkew - time.Nanosecond)}, StatusOK},
+		{"future skew boundary", backend.Source{Docs: 10, LastEvent: now.Add(backend.FreshnessFutureSkew)}, StatusOK},
+		{"future timestamp beyond allowance", backend.Source{Docs: 10, LastEvent: now.Add(backend.FreshnessFutureSkew + time.Nanosecond)}, StatusStale},
 		{"empty", backend.Source{Docs: 0}, StatusEmpty},
 		{"unknown freshness", backend.Source{Docs: 10}, StatusUnknown},
 		{"unknown docs and freshness", backend.Source{Docs: -1}, StatusUnknown},
@@ -27,6 +30,9 @@ func TestEvaluate(t *testing.T) {
 		if got := check.Evaluate(tt.source); got.Status != tt.want {
 			t.Errorf("%s: Evaluate() = %s, want %s", tt.name, got.Status, tt.want)
 		}
+	}
+	if got := check.Evaluate(backend.Source{Docs: 10, LastEvent: now.Add(backend.FreshnessFutureSkew + time.Nanosecond)}); got.Age != 0 || !got.AgeUnavailable {
+		t.Errorf("rejected future timestamp assessment = %+v, want unavailable age rather than a negative duration", got)
 	}
 }
 

@@ -109,6 +109,16 @@ func TestSourceHealthPreservesBoundedFreshnessLowerBound(t *testing.T) {
 	}
 }
 
+func TestFutureSourceMarksAgeUnavailable(t *testing.T) {
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	r := Build("test", graph.Build(nil, []backend.Source{{
+		Name: "future-source", Docs: 1, LastEvent: now.Add(backend.FreshnessFutureSkew + time.Nanosecond),
+	}}), health.Check{MaxStale: time.Hour, Now: func() time.Time { return now }})
+	if len(r.Sources) != 1 || r.Sources[0].Status != "stale" || r.Sources[0].AgeSeconds != 0 || !r.Sources[0].AgeUnavailable {
+		t.Fatalf("future source health = %+v, want stale with unavailable age", r.Sources)
+	}
+}
+
 func TestImpairments(t *testing.T) {
 	now := time.Now()
 	lag := 30 * time.Minute
