@@ -333,10 +333,6 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 		}
 		password = filePassword
 	}
-	if (username == "") != (password == "") {
-		return nil, fmt.Errorf("OpenSearch basic auth requires both DEADAIR_OPENSEARCH_USERNAME/--opensearch-username and DEADAIR_OPENSEARCH_PASSWORD/--opensearch-password-file")
-	}
-
 	key := os.Getenv("DEADAIR_OPENSEARCH_API_KEY")
 	if o.apiKeyFile != "" {
 		fileKey, err := readSecretFile(o.apiKeyFile, "api key")
@@ -348,8 +344,8 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 	if key == "" && username == "" {
 		key = os.Getenv("DEADAIR_API_KEY")
 	}
-	if key != "" && username != "" {
-		return nil, fmt.Errorf("OpenSearch auth is ambiguous: use either API key auth or username/password, not both")
+	if err := validateOpenSearchAuth(username, password, key); err != nil {
+		return nil, err
 	}
 	if key == "" && username == "" {
 		fmt.Fprintln(stderr, "deadair: warning: no OpenSearch auth (DEADAIR_OPENSEARCH_API_KEY, DEADAIR_API_KEY, --api-key-file, or username/password); connecting unauthenticated")
@@ -366,6 +362,16 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 		HTTP:        hc,
 		Concurrency: o.concurrency,
 	}, nil
+}
+
+func validateOpenSearchAuth(username, password, apiKey string) error {
+	if (username == "") != (password == "") {
+		return fmt.Errorf("OpenSearch basic auth requires both username and password")
+	}
+	if apiKey != "" && username != "" {
+		return fmt.Errorf("OpenSearch auth is ambiguous: use either API key auth or username/password, not both")
+	}
+	return nil
 }
 
 func (o *connOpts) sentinelClient(stderr io.Writer) (backendpkg.Backend, error) {

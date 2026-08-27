@@ -100,6 +100,9 @@ format and the cross-tenant execution boundary.
 
 Keep `name` stable. It keys metrics, per-instance state files, redacted pseudonyms, and historical
 baselines. Renaming a tenant starts a new baseline unless you deliberately migrate the state file.
+Names may contain Unicode, internal spaces, and ordinary punctuation, but must be portable file-name
+components: no leading or trailing whitespace, path separators, control characters, Windows-reserved
+`< > : " | ? *` characters, or trailing dot. Names that differ only by letter case are duplicates.
 
 ## Preflight
 

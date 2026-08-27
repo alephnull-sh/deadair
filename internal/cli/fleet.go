@@ -1,19 +1,23 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
+	"unicode"
 
 	backendpkg "github.com/alephnull-sh/deadair/internal/backend"
 	"github.com/alephnull-sh/deadair/internal/backend/elastic"
 	"github.com/alephnull-sh/deadair/internal/backend/opensearch"
 	"github.com/alephnull-sh/deadair/internal/backend/sentinel"
 	"github.com/alephnull-sh/deadair/internal/report"
+	"golang.org/x/text/unicode/norm"
 )
 
 // fleetConfig lists the instances (tenants / deployments) one scan covers.
@@ -123,13 +127,59 @@ func (s instanceSpec) secret(env, file, label string) (string, error) {
 	return "", nil
 }
 
-func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
-	if s.Name == "" {
-		return fleetInstance{}, fmt.Errorf("instance name is required")
+func (s instanceSpec) requiredSecret(env, file, label string) (string, error) {
+	if env != "" && file != "" {
+		return "", fmt.Errorf("%s must use either an environment variable or a file, not both", label)
+	}
+	value, err := s.secret(env, file, label)
+	if err != nil {
+		return "", err
+	}
+	if value == "" && (env != "" || file != "") {
+		return "", fmt.Errorf("configured %s resolved to an empty value", label)
+	}
+	return value, nil
+}
+
+func validateFleetInstanceName(name string) error {
+	if name == "" {
+		return fmt.Errorf("instance name is required")
+	}
+	if strings.TrimSpace(name) != name {
+		return fmt.Errorf("instance name %q must not have leading or trailing whitespace", name)
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("instance name %q contains a control character", name)
+		}
+		if strings.ContainsRune(`/\<>:"|?*`, r) {
+			return fmt.Errorf("instance name %q contains a character that is unsafe in state-file names", name)
+		}
+	}
+	if strings.HasSuffix(name, ".") {
+		return fmt.Errorf("instance name %q must not end with a dot", name)
+	}
+	return nil
+}
+
+func fleetStatePath(base, name string) (string, error) {
+	if err := validateFleetInstanceName(name); err != nil {
+		return "", err
+	}
+	path := base + "." + name
+	if filepath.Clean(filepath.Dir(path)) != filepath.Clean(filepath.Dir(base)) {
+		return "", fmt.Errorf("instance name %q resolves outside the state-file directory", name)
+	}
+	return path, nil
+}
+
+func (o *connOpts) buildInstance(s instanceSpec, stderr io.Writer) (fleetInstance, error) {
+	if err := validateFleetInstanceName(s.Name); err != nil {
+		return fleetInstance{}, err
 	}
 	io := *o
 	io.caCert, io.insecureTLS = s.CACert, s.Insecure
-	hc, err := io.httpClient(os.Stderr)
+	hc, err := io.httpClient(stderr)
 	if err != nil {
 		return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
 	}
@@ -150,13 +200,19 @@ func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
 		if s.OpenSearchURL == "" {
 			return fleetInstance{}, fmt.Errorf("instance %q: opensearch_url is required", s.Name)
 		}
-		password, err := s.secret(s.PasswordEnv, s.PasswordFile, "password")
+		password, err := s.requiredSecret(s.PasswordEnv, s.PasswordFile, "OpenSearch password")
 		if err != nil {
 			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
 		}
-		key, err := s.secret(s.APIKeyEnv, s.APIKeyFile, "api key")
+		key, err := s.requiredSecret(s.APIKeyEnv, s.APIKeyFile, "OpenSearch API key")
 		if err != nil {
 			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
+		}
+		if err := validateOpenSearchAuth(s.Username, password, key); err != nil {
+			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
+		}
+		if key == "" && s.Username == "" {
+			fmt.Fprintf(stderr, "deadair: warning: instance %q has no OpenSearch auth; connecting unauthenticated\n", s.Name)
 		}
 		return fleetInstance{name: s.Name, targetID: backendTargetID("opensearch", s.OpenSearchURL), backend: &opensearch.Client{
 			URL: s.OpenSearchURL, Username: s.Username, Password: password, APIKey: key,
@@ -218,11 +274,33 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 		return nil, fmt.Errorf("reading fleet file: %w", err)
 	}
 	var cfg fleetConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("parsing fleet file: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = fmt.Errorf("multiple JSON values")
+		}
 		return nil, fmt.Errorf("parsing fleet file: %w", err)
 	}
 	if len(cfg.Instances) == 0 {
 		return nil, fmt.Errorf("fleet file lists no instances")
+	}
+	seen := make([]string, 0, len(cfg.Instances))
+	for _, s := range cfg.Instances {
+		if err := validateFleetInstanceName(s.Name); err != nil {
+			return nil, err
+		}
+		nameKey := norm.NFC.String(s.Name)
+		for _, prior := range seen {
+			if strings.EqualFold(nameKey, norm.NFC.String(prior)) {
+				return nil, fmt.Errorf("duplicate instance name %q conflicts with %q", s.Name, prior)
+			}
+		}
+		seen = append(seen, s.Name)
 	}
 	if o.ruleFile != "" {
 		backends := map[string]bool{}
@@ -238,13 +316,8 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 		}
 	}
 	out := make([]fleetInstance, 0, len(cfg.Instances))
-	seen := map[string]bool{}
 	for _, s := range cfg.Instances {
-		if seen[s.Name] {
-			return nil, fmt.Errorf("duplicate instance name %q", s.Name)
-		}
-		seen[s.Name] = true
-		inst, err := o.buildInstance(s)
+		inst, err := o.buildInstance(s, stderr)
 		if err != nil {
 			return nil, err
 		}
@@ -264,7 +337,12 @@ func scanFleet(instances []fleetInstance, o connOpts, run func(fleetInstance, co
 	for _, inst := range instances {
 		io := o
 		if o.stateFile != "" && len(instances) > 1 {
-			io.stateFile = o.stateFile + "." + inst.name
+			path, err := fleetStatePath(o.stateFile, inst.name)
+			if err != nil {
+				errs = append(errs, report.InstanceError{Instance: inst.name, Error: err.Error()})
+				continue
+			}
+			io.stateFile = path
 		}
 		res, err := run(inst, io)
 		if err != nil {
