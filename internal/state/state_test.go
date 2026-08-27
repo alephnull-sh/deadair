@@ -1,9 +1,12 @@
 package state
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +91,256 @@ func TestLoadSavePermissions(t *testing.T) {
 	}
 	if loaded.Sources["logs-app"].LastDocs != 42 {
 		t.Fatalf("loaded state = %+v", loaded.Sources["logs-app"])
+	}
+}
+
+func TestLoadRejectsUnsupportedVersionWithoutChangingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	// A future schema can change field types. The explicit version must take
+	// precedence over errors that would arise from decoding those fields as v1.
+	original := []byte("{\n  \"version\": 2,\n  \"sources\": [\"future-layout\"]\n}\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "unsupported state file version 2") ||
+		!strings.Contains(err.Error(), "current version is 1") {
+		t.Fatalf("Load() = (%+v, %v), want unsupported version error", store, err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("unsupported state file changed:\nwant: %q\n got: %q", original, after)
+	}
+}
+
+func TestLoadRejectsMalformedExplicitVersionsWithoutChangingFile(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		version string
+	}{
+		{name: "null", version: "null"},
+		{name: "string", version: `"1"`},
+		{name: "fractional", version: "1.5"},
+		{name: "out of range", version: "18446744073709551616"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			original := []byte(fmt.Sprintf("{\n  \"version\": %s,\n  \"sources\": {}\n}\n", tt.version))
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			store, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), "parsing state file version: expected an integer") ||
+				strings.Contains(err.Error(), "unsupported state file version") {
+				t.Fatalf("Load() = (%+v, %v), want malformed explicit version error", store, err)
+			}
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if !bytes.Equal(after, original) {
+				t.Fatalf("malformed state file changed:\nwant: %q\n got: %q", original, after)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsNonObjectRootWithoutChangingFile(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		data string
+	}{
+		{name: "null", data: " \n null \t"},
+		{name: "array", data: `[]`},
+		{name: "string", data: `"state"`},
+		{name: "number", data: `1`},
+		{name: "boolean", data: `true`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			original := []byte(tt.data)
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			store, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), "malformed state file: top-level JSON value must be an object") {
+				t.Fatalf("Load() = (%+v, %v), want non-object root error", store, err)
+			}
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if !bytes.Equal(after, original) {
+				t.Fatalf("non-object state file changed:\nwant: %q\n got: %q", original, after)
+			}
+		})
+	}
+}
+
+func TestLoadPreservesEncodingJSONBOMRejection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	original := append([]byte{0xef, 0xbb, 0xbf}, []byte(`{}`)...)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "parsing state file:") ||
+		strings.Contains(err.Error(), "top-level JSON value must be an object") {
+		t.Fatalf("Load() = (%+v, %v), want encoding/json parse error", store, err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("BOM-prefixed state file changed:\nwant: %q\n got: %q", original, after)
+	}
+}
+
+func TestLoadCurrentVersionRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	original := []byte(`{"version":1,"target_id":"target-a","sources":{"logs-app":{"last_docs":42}}}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Version != Version || store.TargetID != "target-a" || store.Sources["logs-app"].LastDocs != 42 {
+		t.Fatalf("loaded current state = %+v", store)
+	}
+	if err := store.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	roundTripped, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roundTripped.Version != Version || roundTripped.TargetID != "target-a" ||
+		roundTripped.Sources["logs-app"].LastDocs != 42 {
+		t.Fatalf("round-tripped current state = %+v", roundTripped)
+	}
+}
+
+func TestLoadMigratesLegacyVersionZeroState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	original := []byte(`{"version":0,"sources":{"logs-legacy":{"last_docs":7}}}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Version != Version || store.Sources["logs-legacy"].LastDocs != 7 {
+		t.Fatalf("loaded legacy state = %+v", store)
+	}
+	if err := store.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(migrated, []byte(`"version": 1`)) {
+		t.Fatalf("migrated state has no current version:\n%s", migrated)
+	}
+}
+
+func TestLoadMigratesLegacyMissingVersionState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	original := []byte(`{"sources":{"logs-legacy":{"last_docs":7}}}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Version != Version || store.Sources["logs-legacy"].LastDocs != 7 {
+		t.Fatalf("loaded legacy state = %+v", store)
+	}
+	if err := store.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(migrated, []byte(`"version": 1`)) {
+		t.Fatalf("migrated state has no current version:\n%s", migrated)
+	}
+}
+
+func TestLoadAcceptsWhitespaceWrappedEmptyLegacyObject(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	original := []byte(" \n { } \t")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.Version != Version || store.Sources == nil || store.Findings == nil {
+		t.Fatalf("loaded empty legacy state = %+v", store)
+	}
+	afterLoad, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(afterLoad, original) {
+		t.Fatalf("loading empty legacy state changed it:\nwant: %q\n got: %q", original, afterLoad)
+	}
+	if err := store.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(migrated, []byte(`"version": 1`)) {
+		t.Fatalf("migrated empty legacy state has no current version:\n%s", migrated)
+	}
+}
+
+func TestSaveRejectsUnsupportedVersionBeforeMutationOrRewrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	original := []byte("preserve this file exactly\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := SourceState{LastSeen: time.Now().UTC().Add(-60 * 24 * time.Hour)}
+	store := New()
+	store.Version = Version + 1
+	store.Sources["logs-stale"] = stale
+
+	err := store.Save(path)
+	if err == nil || !strings.Contains(err.Error(), "unsupported state file version 2") {
+		t.Fatalf("Save() error = %v, want unsupported version error", err)
+	}
+	got, found := store.Sources["logs-stale"]
+	if store.Version != Version+1 || !found || len(store.Sources) != 1 || !got.LastSeen.Equal(stale.LastSeen) {
+		t.Fatalf("unsupported store mutated before rejection: %+v", store)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("destination changed after rejected save:\nwant: %q\n got: %q", original, after)
 	}
 }
 

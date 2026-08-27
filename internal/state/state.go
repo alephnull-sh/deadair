@@ -5,6 +5,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -170,7 +171,10 @@ func (s *Store) BindTarget(targetID string) error {
 	return nil
 }
 
-// Load reads a state file. A missing file starts a new store.
+// Load reads a state file. A missing file starts a new store. Version 0 is the
+// legacy, unversioned format; version 1 is current. Other versions are rejected
+// so a newer state file cannot be interpreted and rewritten with an older
+// schema.
 func Load(path string) (*Store, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -178,6 +182,13 @@ func Load(path string) (*Store, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading state file: %w", err)
+	}
+	version, err := stateFileVersion(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateVersion(version); err != nil {
+		return nil, err
 	}
 	var s Store
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -231,6 +242,9 @@ func (s *Store) SaveFindingUpdates(path string) error {
 }
 
 func (s *Store) save(path string, pruneSources bool) error {
+	if err := validateVersion(s.Version); err != nil {
+		return err
+	}
 	s.Version = Version
 	if pruneSources {
 		s.PruneStale(time.Now().UTC(), pruneRetention)
@@ -248,6 +262,46 @@ func (s *Store) save(path string, pruneSources bool) error {
 		return fmt.Errorf("writing state file: %w", err)
 	}
 	return nil
+}
+
+func validateVersion(version int) error {
+	if version != 0 && version != Version {
+		return fmt.Errorf("unsupported state file version %d (current version is %d)", version, Version)
+	}
+	return nil
+}
+
+// stateFileVersion first requires an object root, then decodes only the
+// top-level version so compatibility is decided before fields belonging to
+// another schema are interpreted. Missing and numeric zero retain the legacy
+// v0 meaning; an explicit null or any value that encoding/json cannot decode as
+// an int is malformed.
+func stateFileVersion(data []byte) (int, error) {
+	var root json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return 0, fmt.Errorf("parsing state file: %w", err)
+	}
+	root = bytes.TrimSpace(root)
+	if len(root) == 0 || root[0] != '{' {
+		return 0, fmt.Errorf("malformed state file: top-level JSON value must be an object")
+	}
+	var header struct {
+		Version json.RawMessage `json:"version"`
+	}
+	if err := json.Unmarshal(root, &header); err != nil {
+		return 0, fmt.Errorf("parsing state file: %w", err)
+	}
+	if len(header.Version) == 0 {
+		return 0, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(header.Version), []byte("null")) {
+		return 0, fmt.Errorf("parsing state file version: expected an integer, got null")
+	}
+	var version int
+	if err := json.Unmarshal(header.Version, &version); err != nil {
+		return 0, fmt.Errorf("parsing state file version: expected an integer: %w", err)
+	}
+	return version, nil
 }
 
 func (s *Store) pruneFindings(now time.Time, retention time.Duration) {

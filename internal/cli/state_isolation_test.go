@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -179,6 +180,53 @@ func TestScanRejectsStateBoundToAnotherTarget(t *testing.T) {
 	}
 	if loaded.TargetID != "target-a" {
 		t.Fatalf("failed scan changed target binding to %q", loaded.TargetID)
+	}
+}
+
+func TestScanRejectsUnsupportedStateVersionWithoutRewritingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	original := []byte("{\n  \"version\": 2,\n  \"sources\": [\"future-layout\"]\n}\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe := &stateIsolationBackend{
+		source: backend.Source{Name: "logs-app", Docs: 1, LastEvent: time.Now().UTC()},
+	}
+
+	_, err := scanOnce(context.Background(), probe, connOpts{stateFile: path, maxStale: time.Hour}, "prod", "target-a")
+	if err == nil || !strings.Contains(err.Error(), "unsupported state file version 2") ||
+		!strings.Contains(err.Error(), "current version is 1") {
+		t.Fatalf("scan state-version error = %v", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(after) != string(original) {
+		t.Fatalf("failed scan rewrote unsupported state:\nwant: %q\n got: %q", original, after)
+	}
+}
+
+func TestScanRejectsNonObjectStateWithoutRewritingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	original := []byte(" \n null \t")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe := &stateIsolationBackend{
+		source: backend.Source{Name: "logs-app", Docs: 1, LastEvent: time.Now().UTC()},
+	}
+
+	_, err := scanOnce(context.Background(), probe, connOpts{stateFile: path, maxStale: time.Hour}, "prod", "target-a")
+	if err == nil || !strings.Contains(err.Error(), "malformed state file: top-level JSON value must be an object") {
+		t.Fatalf("scan state-root error = %v", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("failed scan rewrote non-object state:\nwant: %q\n got: %q", original, after)
 	}
 }
 

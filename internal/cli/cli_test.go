@@ -573,6 +573,43 @@ func TestTune(t *testing.T) {
 	}
 }
 
+func TestTuneReportsUnsupportedStateVersion(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(statePath, []byte(`{"version":2,"sources":["future-layout"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run([]string{"tune", "--state-file", statePath}, &stdout, &stderr)
+	if code != report.ExitError || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "unsupported state file version 2") ||
+		!strings.Contains(stderr.String(), "current version is 1") {
+		t.Fatalf("unsupported state tune exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestTuneReportsNonObjectStateWithoutRewritingFile(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	original := []byte(" \n null \t")
+	if err := os.WriteFile(statePath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cli.Run([]string{"tune", "--state-file", statePath}, &stdout, &stderr)
+	if code != report.ExitError || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "malformed state file: top-level JSON value must be an object") {
+		t.Fatalf("non-object state tune exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, original) {
+		t.Fatalf("tune rewrote non-object state:\nwant: %q\n got: %q", original, after)
+	}
+}
+
 func opensearchFixtureServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	now := time.Now()
