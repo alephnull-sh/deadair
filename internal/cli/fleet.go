@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	backendpkg "github.com/alephnull-sh/deadair/internal/backend"
@@ -114,18 +116,51 @@ func assessmentConfigurationID(o connOpts, scanBackend backendpkg.Backend) (stri
 }
 
 func (s instanceSpec) secret(env, file, label string) (string, error) {
+	if env != "" && file != "" {
+		return "", fmt.Errorf("choose either an environment variable or a file for %s", label)
+	}
 	if file != "" {
 		return readSecretFile(file, label)
 	}
 	if env != "" {
-		return os.Getenv(env), nil
+		value := os.Getenv(env)
+		if strings.TrimSpace(value) == "" {
+			return "", fmt.Errorf("%s environment variable %q is unset or empty", label, env)
+		}
+		return value, nil
 	}
 	return "", nil
 }
 
+func validateInstanceName(name string) error {
+	valid := len(name) > 0 && len(name) <= 64 && !strings.HasSuffix(name, ".")
+	for i, c := range name {
+		alnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+		if !alnum && (i == 0 || c != '.' && c != '_' && c != '-') {
+			valid = false
+		}
+	}
+	stem := strings.ToUpper(strings.SplitN(name, ".", 2)[0])
+	switch stem {
+	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		valid = false
+	}
+	if !valid {
+		return fmt.Errorf("instance name %q must be a portable name of 1–64 ASCII letters, digits, dots, underscores or hyphens; start with a letter or digit and avoid trailing dots and reserved device names", name)
+	}
+	return nil
+}
+
+func fleetStatePath(base, name string) (string, error) {
+	if err := validateInstanceName(name); err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(base), filepath.Base(base)+"."+name), nil
+}
+
 func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
-	if s.Name == "" {
-		return fleetInstance{}, fmt.Errorf("instance name is required")
+	if err := validateInstanceName(s.Name); err != nil {
+		return fleetInstance{}, err
 	}
 	io := *o
 	io.caCert, io.insecureTLS = s.CACert, s.Insecure
@@ -156,6 +191,9 @@ func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
 		}
 		key, err := s.secret(s.APIKeyEnv, s.APIKeyFile, "api key")
 		if err != nil {
+			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
+		}
+		if err := validateOpenSearchAuth(s.Username, password, key); err != nil {
 			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
 		}
 		return fleetInstance{name: s.Name, targetID: backendTargetID("opensearch", s.OpenSearchURL), backend: &opensearch.Client{
@@ -218,8 +256,13 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 		return nil, fmt.Errorf("reading fleet file: %w", err)
 	}
 	var cfg fleetConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parsing fleet file: %w", err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("fleet file must contain one JSON object")
 	}
 	if len(cfg.Instances) == 0 {
 		return nil, fmt.Errorf("fleet file lists no instances")
@@ -240,10 +283,16 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 	out := make([]fleetInstance, 0, len(cfg.Instances))
 	seen := map[string]bool{}
 	for _, s := range cfg.Instances {
-		if seen[s.Name] {
+		if err := validateInstanceName(s.Name); err != nil {
+			return nil, err
+		}
+		key := strings.ToLower(s.Name)
+		if seen[key] {
 			return nil, fmt.Errorf("duplicate instance name %q", s.Name)
 		}
-		seen[s.Name] = true
+		seen[key] = true
+	}
+	for _, s := range cfg.Instances {
 		inst, err := o.buildInstance(s)
 		if err != nil {
 			return nil, err
@@ -264,7 +313,12 @@ func scanFleet(instances []fleetInstance, o connOpts, run func(fleetInstance, co
 	for _, inst := range instances {
 		io := o
 		if o.stateFile != "" && len(instances) > 1 {
-			io.stateFile = o.stateFile + "." + inst.name
+			var err error
+			io.stateFile, err = fleetStatePath(o.stateFile, inst.name)
+			if err != nil {
+				errs = append(errs, report.InstanceError{Instance: inst.name, Error: err.Error()})
+				continue
+			}
 		}
 		res, err := run(inst, io)
 		if err != nil {

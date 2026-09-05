@@ -199,7 +199,8 @@ dynamic watchlist or workspace targets, external data, `app()`, `resource()`, AD
 Basic and Auxiliary tables are incompatible with Sentinel Scheduled and NRT analytics rules.
 
 `SentinelHealth` and `LASummaryLogs` require their Azure monitoring settings and table permissions.
-They add runtime evidence but do not create findings or change the gate. Sentinel also lacks the
+`SentinelHealth` corroborates rule execution. Failed or overdue summary runs produce
+`summary-pipeline` findings; add that class to your policy to gate on them. Sentinel also lacks the
 authoritative field and per-table inventory needed for required-field and unused-telemetry findings.
 The CLI targets Azure public cloud endpoints.
 

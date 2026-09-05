@@ -81,6 +81,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  scan      one-shot report; exit 0 passed, 1 gated findings, 2 error")
 	fmt.Fprintln(w, "  serve     Prometheus exporter with periodic scans")
 	fmt.Fprintln(w, "  diff      compare two reports; exit 1 on regressions")
+	fmt.Fprintln(w, "  inspect   investigate a source or producer in a saved report")
 	fmt.Fprintln(w, "  tune      suggest baseline settings from accumulated state")
 	fmt.Fprintln(w, "  version   print version")
 	fmt.Fprintf(w, "\n%s\n", h("GET STARTED"))
@@ -99,7 +100,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintf(w, "\nRun \"deadair <command> -h\" for flags. Guide: %s\n", usageGuideURL)
 }
 
-var commands = []string{"scan", "serve", "check", "diff", "tune", "setup", "version", "help"}
+var commands = []string{"scan", "serve", "check", "diff", "inspect", "tune", "setup", "version", "help"}
 
 // suggest returns the closest command name, or "" if nothing is close.
 func suggest(input string) string {
@@ -149,6 +150,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runTune(args[1:], stdout, stderr)
 	case "diff":
 		return runDiff(args[1:], stdout, stderr)
+	case "inspect":
+		return runInspect(args[1:], stdout, stderr)
 	case "setup":
 		return runSetup(args[1:], stdout, stderr)
 	case "version", "-v", "--version":
@@ -268,10 +271,15 @@ func readSecretFile(path, label string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading %s file: %w", label, err)
 	}
-	return strings.TrimSpace(string(data)), nil
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return "", fmt.Errorf("%s file is empty", label)
+	}
+	return value, nil
 }
 
-// httpClient builds the HTTP client honoring --ca-cert / --insecure-skip-verify.
+// httpClient preserves standard proxy and connection settings, then applies
+// --ca-cert / --insecure-skip-verify.
 func (o *connOpts) httpClient(stderr io.Writer) (*http.Client, error) {
 	tc := &tls.Config{InsecureSkipVerify: o.insecureTLS}
 	if o.insecureTLS {
@@ -288,7 +296,9 @@ func (o *connOpts) httpClient(stderr io.Writer) (*http.Client, error) {
 		}
 		tc.RootCAs = pool
 	}
-	return &http.Client{Timeout: o.timeout, Transport: &http.Transport{TLSClientConfig: tc}}, nil
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tc
+	return &http.Client{Timeout: o.timeout, Transport: transport}, nil
 }
 
 func (o *connOpts) elasticClient(stderr io.Writer) (backendpkg.Backend, error) {
@@ -320,6 +330,17 @@ func (o *connOpts) elasticClient(stderr io.Writer) (backendpkg.Backend, error) {
 	}, nil
 }
 
+func validateOpenSearchAuth(username, password, key string) error {
+	if (strings.TrimSpace(username) == "") != (strings.TrimSpace(password) == "") ||
+		(username != "" && strings.TrimSpace(username) == "") {
+		return fmt.Errorf("OpenSearch basic auth requires both username and password")
+	}
+	if key != "" && username != "" {
+		return fmt.Errorf("OpenSearch auth is ambiguous: use either API key auth or username/password, not both")
+	}
+	return nil
+}
+
 func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error) {
 	if o.opensearchURL == "" {
 		return nil, fmt.Errorf("--opensearch-url is required (or DEADAIR_OPENSEARCH_URL)")
@@ -327,6 +348,9 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 	username := o.opensearchUsername
 	password := os.Getenv("DEADAIR_OPENSEARCH_PASSWORD")
 	if o.opensearchPasswordFile != "" {
+		if password != "" {
+			return nil, fmt.Errorf("choose either DEADAIR_OPENSEARCH_PASSWORD or --opensearch-password-file")
+		}
 		filePassword, err := readSecretFile(o.opensearchPasswordFile, "OpenSearch password")
 		if err != nil {
 			return nil, err
@@ -339,6 +363,9 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 
 	key := os.Getenv("DEADAIR_OPENSEARCH_API_KEY")
 	if o.apiKeyFile != "" {
+		if key != "" || os.Getenv("DEADAIR_API_KEY") != "" {
+			return nil, fmt.Errorf("choose either an API key environment variable or --api-key-file")
+		}
 		fileKey, err := readSecretFile(o.apiKeyFile, "api key")
 		if err != nil {
 			return nil, err
@@ -348,8 +375,8 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 	if key == "" && username == "" {
 		key = os.Getenv("DEADAIR_API_KEY")
 	}
-	if key != "" && username != "" {
-		return nil, fmt.Errorf("OpenSearch auth is ambiguous: use either API key auth or username/password, not both")
+	if err := validateOpenSearchAuth(username, password, key); err != nil {
+		return nil, err
 	}
 	if key == "" && username == "" {
 		fmt.Fprintln(stderr, "deadair: warning: no OpenSearch auth (DEADAIR_OPENSEARCH_API_KEY, DEADAIR_API_KEY, --api-key-file, or username/password); connecting unauthenticated")
@@ -518,7 +545,7 @@ func enabledConcreteSources(rules []backendpkg.Rule, g *graph.Graph, inventory [
 	return sources
 }
 
-func freshnessRequests(rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration) []backendpkg.FreshnessRequest {
+func freshnessRequests(rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration, policy *report.Policy) []backendpkg.FreshnessRequest {
 	type clocks struct{ event, ingestion bool }
 	wanted := make(map[string]clocks)
 	for _, rule := range rules {
@@ -549,19 +576,19 @@ func freshnessRequests(rules []backendpkg.Rule, g *graph.Graph, inventory []back
 		case use.ingestion:
 			basis = backendpkg.FreshnessIngestionTime
 		}
-		requests = append(requests, backendpkg.FreshnessRequest{Source: source, Basis: basis, Window: maxStale})
+		requests = append(requests, backendpkg.FreshnessRequest{Source: source, Basis: basis, Window: policy.MaxStaleFor(source.Name, maxStale)})
 	}
 	return requests
 }
 
-func collectFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration) (map[string]backendpkg.FreshnessEvidence, report.RuntimeAssessment, error) {
+func collectFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration, policy *report.Policy) (map[string]backendpkg.FreshnessEvidence, report.RuntimeAssessment, error) {
 	assessment := report.RuntimeAssessment{Name: report.AssessmentSourceFreshness}
 	provider, legacy := c.(backendpkg.FreshnessProvider)
 	requestProvider, ruleAware := c.(backendpkg.FreshnessRequestProvider)
 	if !legacy && !ruleAware {
 		return nil, report.RuntimeAssessment{}, nil
 	}
-	requests := freshnessRequests(rules, g, inventory, maxStale)
+	requests := freshnessRequests(rules, g, inventory, maxStale, policy)
 	if len(requests) == 0 {
 		assessment.Status = backendpkg.EvidenceDisabled
 		assessment.Detail = "no enabled rule resolved to a local source"
@@ -588,16 +615,28 @@ func collectFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules [
 	}
 
 	assessed, unavailable, incomplete := 0, 0, 0
-	for _, source := range sources {
-		item, found := evidence[source.Name]
+	for _, request := range requests {
+		item, found := evidence[request.Source.Name]
 		if !found {
 			incomplete++
 			continue
 		}
-		if item.Status == backendpkg.EvidenceAssessed && item.LastEvent.IsZero() && maxStale > 0 && item.Window < maxStale {
+		if len(item.Clocks) > 0 {
+			for basis, clock := range item.Clocks {
+				if clock.Status == backendpkg.EvidenceAssessed && clock.LastEvent.IsZero() && request.Window > clock.Window {
+					clock.Status = backendpkg.EvidenceIncomplete
+					clock.Detail = "the measured window is shorter than the source freshness threshold"
+					item.Clocks[basis] = clock
+				}
+				if clock.Status != backendpkg.EvidenceAssessed {
+					item.Status = backendpkg.EvidenceIncomplete
+				}
+			}
+			evidence[request.Source.Name] = item
+		} else if item.Status == backendpkg.EvidenceAssessed && item.LastEvent.IsZero() && request.Window > 0 && item.Window < request.Window {
 			item.Status = backendpkg.EvidenceIncomplete
-			item.Detail = fmt.Sprintf("bounded freshness window %s is shorter than max-stale %s", item.Window, maxStale)
-			evidence[source.Name] = item
+			item.Detail = fmt.Sprintf("bounded freshness window %s is shorter than max-stale %s", item.Window, request.Window)
+			evidence[request.Source.Name] = item
 		}
 		switch item.Status {
 		case backendpkg.EvidenceAssessed:
@@ -1006,6 +1045,11 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 	if err != nil {
 		return scanResult{}, err
 	}
+	if o.ruleFile == "" {
+		if err := validateProducers(c, o.policy); err != nil {
+			return scanResult{}, err
+		}
+	}
 	observedVersion := ""
 	if provider, ok := c.(backendpkg.VersionProvider); ok {
 		// Product version is useful report evidence, but a restricted root API
@@ -1052,7 +1096,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 		return scanResult{}, fmt.Errorf("resolving rule inputs: %w", err)
 	}
 	g := graph.BuildResolved(rules, all, resolutions)
-	freshnessEvidence, freshnessAssessment, err := collectFreshnessEvidence(ctx, c, rules, g, all, o.maxStale)
+	freshnessEvidence, freshnessAssessment, err := collectFreshnessEvidence(ctx, c, rules, g, all, o.maxStale, o.policy)
 	if err != nil {
 		return scanResult{}, fmt.Errorf("reading source-freshness evidence: %w", err)
 	}
@@ -1119,6 +1163,13 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 		return scanResult{}, fmt.Errorf("reading backend enrichment evidence: %w", err)
 	}
 	suppressUnused := o.ruleFile != ""
+	var producerEvidence []backendpkg.ProducerEvidence
+	if !suppressUnused {
+		producerEvidence, err = collectProducers(ctx, c, o.policy, rules)
+		if err != nil {
+			return scanResult{}, err
+		}
+	}
 	unusedTelemetryUnavailableDetail := ""
 	if c.Name() == "sentinel" && !suppressUnused {
 		// The v1 unused-telemetry result requires a source document inventory.
@@ -1136,6 +1187,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 		ProvenanceEvidence:               provenanceEvidence,
 		LineageEvidence:                  lineageEvidence,
 		SummaryRuleRunEvidence:           summaryRunEvidence,
+		ProducerEvidence:                 producerEvidence,
 		Assessments:                      runtimeAssessments(o, g, scoped, stateAssess.schema, fieldAssessment, lagAssessment, freshnessAssessment, predicateFreshnessAssessment),
 		SkipUnused:                       suppressUnused,
 		UnusedTelemetryUnavailableDetail: unusedTelemetryUnavailableDetail,
@@ -1162,6 +1214,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 			}(),
 		},
 		Policy: o.policy, Store: store, TargetID: targetID, Instance: instance,
+		SourceURL: o.navigationFor(c).sourceURL, RuleURL: o.navigationFor(c).ruleURL,
 	})
 	return scanResult{
 		report: r, store: store, path: o.stateFile,
@@ -1234,6 +1287,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	ctx, cancelTimeout := context.WithTimeout(ctx, o.timeout*time.Duration(len(insts)))
 	defer cancelTimeout()
 	run := func(inst fleetInstance, io connOpts) (scanResult, error) {
+		if !*jsonOut && interactiveOutput(stdout) && interactiveOutput(stderr) {
+			fmt.Fprintf(stderr, "Scanning %s (read-only)…\n", terminalText(inst.backend.Name()))
+		}
 		sctx, cancel := context.WithTimeout(ctx, io.timeout)
 		defer cancel()
 		return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
@@ -1265,6 +1321,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 				printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
 				return report.ExitError
 			}
+		}
+		if !*jsonOut && !redactionEnabled {
+			printSavedReport(stdout, outFile, false)
 		}
 		if o.ruleFile != "" {
 			return f.CandidateExitCode()
@@ -1314,6 +1373,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	if err := res.commitState(); err != nil {
 		printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
 		return report.ExitError
+	}
+	if !*jsonOut && !redactionEnabled {
+		printSavedReport(stdout, outFile, len(r.SourceImpacts)+len(r.Producers) > 0)
 	}
 	if o.ruleFile != "" {
 		return r.CandidateExitCode()
@@ -1367,71 +1429,37 @@ func printSummary(w io.Writer, r *report.Report) {
 func printPlainSummary(w io.Writer, r *report.Report) {
 	s := r.Summary
 	visibleUnmapped := r.VisibleUnmappedRules()
-	fmt.Fprintf(w, "deadair scan — %s — %s\n", r.Backend, r.GeneratedAt.Format(time.RFC3339))
-	printPlainGateStatus(w, r)
-	counts := map[string]int{}
-	for _, src := range r.Sources {
-		counts[src.Status]++
-	}
-	fmt.Fprintf(w, "sources:    %d (%d ok, %d stale, %d empty, %d unknown, %d maintenance)\n",
-		s.Sources, counts["ok"], counts["stale"], counts["empty"], counts["unknown"], counts["maintenance"])
-	fmt.Fprintf(w, "detections: %d enabled / %d total", s.EnabledRules, s.Rules)
-	if len(visibleUnmapped) > 0 {
-		fmt.Fprintf(w, " (%d not fully assessed)", len(visibleUnmapped))
-	}
-	fmt.Fprintln(w)
-	if len(r.InputResolutions) > 0 {
-		resolution := humanInputResolution(r)
-		fmt.Fprintf(w, "inputs:     %d resolved, %d empty, %d incompatible, %d unsupported, %d unavailable, %d remote, %d ambiguous\n",
-			resolution.Resolved, resolution.Empty, resolution.Incompatible, resolution.Unsupported, resolution.Unavailable,
-			resolution.Remote, resolution.Ambiguous)
-	}
-	if r.Policy != nil {
-		fmt.Fprintf(w, "policy:     %d gated, %d accepted, %d expired\n",
-			s.GatedFindings, r.Policy.AcceptedActive, r.Policy.AcceptedExpired)
-	}
-	if s.VolumeLowSources > 0 {
-		fmt.Fprintf(w, "volume:     %s below same weekday/hour baseline\n", countLabel(s.VolumeLowSources, "source", "sources"))
-	}
-	if s.SchemaDriftSources > 0 {
-		fmt.Fprintf(w, "schema:     %s changed field_caps since previous snapshot\n", countLabel(s.SchemaDriftSources, "source", "sources"))
-	}
-	if checks := unassessedChecks(r); len(checks) > 0 {
-		fmt.Fprintln(w, "checks:")
-		for _, check := range checks {
-			fmt.Fprintf(w, "  %s\n", check)
-		}
-	}
+	printScanHeading(w, r)
 	if len(r.DeadDetections) > 0 {
-		fmt.Fprintf(w, "\n%s\n", color(w, "31;1", fmt.Sprintf("DEAD: %s cannot fire right now", countLabel(s.DeadDetections, "enabled detection", "enabled detections"))))
+		if terminalGateExitCode(r) == report.ExitError {
+			visualHeading(w, "31;1", "Cannot fire", len(r.DeadDetections))
+		}
 		for i, d := range r.DeadDetections {
 			// severity-sorted, so the cut tail is always the least severe
 			if i >= 15 {
 				fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", s.DeadDetections-15)
 				break
 			}
-			fmt.Fprintf(w, "  [%s] %s — %s", d.Severity, d.Name, report.DeadReasonLabel(d.Reason))
-			if len(d.Sources) > 0 {
-				fmt.Fprintf(w, " (%s)", strings.Join(d.Sources, ", "))
-			}
-			fmt.Fprintln(w)
+			printParagraph(w, "  ", fmt.Sprintf("[%s] %s — %s", d.Severity, d.Name, strings.Join(visualDeadEvidence(d), " · ")))
 		}
 	}
 	if len(r.ImpairedDetections) > 0 {
-		verb := "run"
-		if s.ImpairedDetections == 1 {
-			verb = "runs"
+		if terminalFindingHeadline(r) != countLabel(s.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility") {
+			visualHeading(w, "33;1", "Reduced visibility", len(r.ImpairedDetections))
 		}
-		fmt.Fprintf(w, "\n%s\n", color(w, "33;1", fmt.Sprintf("IMPAIRED: %s %s with reduced visibility", countLabel(s.ImpairedDetections, "enabled detection", "enabled detections"), verb)))
 		for i, d := range r.ImpairedDetections {
 			if i >= 15 {
 				fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", s.ImpairedDetections-15)
 				break
 			}
-			fmt.Fprintf(w, "  [%s] %s — %s%s\n", d.Severity, d.Name, strings.Join(impairedReasonLabels(d.Reasons), ", "), impairedDetail(d))
+			printParagraph(w, "  ", fmt.Sprintf("[%s] %s — %s", d.Severity, d.Name, strings.Join(visualImpairmentEvidence(d), " · ")))
 		}
 	}
-	printPlainSourceFindings(w, sourceAttentionItems(r))
+	if len(r.SourceImpacts) > 0 || len(r.Producers) > 0 {
+		printInvestigationSummary(w, r)
+	} else {
+		printPlainSourceFindings(w, sourceAttentionItems(r))
+	}
 	if len(r.PartialInputCoverage) > 0 {
 		verb := "are"
 		if s.PartialInputs == 1 {
@@ -1492,6 +1520,8 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 			fmt.Fprintln(w, ")")
 		}
 	}
+	printScanDetails(w, r)
+	printPlainGateStatus(w, r)
 }
 
 func humanInputResolution(r *report.Report) report.InputResolutionSummary {
@@ -1508,11 +1538,7 @@ func printPlainSourceFindings(w io.Writer, items []sourceAttention) {
 	if len(items) == 0 {
 		return
 	}
-	verb := "need"
-	if len(items) == 1 {
-		verb = "needs"
-	}
-	fmt.Fprintf(w, "\nSOURCE FINDINGS: %s %s attention\n", countLabel(len(items), "source", "sources"), verb)
+	visualHeading(w, "1", "Sources to investigate", 0)
 	for i, item := range items {
 		if i >= 15 {
 			fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", len(items)-i)
@@ -1523,17 +1549,14 @@ func printPlainSourceFindings(w io.Writer, items []sourceAttention) {
 }
 
 func printPlainGateStatus(w io.Writer, r *report.Report) {
+	fmt.Fprintln(w)
 	switch terminalGateExitCode(r) {
 	case report.ExitHealthy:
-		if count := sentinelSignalCount(r); count > 0 {
-			fmt.Fprintf(w, "%s — no gated findings; review %s below\n", color(w, "32;1", "GATE PASSED"), countLabel(count, "Sentinel signal", "Sentinel signals"))
-			return
-		}
-		fmt.Fprintf(w, "%s — no gated findings\n", color(w, "32;1", "GATE PASSED"))
+		fmt.Fprintln(w, "Policy: no findings matched the gate · exit 0")
 	case report.ExitFindings:
-		fmt.Fprintf(w, "%s — one or more findings require attention\n", color(w, "31;1", "GATE FAILED"))
+		fmt.Fprintln(w, "Policy: findings matched the gate · exit 1")
 	default:
-		fmt.Fprintf(w, "%s — the gate could not be evaluated safely\n", color(w, "33;1", "SCAN INCOMPLETE"))
+		fmt.Fprintln(w, "Exit 2 · assessment incomplete; policy result unavailable")
 	}
 }
 
@@ -1543,13 +1566,7 @@ func printPlainSentinelSignals(w io.Writer, r *report.Report) {
 	if len(freshness)+len(summaryRuns) == 0 {
 		return
 	}
-	count := len(freshness) + len(summaryRuns)
-	verb := "need"
-	if count == 1 {
-		verb = "needs"
-	}
-	fmt.Fprintf(w, "\nSENTINEL SIGNALS: %s %s review. Advisory evidence only; gate unchanged.\n",
-		countLabel(count, "signal", "signals"), verb)
+	printSentinelSignalsHeading(w, r, len(freshness)+len(summaryRuns))
 	shown := 0
 	for _, item := range freshness {
 		if shown >= 10 {
@@ -1669,6 +1686,11 @@ func humanMilliseconds(milliseconds int64) string {
 // color wraps s in an ANSI code only when writing to an interactive
 // terminal. Honors NO_COLOR; pipes and CI always get plain text.
 func color(w io.Writer, code, s string) string {
+	// Keep secondary evidence at the terminal's normal contrast. Faint text
+	// can disappear on both light themes and low-contrast dark palettes.
+	if code == "" || code == "2" {
+		return s
+	}
 	f, ok := w.(*os.File)
 	if !ok || os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return s
@@ -1684,24 +1706,6 @@ func color(w io.Writer, code, s string) string {
 		return s
 	}
 	return "\x1b[" + code + "m" + s + "\x1b[0m"
-}
-
-func impairedDetail(d report.ImpairedDetection) string {
-	var parts []string
-	if len(d.MissingFields) > 0 {
-		parts = append(parts, "missing "+strings.Join(d.MissingFields, ", "))
-	}
-	if len(d.LagSources) > 0 {
-		parts = append(parts, fmt.Sprintf("p95 ingest delay %s (max %s) exceeds the rule's lookback margin in %s",
-			humanDuration(d.P95LagSeconds), humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
-	}
-	if len(d.IncompatibleSources) > 0 {
-		parts = append(parts, incompatibleSourceDetail(d.IncompatibleSources))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return " (" + strings.Join(parts, "; ") + ")"
 }
 
 func impairedReasonLabels(reasons []string) []string {
@@ -1815,20 +1819,14 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 	}
 	for _, finding := range d.NewFindings {
 		switch finding.Class {
-		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput, report.FindingProducerStale, report.FindingSummaryPipeline:
+			name := findingSubject(finding)
 			fmt.Fprintf(w, "FINDING  %s — %s (%s)\n", name,
 				report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 		}
 	}
 	for _, finding := range d.NewlyGatedFindings {
-		name := finding.Source
-		if name == "" {
-			name = finding.RuleName
-		}
+		name := findingSubject(finding)
 		fmt.Fprintf(w, "NEW GATE %s — %s (%s)\n", name,
 			report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 	}
@@ -1843,20 +1841,14 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 	}
 	for _, finding := range d.RecoveredFindings {
 		switch finding.Class {
-		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput, report.FindingProducerStale, report.FindingSummaryPipeline:
+			name := findingSubject(finding)
 			fmt.Fprintf(w, "recovered finding: %s — %s (%s)\n", name,
 				report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 		}
 	}
 	for _, finding := range d.NoLongerGated {
-		name := finding.Source
-		if name == "" {
-			name = finding.RuleName
-		}
+		name := findingSubject(finding)
 		fmt.Fprintf(w, "no longer gated: %s — %s (%s)\n", name,
 			report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 	}
@@ -1959,6 +1951,10 @@ func runServe(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "deadair: serve does not accept positional arguments: %q\n", fs.Arg(0))
 		return report.ExitError
 	}
+	if *interval <= 0 {
+		fmt.Fprintln(stderr, "deadair: --interval must be greater than zero")
+		return report.ExitError
+	}
 	if err := validateScanOptions(o, ""); err != nil {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
@@ -1986,56 +1982,84 @@ func runServe(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "deadair: warning: exporter bound beyond loopback — metric labels enumerate your log sources; put an authenticated proxy (mTLS/reverse proxy) in front")
 	}
 
+	listener, err := net.Listen("tcp", *bind)
+	if err != nil {
+		fmt.Fprintf(stderr, "deadair: cannot listen on %s: %v\n", *bind, err)
+		return report.ExitError
+	}
+	defer listener.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	srv := &exporter.Server{}
-	httpSrv := &http.Server{Addr: *bind, Handler: srv.Handler()}
-
-	go func() {
-		scan := func() {
-			run := func(inst fleetInstance, io connOpts) (scanResult, error) {
-				sctx, cancel := context.WithTimeout(ctx, io.timeout)
-				defer cancel()
-				return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
-			}
-			f, commits := scanFleet(insts, o, run)
-			if redactionEnabled {
-				f.RedactWith(redactor)
-			}
-			for _, e := range f.Errors {
-				fmt.Fprintf(stderr, "deadair: scan failed (%s): %s\n", e.Instance, e.Error)
-			}
-			srv.Update(f)
-			for _, c := range commits {
-				if err := c.commitState(); err != nil {
-					printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
-				}
+	scan := func(ctx context.Context) {
+		run := func(inst fleetInstance, io connOpts) (scanResult, error) {
+			sctx, cancel := context.WithTimeout(ctx, io.timeout)
+			defer cancel()
+			return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
+		}
+		f, commits := scanFleet(insts, o, run)
+		if ctx.Err() != nil {
+			return
+		}
+		if redactionEnabled {
+			f.RedactWith(redactor)
+		}
+		for _, e := range f.Errors {
+			fmt.Fprintf(stderr, "deadair: scan failed (%s): %s\n", e.Instance, e.Error)
+		}
+		srv.Update(f)
+		for _, c := range commits {
+			if err := c.commitState(); err != nil {
+				printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
 			}
 		}
-		scan()
-		t := time.NewTicker(*interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				scan()
-			}
-		}
-	}()
-	go func() {
-		<-ctx.Done()
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(sctx)
-	}()
-
-	fmt.Fprintf(stderr, "deadair: serving metrics on http://%s/metrics (scan interval %s)\n", *bind, *interval)
-	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	}
+	fmt.Fprintf(stderr, "deadair: serving metrics on http://%s/metrics (scan interval %s)\n", listener.Addr(), *interval)
+	if err := serveMetrics(ctx, listener, *interval, srv.Handler(), scan); err != nil {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
 	}
 	return 0
+}
+
+func serveMetrics(parent context.Context, listener net.Listener, interval time.Duration, handler http.Handler, scan func(context.Context)) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	httpSrv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			scan(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-ctx.Done()
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			_ = httpSrv.Close()
+		}
+	}()
+	err := httpSrv.Serve(listener)
+	cancel()
+	<-workerDone
+	<-shutdownDone
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
 }

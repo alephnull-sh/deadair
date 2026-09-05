@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -27,6 +28,82 @@ type sentinelReportProbe struct {
 	ruleReads          int
 	candidateReads     int
 	candidateData      string
+}
+
+type policyFreshnessProbe struct {
+	sentinelReportProbe
+	requests []backendpkg.FreshnessRequest
+}
+
+func (p *policyFreshnessProbe) FreshnessEvidenceFor(ctx context.Context, requests []backendpkg.FreshnessRequest) (map[string]backendpkg.FreshnessEvidence, error) {
+	p.requests = append([]backendpkg.FreshnessRequest(nil), requests...)
+	sources := make([]backendpkg.Source, 0, len(requests))
+	for _, request := range requests {
+		sources = append(sources, request.Source)
+	}
+	return p.FreshnessEvidence(ctx, sources)
+}
+
+func TestSentinelSourcePolicyControlsFreshnessCompleteness(t *testing.T) {
+	for _, ruleAware := range []bool{false, true} {
+		for _, tc := range []struct {
+			name       string
+			global     time.Duration
+			threshold  string
+			lastEvent  time.Time
+			wantSource string
+			wantStatus backendpkg.EvidenceStatus
+			wantExit   int
+		}{
+			{"shorter source threshold", 48 * time.Hour, "1h", time.Time{}, "stale", backendpkg.EvidenceAssessed, report.ExitFindings},
+			{"threshold beyond evidence", 30 * time.Minute, "48h", time.Time{}, "unknown", backendpkg.EvidenceIncomplete, report.ExitError},
+			{"threshold equals evidence", 30 * time.Minute, "24h", time.Time{}, "stale", backendpkg.EvidenceAssessed, report.ExitFindings},
+			{"recent event with longer threshold", time.Hour, "48h", time.Now().UTC().Add(-time.Minute), "ok", backendpkg.EvidenceAssessed, report.ExitHealthy},
+		} {
+			t.Run(fmt.Sprintf("rule-aware=%t/%s", ruleAware, tc.name), func(t *testing.T) {
+				dir := t.TempDir()
+				policyPath, candidatePath := filepath.Join(dir, "policy.json"), filepath.Join(dir, "candidate.json")
+				policy := fmt.Sprintf(`{"version":1,"gate_classes":["dead-detection"],"sources":[{"pattern":"Security*","max_stale":%q}]}`, tc.threshold)
+				if err := os.WriteFile(policyPath, []byte(policy), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(candidatePath, []byte(`{"name":"candidate"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				probe := &policyFreshnessProbe{sentinelReportProbe: sentinelReportProbe{freshness: backendpkg.FreshnessEvidence{
+					Status: backendpkg.EvidenceAssessed, Method: "bounded-max-event-time",
+					ObservedAt: time.Now().UTC(), Window: 24 * time.Hour, LastEvent: tc.lastEvent,
+				}}}
+				var scanner backendpkg.Backend = &probe.sentinelReportProbe
+				if ruleAware {
+					scanner = probe
+				}
+				result, err := scanOnce(context.Background(), scanner, connOpts{maxStale: tc.global, policyFile: policyPath, ruleFile: candidatePath}, "prod", "target-sentinel")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ruleAware {
+					threshold, _ := time.ParseDuration(tc.threshold)
+					if len(probe.requests) != 1 || probe.requests[0].Window != threshold {
+						t.Errorf("freshness requests = %+v, want source threshold %s", probe.requests, threshold)
+					}
+				}
+				r := result.report
+				if len(r.Sources) != 1 || r.Sources[0].Status != tc.wantSource || r.CandidateExitCode() != tc.wantExit {
+					t.Errorf("sources=%+v candidate exit=%d; want %s, exit %d", r.Sources, r.CandidateExitCode(), tc.wantSource, tc.wantExit)
+				}
+				for _, assessment := range r.Assessments {
+					if assessment.Name == report.AssessmentSourceFreshness {
+						if assessment.Status != tc.wantStatus {
+							t.Errorf("freshness assessment=%+v, want %s", assessment, tc.wantStatus)
+						}
+						return
+					}
+				}
+				t.Fatal("source freshness assessment missing")
+			})
+		}
+	}
 }
 
 func (*sentinelReportProbe) Name() string { return "sentinel" }

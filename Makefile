@@ -130,6 +130,8 @@ record-sentinel-lab: build
 	@test -n "$(DEADAIR_AZURE_RESOURCE_GROUP)" || (echo "DEADAIR_AZURE_RESOURCE_GROUP is required" >&2; exit 1)
 	@test -n "$(DEADAIR_SENTINEL_WORKSPACE)" || (echo "DEADAIR_SENTINEL_WORKSPACE is required" >&2; exit 1)
 	@test "$(DEADAIR_SENTINEL_CAPTURE_CONFIRM)" = "record-disposable-sentinel:$(DEADAIR_SENTINEL_WORKSPACE)" || (echo "Set DEADAIR_SENTINEL_CAPTURE_CONFIRM=record-disposable-sentinel:$(DEADAIR_SENTINEL_WORKSPACE) to confirm this is a disposable lab" >&2; exit 1)
+	@test -n "$(DEADAIR_SENTINEL_CAPTURE_REPORT_DIR)" || (echo "Set DEADAIR_SENTINEL_CAPTURE_REPORT_DIR to the directory containing the live producer reports" >&2; exit 1)
+	@test -f "$(DEADAIR_SENTINEL_CAPTURE_REPORT_DIR)/producer-failed.json" && test -f "$(DEADAIR_SENTINEL_CAPTURE_REPORT_DIR)/producer-recovered.json"
 	DEADAIR_BACKEND=sentinel \
 	AZURE_TOKEN_CREDENTIALS="$${AZURE_TOKEN_CREDENTIALS:-AzureCLICredential}" \
 	vhs docs/assets/sentinel-lab.tape

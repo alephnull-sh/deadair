@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -95,7 +97,7 @@ func TestCollectFreshnessEvidenceUsesDedupedEnabledConcreteSources(t *testing.T)
 	probe := &freshnessProbeBackend{freshness: map[string]backend.FreshnessEvidence{
 		"SecurityEvent": {Status: backend.EvidenceAssessed, LastEvent: time.Now().UTC()},
 	}}
-	evidence, assessment, err := collectFreshnessEvidence(context.Background(), probe, rules, g, sources, time.Hour)
+	evidence, assessment, err := collectFreshnessEvidence(context.Background(), probe, rules, g, sources, time.Hour, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,10 +123,13 @@ func TestFreshnessRequestsKeepScheduledAndNRTClocksSeparate(t *testing.T) {
 		{RuleID: "shared-scheduled", Status: backend.ResolutionResolved, ResolvedSources: []string{"Shared"}},
 		{RuleID: "shared-nrt", Status: backend.ResolutionResolved, ResolvedSources: []string{"Shared"}},
 	}
-	requests := freshnessRequests(rules, graph.BuildResolved(rules, sources, resolutions), sources, 30*time.Minute)
+	requests := freshnessRequests(rules, graph.BuildResolved(rules, sources, resolutions), sources, 30*time.Minute, nil)
 	got := map[string]backend.FreshnessBasis{}
 	for _, request := range requests {
 		got[request.Source.Name] = request.Basis
+		if request.Window != 30*time.Minute {
+			t.Errorf("freshness threshold=%s, want the global default", request.Window)
+		}
 	}
 	want := map[string]backend.FreshnessBasis{
 		"ScheduledOnly": backend.FreshnessEventTime,
@@ -143,12 +148,54 @@ func TestCollectFreshnessMarksShortEmptyWindowIncomplete(t *testing.T) {
 	probe := &freshnessProbeBackend{freshness: map[string]backend.FreshnessEvidence{
 		"SecurityEvent": {Status: backend.EvidenceAssessed, Window: 24 * time.Hour},
 	}}
-	evidence, assessment, err := collectFreshnessEvidence(context.Background(), probe, rules, g, sources, 48*time.Hour)
+	evidence, assessment, err := collectFreshnessEvidence(context.Background(), probe, rules, g, sources, 48*time.Hour, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if assessment.Status != backend.EvidenceIncomplete || evidence["SecurityEvent"].Status != backend.EvidenceIncomplete {
 		t.Fatalf("freshness evidence/assessment = %+v / %+v, want incomplete", evidence, assessment)
+	}
+}
+
+func TestCollectFreshnessKeepsSourceThresholdsSeparate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"gate_classes":["dead-detection"],"sources":[
+		{"pattern":"Security*","max_stale":"1h"},
+		{"pattern":"SigninLogs","max_stale":"48h"}
+	]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := report.LoadPolicy(path, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := []backend.Source{{Name: "SecurityEvent"}, {Name: "SigninLogs"}, {Name: "Heartbeat"}}
+	var rules []backend.Rule
+	probe := &freshnessProbeBackend{freshness: make(map[string]backend.FreshnessEvidence)}
+	for _, source := range sources {
+		rules = append(rules, backend.Rule{ID: source.Name, Enabled: true, Patterns: []string{source.Name}})
+		probe.freshness[source.Name] = backend.FreshnessEvidence{Status: backend.EvidenceAssessed, Window: 24 * time.Hour, ObservedAt: time.Now().UTC()}
+	}
+	g := graph.Build(rules, sources)
+	requests := freshnessRequests(rules, g, sources, 2*time.Hour, policy)
+	wantWindows := map[string]time.Duration{"SecurityEvent": time.Hour, "SigninLogs": 48 * time.Hour, "Heartbeat": 2 * time.Hour}
+	for _, request := range requests {
+		if request.Window != wantWindows[request.Source.Name] {
+			t.Errorf("%s threshold=%s, want %s", request.Source.Name, request.Window, wantWindows[request.Source.Name])
+		}
+	}
+	evidence, assessment, err := collectFreshnessEvidence(context.Background(), probe, rules, g, sources, 2*time.Hour, policy)
+	if err != nil || assessment.Status != backend.EvidenceIncomplete {
+		t.Fatalf("assessment=%+v error=%v", assessment, err)
+	}
+	for _, source := range sources {
+		want := backend.EvidenceAssessed
+		if source.Name == "SigninLogs" {
+			want = backend.EvidenceIncomplete
+		}
+		if evidence[source.Name].Status != want {
+			t.Errorf("%s evidence=%+v, want %s", source.Name, evidence[source.Name], want)
+		}
 	}
 }
 

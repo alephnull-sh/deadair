@@ -15,6 +15,20 @@ func esqlSourcePatterns(query string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	commands, err := splitESQLCommands(query)
+	if err != nil {
+		return nil, err
+	}
+	for _, command := range commands[1:] {
+		name := strings.ToUpper(strings.Fields(command)[0])
+		switch name {
+		case "WHERE", "EVAL", "KEEP", "DROP", "RENAME", "STATS", "SORT", "LIMIT", "MV_EXPAND", "DISSECT", "GROK", "SAMPLE", "CHANGE_POINT":
+			// These commands transform the input without adding another source.
+		default:
+			return nil, fmt.Errorf("ES|QL %s dependencies are not assessed", name)
+		}
+	}
+	query = commands[0]
 	if !hasKeywordPrefix(query, "FROM") {
 		return nil, fmt.Errorf("ES|QL query does not start with a direct FROM command")
 	}
@@ -23,14 +37,7 @@ func esqlSourcePatterns(query string) ([]string, error) {
 	if rest == "" {
 		return nil, fmt.Errorf("ES|QL FROM command has no source expression")
 	}
-	end, err := esqlCommandEnd(rest)
-	if err != nil {
-		return nil, err
-	}
-	clause := strings.TrimSpace(rest[:end])
-	if clause == "" {
-		return nil, fmt.Errorf("ES|QL FROM command has no source expression")
-	}
+	clause := rest
 	if strings.ContainsAny(clause, "()") {
 		return nil, fmt.Errorf("ES|QL FROM subqueries are not supported")
 	}
@@ -108,26 +115,95 @@ func hasKeywordPrefix(s, keyword string) bool {
 	return len(s) == len(keyword) || unicode.IsSpace(rune(s[len(keyword)]))
 }
 
-func esqlCommandEnd(s string) (int, error) {
-	quoted := false
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '`':
-			if quoted && i+1 < len(s) && s[i+1] == '`' {
+// splitESQLCommands removes comments and splits pipes outside quoted text.
+// Inspect every command so a later lookup or branch cannot hide an input.
+func splitESQLCommands(query string) ([]string, error) {
+	var commands []string
+	var command strings.Builder
+	flush := func() error {
+		text := strings.TrimSpace(command.String())
+		if text == "" {
+			return fmt.Errorf("ES|QL pipeline contains an empty command")
+		}
+		commands = append(commands, text)
+		command.Reset()
+		return nil
+	}
+	for i := 0; i < len(query); {
+		switch {
+		case strings.HasPrefix(query[i:], "//"):
+			end := strings.IndexByte(query[i:], '\n')
+			if end < 0 {
+				i = len(query)
+			} else {
+				i += end + 1
+			}
+			command.WriteByte(' ')
+		case strings.HasPrefix(query[i:], "/*"):
+			end := strings.Index(query[i+2:], "*/")
+			if end < 0 {
+				return nil, fmt.Errorf("ES|QL query contains an unterminated comment")
+			}
+			i += end + 4
+			command.WriteByte(' ')
+		case query[i] == '"' || query[i] == '`' || query[i] == '\'':
+			start, quote := i, query[i]
+			if strings.HasPrefix(query[i:], `"""`) {
+				end := strings.Index(query[i+3:], `"""`)
+				if end < 0 {
+					return nil, fmt.Errorf("ES|QL query contains an unterminated string")
+				}
+				i += end + 6
+			} else {
 				i++
-				continue
+				closed := false
+				for i < len(query) {
+					if quote != '`' && query[i] == '\\' && i+1 < len(query) {
+						i += 2
+						continue
+					}
+					if query[i] == quote {
+						if quote == '`' && i+1 < len(query) && query[i+1] == '`' {
+							i += 2
+							continue
+						}
+						i++
+						closed = true
+						break
+					}
+					i++
+				}
+				if !closed {
+					return nil, fmt.Errorf("ES|QL query contains unterminated quoted text")
+				}
 			}
-			quoted = !quoted
-		case '|':
-			if !quoted {
-				return i, nil
+			command.WriteString(query[start:i])
+		case query[i] == '|':
+			if err := flush(); err != nil {
+				return nil, err
 			}
+			i++
+		case query[i] == '(':
+			rest, err := trimESQLLeadingComments(query[i+1:])
+			if err != nil {
+				return nil, err
+			}
+			for _, sourceCommand := range []string{"FROM", "ROW", "TS", "METRICS"} {
+				if hasKeywordPrefix(rest, sourceCommand) {
+					return nil, fmt.Errorf("ES|QL subquery dependencies are not assessed")
+				}
+			}
+			command.WriteByte(query[i])
+			i++
+		default:
+			command.WriteByte(query[i])
+			i++
 		}
 	}
-	if quoted {
-		return 0, fmt.Errorf("ES|QL FROM command contains an unterminated quoted source")
+	if err := flush(); err != nil {
+		return nil, err
 	}
-	return len(s), nil
+	return commands, nil
 }
 
 func esqlKeywordIndex(s, keyword string) int {

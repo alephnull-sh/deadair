@@ -209,6 +209,60 @@ func TestParseRuleFileESQLSources(t *testing.T) {
 	}
 }
 
+func TestIndicatorMatchDoesNotAssessOnlyEventIndices(t *testing.T) {
+	for _, data := range []string{
+		`{"rule_id":"ioc","type":"threat_match","index":["firewall-*"],"threat_index":["indicators-*"]}`,
+		`{"rule_id":"ioc","type":"threat_match","index":["firewall-*"]}`,
+	} {
+		rules, err := ParseRuleFile([]byte(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rules[0].InputStatus != backend.ResolutionUnsupported || !strings.Contains(rules[0].InputDetail, "indicator") {
+			t.Fatalf("indicator dependency was ignored: %+v", rules[0])
+		}
+		client := &Client{ESURL: "http://unused.invalid"}
+		resolutions, err := client.ResolveInputs(context.Background(), rules)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resolutions) != 1 || resolutions[0].Status != backend.ResolutionUnsupported {
+			t.Fatalf("partial indicator rule was resolved: %+v", resolutions)
+		}
+	}
+}
+
+func TestFutureDataStreamMaximumFallsBackToBoundedSearch(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		if !strings.Contains(string(body), `"lte":"now+300s"`) {
+			t.Errorf("missing future bound: %s", body)
+		}
+		if strings.Contains(r.URL.Path, "only-future") {
+			fmt.Fprint(w, `{"aggregations":{"latest":{"value":null}}}`)
+			return
+		}
+		fmt.Fprintf(w, `{"aggregations":{"latest":{"value":%d}}}`, now.Add(-48*time.Hour).UnixMilli())
+	}))
+	defer server.Close()
+	client := &Client{ESURL: server.URL, HTTP: server.Client(), Concurrency: 1}
+	sources := []backend.Source{
+		{Name: "mixed", Docs: 2, LastEvent: now.Add(24 * time.Hour)},
+		{Name: "only-future", Docs: 1, LastEvent: now.Add(24 * time.Hour)},
+		{Name: "current", Docs: 1, LastEvent: now},
+	}
+	client.fillFreshness(context.Background(), sources)
+	if calls != 2 || !sources[0].LastEvent.Equal(now.Add(-48*time.Hour)) || !sources[1].LastEvent.IsZero() || !sources[2].LastEvent.Equal(now) {
+		t.Fatalf("future maximum was trusted: calls=%d sources=%+v", calls, sources)
+	}
+}
+
 func TestESQLUnsupportedSourceProvenance(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -218,6 +272,8 @@ func TestESQLUnsupportedSourceProvenance(t *testing.T) {
 		{name: "subquery", query: "FROM (FROM logs-* | LIMIT 1) | LIMIT 10"},
 		{name: "dynamic", query: "FROM ?source | LIMIT 10"},
 		{name: "invalid", query: "FROM logs-*, | LIMIT 10"},
+		{name: "lookup", query: "FROM logs-* | LOOKUP JOIN indicators ON source.ip"},
+		{name: "enrich", query: "FROM logs-* | ENRICH geoip ON source.ip"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
