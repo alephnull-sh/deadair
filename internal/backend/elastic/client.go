@@ -195,6 +195,10 @@ func (d ruleJSON) toRule() backend.Rule {
 			r.InputDetail = fmt.Sprintf("%s rule does not expose a supported index selector", d.Type)
 		}
 	}
+	if strings.EqualFold(d.Type, "threat_match") {
+		r.InputStatus = backend.ResolutionUnsupported
+		r.InputDetail = "indicator-match rules require threat-index evidence that is not assessed"
+	}
 	for _, f := range d.RequiredFields {
 		if f.Name != "" {
 			r.RequiredFields = append(r.RequiredFields, f.Name)
@@ -944,6 +948,10 @@ func (c *Client) fillFreshness(ctx context.Context, sources []backend.Source) {
 	sem := make(chan struct{}, c.concurrency())
 	var wg sync.WaitGroup
 	for i := range sources {
+		if sources[i].LastEvent.After(time.Now().Add(backend.FreshnessClockSkew)) {
+			// An unbounded data-stream maximum must not hide older valid events.
+			sources[i].LastEvent = time.Time{}
+		}
 		if !sources[i].LastEvent.IsZero() || sources[i].Docs == 0 {
 			continue
 		}
@@ -961,7 +969,7 @@ func (c *Client) fillFreshness(ctx context.Context, sources []backend.Source) {
 }
 
 func (c *Client) maxTimestamp(ctx context.Context, index string) (time.Time, error) {
-	body := strings.NewReader(`{"size":0,"track_total_hits":false,"aggs":{"latest":{"max":{"field":"@timestamp"}}}}`)
+	body := strings.NewReader(fmt.Sprintf(`{"size":0,"track_total_hits":false,"query":{"range":{"@timestamp":{"lte":"now+%ds"}}},"aggs":{"latest":{"max":{"field":"@timestamp"}}}}`, int(backend.FreshnessClockSkew/time.Second)))
 	var out struct {
 		Aggregations struct {
 			Latest struct {
@@ -976,7 +984,11 @@ func (c *Client) maxTimestamp(ctx context.Context, index string) (time.Time, err
 	if out.Aggregations.Latest.Value == nil {
 		return time.Time{}, nil
 	}
-	return time.UnixMilli(int64(*out.Aggregations.Latest.Value)), nil
+	stamp := time.UnixMilli(int64(*out.Aggregations.Latest.Value))
+	if stamp.After(time.Now().Add(backend.FreshnessClockSkew)) {
+		return time.Time{}, fmt.Errorf("freshness result exceeded the clock-skew limit")
+	}
+	return stamp, nil
 }
 
 type fieldCapability struct {

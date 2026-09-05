@@ -68,7 +68,7 @@ type summaryRuleRunRow struct {
 
 // SummaryRuleRunEvidence reads the latest bounded completed LASummaryLogs record for
 // each summary rule whose output is consumed by an enabled detection. Native
-// execution failures remain informational evidence and never create a finding.
+// execution evidence is assessed and gated by the report policy.
 func (c *Client) SummaryRuleRunEvidence(ctx context.Context, detections []backend.Rule) ([]backend.SummaryRuleRunEvidence, error) {
 	consumedTables := enabledDetectionTables(detections)
 	if len(consumedTables) == 0 {
@@ -208,6 +208,7 @@ func (c *Client) SummaryRuleRunEvidence(ctx context.Context, detections []backen
 			evidence[index].Error = normalizeSummaryRuleError(row.Message)
 			evidence[index].Detail = "latest completed native summary-rule execution observed"
 			if strings.EqualFold(row.Status, "Succeeded") && summaryRunIsOverdue(relevant[index], observedAt, row.RunAt) {
+				evidence[index].Overdue = true
 				evidence[index].Status = backend.EvidenceIncomplete
 				evidence[index].Detail = "latest successful summary-rule execution is older than the configured schedule plus the documented 8-hour retry allowance"
 			}

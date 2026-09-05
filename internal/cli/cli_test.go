@@ -157,6 +157,45 @@ func TestScanEndToEnd(t *testing.T) {
 	}
 }
 
+func TestScanSavedReportHint(t *testing.T) {
+	srv := fixtureServer(t)
+	defer srv.Close()
+	t.Setenv("DEADAIR_API_KEY", "testkey")
+	t.Setenv("DEADAIR_REDACT_KEY_FILE", "")
+	for _, mode := range []string{"human", "json", "redacted", "no-file"} {
+		t.Run(mode, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "saved-report.json")
+			args := []string{"scan", "--es-url", srv.URL, "--kibana-url", srv.URL}
+			if mode != "no-file" {
+				args = append(args, "--json-out", path)
+			}
+			if mode == "json" {
+				args = append(args, "--json")
+			} else if mode == "redacted" {
+				args = append(args, "--redact")
+			}
+			var out, errors bytes.Buffer
+			if code := cli.Run(args, &out, &errors); code != report.ExitFindings {
+				t.Fatalf("exit %d: %s", code, errors.String())
+			}
+			if mode == "human" {
+				if !strings.Contains(out.String(), path) {
+					t.Fatal("saved report filename missing")
+				}
+				var inspectOut bytes.Buffer
+				if code := cli.Run([]string{"inspect", "--", path}, &inspectOut, &errors); code != 0 {
+					t.Fatalf("suggested inspection failed: %d, %s", code, errors.String())
+				}
+			} else if strings.Contains(out.String(), "Inspect:") || strings.Contains(out.String(), "Saved JSON:") {
+				t.Fatal("unexpected saved report hint")
+			}
+			if mode == "json" && !json.Valid(out.Bytes()) {
+				t.Fatal("human text in JSON output")
+			}
+		})
+	}
+}
+
 func TestScanRedacted(t *testing.T) {
 	srv := fixtureServer(t)
 	defer srv.Close()
@@ -985,7 +1024,7 @@ func TestBareInvocationShowsHelp(t *testing.T) {
 }
 
 func TestCommandHelpIsSuccessfulAndFocused(t *testing.T) {
-	for _, command := range []string{"scan", "check", "diff", "serve", "tune", "setup"} {
+	for _, command := range []string{"scan", "check", "diff", "inspect", "serve", "tune", "setup"} {
 		t.Run(command, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			if code := cli.Run([]string{command, "-h"}, &stdout, &stderr); code != report.ExitHealthy {

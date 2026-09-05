@@ -1,8 +1,13 @@
 # Contributing
 
-Pull requests are welcome. Open an issue first for a new backend or a change to the report
-contract, permissions, or command behavior. Small bug fixes and tests can go straight to a pull
-request.
+Please open an issue to report a bug, suggest a change, or share a small reproduction. Include the
+deadair version, backend version, what you expected, and what happened. Remove credentials and
+customer data before posting.
+
+Maintainers write and merge code changes. We don't accept external pull requests; use an issue to
+discuss the problem or proposed approach instead.
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## Local validation
 

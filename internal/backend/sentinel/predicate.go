@@ -20,10 +20,13 @@ const (
 )
 
 var predicateFreshnessFields = map[string]struct{}{
-	"DeviceProduct": {},
-	"DeviceVendor":  {},
-	"EventID":       {},
-	"OperationName": {},
+	"DeviceProduct":      {},
+	"DeviceVendor":       {},
+	"DeviceName":         {},
+	"DeviceAction":       {},
+	"DeviceEventClassID": {},
+	"EventID":            {},
+	"OperationName":      {},
 }
 
 var _ backend.RulePredicateFreshnessProvider = (*Client)(nil)
@@ -394,11 +397,11 @@ func (c *Client) preparePredicateFreshness(ctx context.Context, catalog map[stri
 		item.Freshness.Detail = "table name cannot be represented safely in KQL"
 		return item, "", target
 	}
-	query := fmt.Sprintf("%s | where TimeGenerated >= ago(%dh) | where %s | summarize LastEvent=max(TimeGenerated)",
-		target.queryReference, int(freshnessWindow/time.Hour), selector.Expression)
+	query := fmt.Sprintf("%s | where TimeGenerated >= ago(%dh) and TimeGenerated <= now() + %ds | where %s | summarize LastEvent=max(TimeGenerated)",
+		target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessClockSkew/time.Second), selector.Expression)
 	if request.Basis == backend.FreshnessIngestionTime {
-		query = fmt.Sprintf("%s | extend IngestionTime=ingestion_time() | where IngestionTime >= ago(%dh) | where %s | summarize LastEvent=max(IngestionTime)",
-			target.queryReference, int(freshnessWindow/time.Hour), selector.Expression)
+		query = fmt.Sprintf("%s | extend IngestionTime=ingestion_time() | where IngestionTime >= ago(%dh) and IngestionTime <= now() + %ds | where %s | summarize LastEvent=max(IngestionTime)",
+			target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessClockSkew/time.Second), selector.Expression)
 	}
 	return item, query, target
 }

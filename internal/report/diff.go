@@ -69,6 +69,14 @@ func ValidateComparable(older, newer *Report) error {
 		!slices.Equal(oldScope.CandidateRuleIDs, newScope.CandidateRuleIDs) {
 		return fmt.Errorf("scan scopes differ or are missing")
 	}
+	if newScope.Mode == "candidate" {
+		if older.CandidateExitCode() == ExitError {
+			return fmt.Errorf("older candidate report has incomplete assessment; rerun the candidate scan before comparing")
+		}
+		if newer.CandidateExitCode() == ExitError {
+			return fmt.Errorf("newer candidate report has incomplete assessment; rerun the candidate scan before comparing")
+		}
+	}
 	return nil
 }
 

@@ -10,6 +10,11 @@ binary=${DEADAIR_SCAN_LAB_BINARY:?set DEADAIR_SCAN_LAB_BINARY}
 
 umask 077
 mkdir -p "$out_dir"
+out_dir=$(cd "$out_dir" && pwd)
+case "$binary" in
+	/*) ;;
+	*) binary="$PWD/$binary" ;;
+esac
 rm -f \
 	"$out_dir/capture-state.json" \
 	"$out_dir/examples-state.json"
@@ -102,12 +107,15 @@ DEADAIR_API_KEY=$(cat "$out_dir/api-key")
 "$binary" check >"$out_dir/check.txt"
 
 status=0
-"$binary" scan \
-	--schema \
-	--state-file "$out_dir/examples-state.json" \
-	--json-out "$examples_dir/sample-report.json" \
-	--html-out "$examples_dir/sample-report.html" \
-	>"$examples_dir/sample-scan.txt" || status=$?
+(
+	cd "$examples_dir" || exit 2
+	"$binary" scan \
+		--schema \
+		--state-file "$out_dir/examples-state.json" \
+		--json-out sample-report.json \
+		--html-out sample-report.html \
+		>sample-scan.txt
+) || status=$?
 if [ "$status" -ne 1 ]; then
 	echo "lab scan returned $status, expected findings exit 1" >&2
 	exit 1

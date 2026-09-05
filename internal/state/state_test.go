@@ -4,11 +4,56 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/alephnull-sh/deadair/internal/backend"
 )
+
+func TestLoadRejectsUnsupportedStateBeforeDecoding(t *testing.T) {
+	for _, data := range []string{
+		`{"version":2,"sources":[]}`, `{"version":-1}`, `{"version":1.5}`,
+		`{"version":"1"}`, `{"version":null}`, `null`, `[]`, `1`, `{} {}`,
+		`{"Version":2}`, `{"version":2,"version":1}`, `{"version":1,"VERSION":2}`,
+	} {
+		t.Run(data, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("invalid state accepted")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != data {
+				t.Fatalf("state changed: %s %v", got, err)
+			}
+		})
+	}
+	for _, data := range []string{`{}`, `{"version":0}`, `{"version":1}`} {
+		path := filepath.Join(t.TempDir(), "state.json")
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Load(path)
+		if err != nil || got.Version != Version || got.Sources == nil || got.Findings == nil {
+			t.Fatalf("valid migration rejected: %+v %v", got, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"version":2,"sources":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unsupported state version 2") {
+		t.Fatalf("version was not checked first: %v", err)
+	}
+	store := New()
+	store.Version = 2
+	if err := store.Save(path); err == nil {
+		t.Fatal("saved unsupported state")
+	}
+}
 
 func TestAssessVolumesWarmupAndHysteresis(t *testing.T) {
 	now := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)

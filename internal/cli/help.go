@@ -123,10 +123,30 @@ func diffUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage: deadair diff [--json] OLD_REPORT NEW_REPORT
 
 Compare two JSON reports. Exit 1 means the newer report contains regressions.
+Exit 2 means the reports cannot be compared, including incomplete candidate scans.
 
   --json  print the diff as JSON
 
 Guide: `+usageGuideURL+`#gate-detection-changes`)
+}
+
+func inspectUsage(w io.Writer) {
+	fmt.Fprintln(w, `Usage: deadair inspect [options] REPORT
+
+Investigate a source or expected producer in a saved JSON report.
+This command does not contact the SIEM. Omit the filters to show all records.
+
+Options:
+  --source NAME    exact source name to investigate
+  --producer ID    expected producer to investigate; cannot combine with --source
+  --instance NAME  select an instance in a fleet report
+  --links          include native SIEM and runbook links
+
+Examples:
+  deadair inspect --source CommonSecurityLog report.json
+  deadair inspect --producer london-edge report.json
+
+Guide: https://github.com/alephnull-sh/deadair/blob/main/docs/investigate.md`)
 }
 
 func tuneUsage(w io.Writer) {

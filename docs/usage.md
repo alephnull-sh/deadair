@@ -29,6 +29,10 @@ deadair scan
 `check` verifies the connection, required privileges, and optional capabilities such as schema
 visibility. `scan` prints the terminal report.
 
+Freshness checks allow up to five minutes of clock skew. Later timestamps are excluded so they
+cannot hide older events. If no usable timestamp remains, freshness is unknown unless a bounded
+query proves there were no recent events.
+
 ![deadair check reporting READY against a disposable Elastic lab](assets/check-lab.png)
 
 The screenshot above is captured from the same disposable Elastic lab as the README scan with
@@ -59,6 +63,9 @@ Useful connection flags:
 | `--kibana-space soc` | read Elastic rules from a non-default Kibana space |
 | `--timeout 90s` | raise the per-scan timeout |
 
+Connections honor `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, including their lowercase forms.
+Use `--ca-cert` if the connection requires a private CA.
+
 ### Microsoft Sentinel
 
 deadair authenticates through `DefaultAzureCredential`. Identify the Log Analytics workspace by its
@@ -76,10 +83,6 @@ export DEADAIR_SENTINEL_WORKSPACE=<workspace-resource-name>
 deadair check
 deadair scan --json-out sentinel-report.json
 ```
-
-The disposable demo intentionally includes broken data paths. Its scan should print `GATE FAILED`
-and exit `1`, meaning the scan completed and the configured gate found the seeded problems. Exit
-`2` means the scan itself could not complete.
 
 `DEADAIR_SENTINEL_WORKSPACE_ID` can override the discovered Log Analytics customer ID, but deadair
 still verifies it against the workspace returned by ARM. Workload identity, managed identity, and
@@ -100,10 +103,11 @@ Sentinel and Log Analytics for evidence instead of executing the rule's full que
 | recognized native ASIM parsers missing from workspace metadata | assessed only when a bounded literal call returns concrete local tables with complete permission and data-source evidence |
 | literal `_GetWatchlist('alias')` | watchlist inventory plus a bounded zero-row query; retained as non-monitorable `dependency_evidence` |
 | literal `workspace()` table references | assessed only for explicitly mapped workspaces, as described below |
-| table freshness | `TimeGenerated` for Scheduled-only Analytics sources; `ingestion_time()` for NRT-only sources |
+| table freshness | separate `TimeGenerated` and `ingestion_time()` observations; each rule uses its own clock |
 | filtered source activity | advisory check only when deadair proves one direct local Analytics table followed by a closed literal filter |
+| expected producers | configured vendor, product, or device identities, measured independently of table-wide freshness |
 | ingest lag | paired event-time and ingestion-time evidence for eligible Scheduled rules |
-| summary pipeline runtime | advisory evidence from the latest completed run in a bounded seven-day `LASummaryLogs` query for relevant active summary rules, capped at 50 rules per scan |
+| summary pipeline runtime | latest completed run in a bounded seven-day `LASummaryLogs` query for relevant active summary rules, capped at 50 rules per scan; failures and overdue successes have stable findings |
 
 An HTTP `200` with `PartialError` is not a successful probe. Dynamic watchlist aliases, tabular
 function parameters, row-derived or dynamic arguments, parameter-driven `table()`, dynamic table
@@ -115,8 +119,8 @@ Every join leg and ordinary union leg is required. A missing leg inside an expli
 Native ASIM calls create source edges only for concrete local tables named by the Logs response and
 present in the ARM catalog.
 
-A source used by both Scheduled and NRT rules stays incomplete rather than being measured with the
-wrong freshness clock. Basic and Auxiliary tables are incompatible with this analytics-rule
+For tables shared by Scheduled and NRT rules, both clocks remain visible in the source view. A
+recent ingestion timestamp doesn't clear an event-time failure. Basic and Auxiliary tables are incompatible with this analytics-rule
 evidence path. Sentinel does not expose authoritative rule-required fields or a bounded,
 authoritative per-table event and storage inventory, so required-field and unused-telemetry
 findings are unavailable. The CLI currently targets Azure public cloud endpoints.
@@ -129,6 +133,11 @@ query starts at one direct local table and immediately applies a closed,
 parser-supported literal filter. Remote, joined, unioned, dynamic, escaped-literal, and
 function-backed sources do not qualify. The result appears in `rule_source_freshness`; it does not
 replace table health or create findings. One scan runs at most 20 of these queries.
+
+For alerting on a feed, define an explicit producer expectation. A rule's filter may select a rare
+security event, so deadair doesn't assume it should produce regular traffic. The
+[investigation guide](investigate.md#watch-one-firewall-inside-a-shared-sentinel-table) shows the
+policy, source view, and maintenance setup.
 
 Watchlists do not receive freshness, lag, schema, storage, or source-health verdicts. Their
 resolution is still part of the rule assessment: a missing required watchlist can make a rule
@@ -217,9 +226,22 @@ the custom role also needs
 
 ## Read the findings
 
-A finding states what deadair observed. It does not guess the root cause. Start with the rule,
-inspect the evidence behind its verdict, then decide whether the condition is expected coverage
-scope, a regression, or incomplete visibility for the deadair credential.
+The scan lists affected detections first, then sources and the policy result. The disposable
+demo exits `1` because its seeded problems match the gate. Exit `2` means the assessment could
+not complete safely.
+
+Terminal colours mark failures and warnings; the labels carry the same meaning without colour.
+Set `NO_COLOR=1` to disable styling. Redirected output is always plain text.
+
+A finding states what deadair observed. If several rules point to the same source, start there:
+
+```sh
+deadair inspect --source CommonSecurityLog report.json
+```
+
+This reads a saved scan. It shows the source's observations and enabled consumers in severity order,
+with a first check based on the evidence. See [Investigate a telemetry gap](investigate.md) for a
+worked Sentinel feed example.
 
 Terms used in reports:
 
@@ -373,11 +395,13 @@ sources. Sentinel reports can also include:
 
 `dependency_evidence` explains dependency-resolution outcomes. A required dependency can affect the
 rule verdict through authoritative input resolution. `source_lineage`, `rule_provenance`,
-`rule_source_freshness`, and `summary_rule_runs` add context without changing the gate.
+and `rule_source_freshness` add context without changing the gate. Explicit producer expectations
+and summary-runtime failures have stable `producer-stale` and `summary-pipeline` findings. Add those
+classes to the policy to gate on them.
 
 Summary lineage records ARM structure. `summary_rule_runs` records the latest completed native run
 inside its bounded window. In-progress rows do not replace the last completed run, and an overdue
-success is retained as incomplete evidence. The [validation record](validation.md#sentinel-live-conformance)
+success is retained as incomplete evidence with `health_status: "late"`. The [validation record](validation.md#sentinel-live-conformance)
 describes the live filtered-source and summary-runtime cases.
 
 `--include` and `--exclude` do not change detection verdicts. They do scope source-level reporting
@@ -409,6 +433,9 @@ the candidate is dead or impaired; exit `2` means its inputs were unsupported, u
 ambiguous, remote, or otherwise not safely assessed. Existing source-health findings do not block
 the candidate gate. A fleet candidate scan must use one backend because the accepted candidate
 formats differ by backend.
+
+Elastic indicator-match rules and ES|QL pipelines with lookup, enrichment, or subquery dependencies
+currently exit `2` in candidate mode. Their event source alone is not enough to assess the rule.
 
 The official GitHub Action wraps single-instance candidate gates for Elastic, OpenSearch, and
 Sentinel. It keeps the JSON evidence as a workflow artifact and writes the useful counts to the job
@@ -537,6 +564,10 @@ suppressing its finding, and gates normally. Source entries use the first matchi
 severity threshold applies to rule findings; source findings are controlled by their class.
 Malformed policy files fail the scan.
 
+Sentinel uses each source's `max_stale` policy when checking its 24-hour freshness evidence. An
+empty 24-hour result proves a source is stale under a 1-hour policy, but cannot settle a 48-hour
+policy. That longer threshold leaves the assessment incomplete and returns `2` in candidate mode.
+
 A policy can name source patterns, accepted finding IDs, and the reason an exception exists. Check
 one in only when repository access matches the sensitivity of that information. For a public
 repository, keep sensitive entries in a restricted file created on the runner and pass that path to
@@ -554,6 +585,8 @@ set, and assessment configuration. The normalized Sentinel remote-workspace mapp
 to target and assessment identity, so changing it requires a new baseline. Incomparable reports
 exit `2`. Comparable reports diff stable reason-level finding IDs, so one newly missing field does
 not make every impairment on that rule look new. Recoveries are shown but do not fail the command.
+Candidate comparisons also exit `2` if either scan could not assess the candidate safely. Rerun
+that scan after resolving the access or input problem before using it in a comparison.
 
 Reports created before v0.6.0 do not contain the comparison identity fields. After upgrading,
 create a new baseline with v0.6.0 or later.

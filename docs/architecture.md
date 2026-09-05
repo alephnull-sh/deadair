@@ -25,10 +25,10 @@ enabled rule -> exact native template or package provenance
 raw table -> summary rule -> Analytics output table -> enabled rule
 ```
 
-The graph answers two questions at the same time:
+The graph identifies:
 
-- If this source dies, which enabled detections go blind?
-- If this source is being ingested, which enabled detections use it?
+- which enabled detections read a failing source, and whether their other inputs remain usable;
+- which ingested sources have no enabled consumers.
 
 ## Data model
 
@@ -43,6 +43,8 @@ deadair normalizes every backend into a small set of objects.
 | dependency evidence | status of a backend prerequisite such as a literal Sentinel watchlist or native ASIM call; only concrete monitorable tables create source-health edges |
 | provenance evidence | informational exact-ID relationship between a rule and a native template or content package |
 | lineage evidence | informational structural relationship between a source, transform, and output table |
+| producer expectation | operator-defined Sentinel feed identity, reporting interval, and optional owner/runbook |
+| source investigation | source observations beside its enabled consumers, with producer-specific dependencies kept separate |
 | report | versioned rule findings, source findings, resolution evidence, capabilities, and summary counts |
 | fleet report | per-instance reports plus cross-tenant rollups and instance errors |
 
@@ -127,7 +129,8 @@ Sentinel uses ARM metadata plus bounded Logs queries:
 | configured literal `workspace()` table | remote workspace/table GETs and workspace-scoped Logs evidence | textual aliases require catalog plus original-literal Logs proof; verified GUID and canonical ARM-ID mappings do not |
 | cross-workspace limits | verified workspace IDs and ARM locations | home workspace is counted; more than 20 workspaces or 20 or more regions is incompatible; missing location evidence is unavailable; Microsoft's lower performance warnings remain guidance |
 | summary lineage | Log Analytics `summaryLogs` and table GETs for outputs consumed by enabled detections | ARM-only structure; `binDelay` follows Azure Monitor's minute-based schedule |
-| summary-rule runtime | bounded seven-day `LASummaryLogs` latest-completed-run query for relevant active, successfully provisioned summary rules, capped at 50 rules per scan | accepts only runs observed after the current ARM definition became visible; failures stay informational, and old successes become incomplete against cadence, delay, and retry allowance; separate from lineage and gates |
+| expected producers | bounded Logs query for each configured local Analytics-table identity, capped at 20 feeds | exact vendor/product/device equalities; ingestion-time or event-time freshness; explicit policy gate |
+| summary-rule runtime | bounded seven-day `LASummaryLogs` latest-completed-run query for relevant active, successfully provisioned summary rules, capped at 50 rules per scan | runs must match the current ARM definition; failed or overdue runs produce findings, gated only by explicit policy |
 | native template and Content Hub provenance | exact-ID Sentinel template/package GETs | informational; no display-name guessing or expanded package content |
 
 Summary-lineage, summary-runtime, and provenance rights are optional scan enrichment. `check` does
@@ -153,6 +156,7 @@ scan.
 | `setup` | print least-privilege credential setup for a backend |
 | `check` | verify connectivity, required privileges, and optional capabilities |
 | `scan` | produce a terminal, JSON, or HTML report |
+| `inspect` | read source or producer evidence from a saved JSON report without contacting the SIEM |
 | `scan --rule` | evaluate a backend-native candidate rule file without installing it |
 | `diff` | compare two reports and fail on regressions |
 | `serve` | run periodic scans and expose cached Prometheus metrics |
