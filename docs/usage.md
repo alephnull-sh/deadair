@@ -107,10 +107,11 @@ Sentinel and Log Analytics for evidence instead of executing the rule's full que
 | recognized native ASIM parsers missing from workspace metadata | assessed only when a bounded literal call returns concrete local tables with complete permission and data-source evidence |
 | literal `_GetWatchlist('alias')` | watchlist inventory plus a bounded zero-row query; retained as non-monitorable `dependency_evidence` |
 | literal `workspace()` table references | assessed only for explicitly mapped workspaces, as described below |
-| table freshness | `TimeGenerated` for Scheduled-only Analytics sources; `ingestion_time()` for NRT-only sources |
+| table freshness | separate `TimeGenerated` and `ingestion_time()` observations; each rule uses its own clock |
 | filtered source activity | advisory check only when deadair proves one direct local Analytics table followed by a closed literal filter |
+| expected producers | configured vendor, product, or device identities, measured independently of table-wide freshness |
 | ingest lag | paired event-time and ingestion-time evidence for eligible Scheduled rules |
-| summary pipeline runtime | advisory evidence from the latest completed run in a bounded seven-day `LASummaryLogs` query for relevant active summary rules, capped at 50 rules per scan |
+| summary pipeline runtime | latest completed run in a bounded seven-day `LASummaryLogs` query for relevant active summary rules, capped at 50 rules per scan; failures and overdue successes have stable findings |
 
 An HTTP `200` with `PartialError` is not a successful probe. Dynamic watchlist aliases, tabular
 function parameters, row-derived or dynamic arguments, parameter-driven `table()`, dynamic table
@@ -122,8 +123,8 @@ Every join leg and ordinary union leg is required. A missing leg inside an expli
 Native ASIM calls create source edges only for concrete local tables named by the Logs response and
 present in the ARM catalog.
 
-A source used by both Scheduled and NRT rules stays incomplete rather than being measured with the
-wrong freshness clock. Basic and Auxiliary tables are incompatible with this analytics-rule
+For tables shared by Scheduled and NRT rules, both clocks remain visible in the source view. A
+recent ingestion timestamp doesn't clear an event-time failure. Basic and Auxiliary tables are incompatible with this analytics-rule
 evidence path. Sentinel does not expose authoritative rule-required fields or a bounded,
 authoritative per-table event and storage inventory, so required-field and unused-telemetry
 findings are unavailable. The CLI currently targets Azure public cloud endpoints.
@@ -136,6 +137,11 @@ query starts at one direct local table and immediately applies a closed,
 parser-supported literal filter. Remote, joined, unioned, dynamic, escaped-literal, and
 function-backed sources do not qualify. The result appears in `rule_source_freshness`; it does not
 replace table health or create findings. One scan runs at most 20 of these queries.
+
+For alerting on a feed, define an explicit producer expectation. A rule's filter may select a rare
+security event, so deadair doesn't assume it should produce regular traffic. The
+[investigation guide](investigate.md#watch-one-firewall-inside-a-shared-sentinel-table) shows the
+policy, source view, and maintenance setup.
 
 Watchlists do not receive freshness, lag, schema, storage, or source-health verdicts. Their
 resolution is still part of the rule assessment: a missing required watchlist can make a rule
@@ -224,9 +230,15 @@ the custom role also needs
 
 ## Read the findings
 
-A finding states what deadair observed. It does not guess the root cause. Start with the rule,
-inspect the evidence behind its verdict, then decide whether the condition is expected coverage
-scope, a regression, or incomplete visibility for the deadair credential.
+A finding states what deadair observed. If several rules point to the same source, start there:
+
+```sh
+deadair inspect --source CommonSecurityLog report.json
+```
+
+This reads a saved scan. It shows the source's observations and enabled consumers in severity order,
+with a first check based on the evidence. See [Investigate a telemetry gap](investigate.md) for a
+worked Sentinel feed example.
 
 Terms used in reports:
 
@@ -380,11 +392,13 @@ sources. Sentinel reports can also include:
 
 `dependency_evidence` explains dependency-resolution outcomes. A required dependency can affect the
 rule verdict through authoritative input resolution. `source_lineage`, `rule_provenance`,
-`rule_source_freshness`, and `summary_rule_runs` add context without changing the gate.
+and `rule_source_freshness` add context without changing the gate. Explicit producer expectations
+and summary-runtime failures have stable `producer-stale` and `summary-pipeline` findings. Add those
+classes to the policy to gate on them.
 
 Summary lineage records ARM structure. `summary_rule_runs` records the latest completed native run
 inside its bounded window. In-progress rows do not replace the last completed run, and an overdue
-success is retained as incomplete evidence. The [validation record](validation.md#sentinel-live-conformance)
+success is retained as incomplete evidence with `health_status: "late"`. The [validation record](validation.md#sentinel-live-conformance)
 describes the live filtered-source and summary-runtime cases.
 
 `--include` and `--exclude` do not change detection verdicts. They do scope source-level reporting

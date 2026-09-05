@@ -60,6 +60,23 @@ type DowntimeWindow struct {
 
 // Evaluate returns the health assessment for one source.
 func (c Check) Evaluate(s backend.Source) Assessment {
+	if len(s.Freshness.Clocks) > 0 {
+		combined := Assessment{Status: StatusOK}
+		for _, item := range s.Freshness.Clocks {
+			observed := Assessment{Status: StatusUnknown}
+			if item.Status == backend.EvidenceAssessed {
+				observed = c.Evaluate(backend.Source{Name: s.Name, Docs: -1, LastEvent: item.LastEvent, Freshness: item})
+			}
+			if observed.Status.Degraded() {
+				if !combined.Status.Degraded() || observed.Age > combined.Age {
+					combined = observed
+				}
+			} else if !combined.Status.Degraded() && (observed.Status == StatusUnknown || combined.Status == StatusOK) {
+				combined = observed
+			}
+		}
+		return combined
+	}
 	now := time.Now
 	if c.Now != nil {
 		now = c.Now

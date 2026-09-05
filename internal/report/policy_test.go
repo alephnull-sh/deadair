@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,26 @@ import (
 	"github.com/alephnull-sh/deadair/internal/health"
 	"github.com/alephnull-sh/deadair/internal/state"
 )
+
+func TestInvestigationGuidePoliciesLoad(t *testing.T) {
+	data, err := os.ReadFile("../../docs/investigate.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := regexp.MustCompile("(?s)```json\\n(.*?)\\n```").FindAllSubmatch(data, -1)
+	count := 0
+	for _, block := range blocks {
+		body := string(block[1])
+		if !strings.Contains(body, `"version"`) {
+			continue // Downtime files have a separate format.
+		}
+		writePolicy(t, body, time.Now().UTC())
+		count++
+	}
+	if count != 2 {
+		t.Fatalf("checked %d policies, want 2", count)
+	}
+}
 
 func writePolicy(t *testing.T, body string, now time.Time) *Policy {
 	t.Helper()

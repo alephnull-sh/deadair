@@ -20,7 +20,8 @@ conformance test is opt-in and does not run on a schedule.
 | Sentinel live path | opt-in read-only conformance test against a pre-seeded disposable workspace |
 | Sentinel GitHub Action | local wrapper tests cover input mapping, argument ownership, environment isolation, report production, job-summary content, and gate behavior; the GitHub-hosted OIDC path has not yet had a live conformance run |
 | native input resolution | index/alias/data-stream cases plus Sentinel KQL table, closed scalar function, literal watchlist, ASIM, remote workspace, plan, and permission outcomes |
-| Sentinel enrichment | the live lab covers narrow filtered source activity, structural summary lineage, a bounded successful `LASummaryLogs` run, and its matching Basic-to-Analytics output bin; exact-ID native template and Content Hub provenance also has fixture coverage; advisory evidence does not change findings or gates |
+| Sentinel enrichment | the live lab covers narrow filtered source activity, structural summary lineage, a bounded successful `LASummaryLogs` run, and its matching Basic-to-Analytics output bin; native-template and Content Hub associations also have fixture coverage |
+| Expected producers | live shared-table failure, recovery, maintenance, and exporter checks; local tests cover selector bounds, unavailable evidence, stable findings, and diffs |
 | Sentinel execution identity | fixture tests require an exact successful `SentinelHealth` event after the latest rule change and no older than the rule cadence plus the documented scheduling delay; other execution-identity cases remain unassessed |
 | write safety | live Elastic and OpenSearch tests require representative writes to be rejected; separate Sentinel lab probes confirmed its scan identity could not delete rules or tables or retrieve shared keys |
 | candidate-rule checks | backend-native `scan --rule` parser and gate tests; Sentinel covers direct ARM JSON, one Azure-Sentinel analytic-rule YAML document, and deployment templates whose rule values resolve from literals, defaults, or simple variables |
@@ -41,7 +42,16 @@ resources.
 The workspace used for the 2026-08-22 pass deliberately included missing, stale, late, and
 incompatible data paths. The recorded scan found them and exited `1`.
 
-The live workspace covers:
+On 2026-09-05, a fresh UK South lab tested two synthetic firewall feeds in `CommonSecurityLog`.
+The London feed stopped while the Manchester feed kept the table fresh. Only London exceeded its
+producer threshold; restoring it produced a confirmed recovery in the report diff. A maintenance
+window suppressed London's alert while retaining the stale observation. The certificate-backed
+reader also passed all three write-denial checks. A separate live exporter run observed quiet feeds
+and cleared both stale gauges after resumed traffic became queryable.
+The full read-only conformance run passed again, including separate Scheduled and NRT clocks and
+a successful summary run whose output matched the exact Basic-table input bin.
+
+The 2026-08-22 live workspace covered:
 
 - enabled Scheduled rules from the stable API and an NRT rule from the preview API;
 - direct local tables, `join`, `union`, `let`, and mixed present/missing inputs;
@@ -126,8 +136,11 @@ credential is embedded in the test.
   runs that predate the current ARM definition, inconsistent native timestamps, invalid
   provisioning, and invalid schedules. A successful run
   becomes incomplete once it exceeds its cadence and delay plus the documented eight-hour retry
-  allowance. Native failed runs stay informational. The live lab proved structural lineage, a
+  allowance. Failed or overdue runs create `summary-pipeline` findings; the policy decides whether
+  they fail the gate. Recovery requires a new successful run, not a repeated read of an old result.
+  The live lab proved structural lineage, a
   successful bounded runtime record, and the matching source/output bin under the scanner identity.
+  Failed-run, overdue-run, and recovery transitions are covered by contract tests, not the live lab.
   Azure advanced `LASummaryLogs.RuleLastModifiedTime` between bins while the ARM definition stayed
   unchanged, so deadair does not present that field as an exact revision ID. It requires the run to
   start after the ARM modification time and rejects native timestamps that are too old or later

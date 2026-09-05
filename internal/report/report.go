@@ -83,6 +83,8 @@ type Report struct {
 	RecoveredFindings     []Finding                 `json:"recovered_findings,omitempty"`
 	Policy                *PolicySummary            `json:"policy,omitempty"`
 	RequiredFieldEvidence []RequiredFieldAssessment `json:"required_field_evidence,omitempty"`
+	SourceImpacts         []SourceImpact            `json:"source_impacts,omitempty"`
+	Producers             []ProducerHealth          `json:"producers,omitempty"`
 }
 
 const (
@@ -183,6 +185,8 @@ type SummaryRuleRun struct {
 	RuleModifiedAt      *time.Time             `json:"rule_modified_at,omitempty"`
 	Error               string                 `json:"error,omitempty"`
 	Detail              string                 `json:"detail,omitempty"`
+	HealthStatus        string                 `json:"health_status,omitempty"`
+	ExpectedDowntime    bool                   `json:"expected_downtime,omitempty"`
 }
 
 // RedactionMetadata identifies the keyed pseudonymization applied to a
@@ -425,6 +429,10 @@ func FindingClassLabel(class string) string {
 		return "unused telemetry"
 	case FindingPartialInput:
 		return "partial input"
+	case FindingProducerStale:
+		return "expected feed is quiet"
+	case FindingSummaryPipeline:
+		return "summary pipeline needs attention"
 	default:
 		return strings.ReplaceAll(class, "-", " ")
 	}
@@ -434,6 +442,10 @@ func FindingClassLabel(class string) string {
 // stable machine code.
 func FindingReasonLabel(class, reason string) string {
 	switch class {
+	case FindingProducerStale:
+		return "producer has exceeded its reporting interval"
+	case FindingSummaryPipeline:
+		return "summary pipeline failed or fell behind its schedule"
 	case FindingDead:
 		return DeadReasonLabel(reason)
 	case FindingImpaired, FindingPartialInput:
@@ -645,6 +657,7 @@ type BuildOptions struct {
 	LineageEvidence            []backend.LineageEvidence
 	PredicateFreshnessEvidence []backend.RulePredicateFreshnessEvidence
 	SummaryRuleRunEvidence     []backend.SummaryRuleRunEvidence
+	ProducerEvidence           []backend.ProducerEvidence
 	// UnusedTelemetryUnavailableDetail forces installed zero-consumer findings
 	// unavailable when a backend lacks the inventory needed to assess them.
 	UnusedTelemetryUnavailableDetail string
@@ -659,6 +672,8 @@ type BuildOptions struct {
 	Store     *state.Store
 	TargetID  string
 	Instance  string
+	SourceURL func(string) string
+	RuleURL   func(backend.Rule) string
 }
 
 // Build assembles the report from the dependency graph and a health check.
@@ -719,6 +734,13 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 	r.SourceLineage = buildSourceLineage(opts.LineageEvidence)
 	r.RuleSourceFreshness = buildRuleSourceFreshness(g.Rules, opts.PredicateFreshnessEvidence, opts.Check, opts.Policy)
 	r.SummaryRuleRuns = buildSummaryRuleRuns(opts.SummaryRuleRunEvidence)
+	maintenanceNow := r.GeneratedAt
+	if opts.Check.Now != nil {
+		maintenanceNow = opts.Check.Now()
+	}
+	for i := range r.SummaryRuleRuns {
+		r.SummaryRuleRuns[i].ExpectedDowntime = opts.Check.InDowntime(r.SummaryRuleRuns[i].Output.Name, maintenanceNow)
+	}
 
 	rulesByID := make(map[string]int, len(g.Rules))
 	for i, rule := range g.Rules {
@@ -1003,7 +1025,11 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 		allDegraded := true
 		var degraded []string
 		for _, name := range matched {
-			if assess[name].Status.Degraded() {
+			a := assess[name]
+			if len(srcByName[name].Freshness.Clocks) > 0 {
+				a = assessRuleClock(srcByName[name], rule, opts.Check, opts.Policy)
+			}
+			if a.Status.Degraded() {
 				degraded = append(degraded, name)
 			} else {
 				allDegraded = false
@@ -1094,6 +1120,18 @@ func BuildWithOptions(backendName string, g *graph.Graph, opts BuildOptions) *Re
 		}
 		return a.Expression+a.Selector < b.Expression+b.Selector
 	})
+	r.SourceImpacts = buildSourceImpacts(r, g, opts)
+	r.Producers = buildProducerHealth(r, opts)
+	// Display filters must not erase a producer's confirmed rule dependencies.
+	if opts.Scope != nil {
+		visible := r.SourceImpacts[:0]
+		for _, source := range r.SourceImpacts {
+			if opts.Scope[source.Source] {
+				visible = append(visible, source)
+			}
+		}
+		r.SourceImpacts = visible
+	}
 	r.buildFindings(opts.Store, opts.Policy)
 	preserveLegacyInputResolutionIDs(r, g.Rules)
 	return r
@@ -1320,7 +1358,8 @@ func buildSummaryRuleRuns(in []backend.SummaryRuleRunEvidence) []SummaryRuleRun 
 			modifiedAt = &value
 		}
 		out = append(out, SummaryRuleRun{
-			ID: item.ID, Rule: item.Rule, Output: item.Output, Status: item.Status,
+			HealthStatus: summaryHealth(item),
+			ID:           item.ID, Rule: item.Rule, Output: item.Output, Status: item.Status,
 			Method: item.Method, ObservedAt: item.ObservedAt, WindowSeconds: item.Window.Seconds(),
 			RunAt: runAt, RunStatus: item.RunStatus, QueryDurationMillis: queryDurationMillis,
 			ResultCount: resultCount, RuleModifiedAt: modifiedAt, Error: item.Error, Detail: item.Detail,
@@ -1610,6 +1649,8 @@ func (r *Report) RedactWith(redactor *redactpkg.Redactor) {
 		return
 	}
 	r.Redacted = true
+	r.redactSourceImpacts(redactor)
+	r.redactProducers(redactor)
 	r.Redaction = &RedactionMetadata{Algorithm: redactpkg.Algorithm, KeyID: redactor.KeyID()}
 	if r.TargetID != "" {
 		r.TargetID = redactor.Value("target", r.TargetID)

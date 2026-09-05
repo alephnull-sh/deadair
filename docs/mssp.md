@@ -175,6 +175,15 @@ For each actionable finding, keep enough context for the receiving team to start
 The terminal fleet view is a summary. Keep the internal JSON report for exact patterns and sources;
 use the redacted report for authorized cross-team or client trend reporting.
 
+Open one customer's source evidence without rescanning the fleet:
+
+```sh
+deadair inspect --instance acme-prod --source logs-system.auth-default latest-internal.json
+```
+
+Use the pseudonym shown in the report when inspecting a redacted instance. A failed instance has no
+saved source assessment; fix its scan error before drawing conclusions about its telemetry.
+
 ## Continuous monitoring
 
 ```sh

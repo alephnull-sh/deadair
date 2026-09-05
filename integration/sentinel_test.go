@@ -260,8 +260,14 @@ func TestSentinelReadOnlyLab(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Sentinel mixed-timing freshness evidence: %v", err)
 	}
-	if evidence := mixedFreshness[sentinelFreshTable]; evidence.Status != backend.EvidenceIncomplete || evidence.Method != "mixed-rule-timing" {
-		t.Errorf("mixed timing freshness = %+v, want explicit incomplete evidence", evidence)
+	if evidence := mixedFreshness[sentinelFreshTable]; evidence.Status != backend.EvidenceAssessed || evidence.Method != "separate-rule-clocks" || len(evidence.Clocks) != 2 {
+		t.Errorf("mixed timing freshness = %+v, want both independent clocks", evidence)
+	} else {
+		for _, basis := range []backend.FreshnessBasis{backend.FreshnessEventTime, backend.FreshnessIngestionTime} {
+			if clock := evidence.Clocks[basis]; clock.Status != backend.EvidenceAssessed || clock.LastEvent.IsZero() {
+				t.Errorf("%s clock = %+v, want assessed timestamp", basis, clock)
+			}
+		}
 	}
 
 	lag, err := client.IngestLagEvidence(ctx, requireSentinelSources(t, sourcesByName,

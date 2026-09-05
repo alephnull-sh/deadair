@@ -50,7 +50,7 @@ func TestSentinelSignalsKeepGateResultHonest(t *testing.T) {
 					t.Errorf("%s output missing %q:\n%s", name, want, text)
 				}
 			}
-			if !strings.Contains(strings.ToLower(text), "gate unchanged") {
+			if !strings.Contains(text, "Filtered activity is advisory. Summary findings follow the gate policy.") {
 				t.Errorf("%s output does not explain the advisory/gate boundary:\n%s", name, text)
 			}
 			if strings.Contains(text, "HEALTHY") || strings.Contains(text, "DeviceVendor=") {

@@ -44,6 +44,7 @@ type Finding struct {
 	RecoveredAt     *time.Time         `json:"recovered_at,omitempty"`
 	Accepted        *FindingAcceptance `json:"accepted,omitempty"`
 	Gates           bool               `json:"gates"`
+	Suppressed      bool               `json:"suppressed,omitempty"`
 }
 
 type FindingAcceptance struct {
@@ -60,6 +61,7 @@ func stableFindingID(targetID, instance, backendName, class, ruleID, reason, sou
 
 func (r *Report) buildFindings(store *state.Store, policy *Policy) {
 	findings := make([]Finding, 0, len(r.DeadDetections)+len(r.ImpairedDetections)+len(r.Sources)+len(r.UnusedTelemetry)+len(r.PartialInputCoverage))
+	findings = append(findings, r.monitoringFindings()...)
 	for _, dead := range r.DeadDetections {
 		ruleID := logicalDetectionRuleID(dead.ID, dead.RuleID)
 		findings = append(findings, Finding{
@@ -299,6 +301,8 @@ func findingLifecycleScopeID(scope ScanScope) string {
 // healthy measurement for the affected entity.
 func findingRecoveryConfirmed(current *Report, previous Finding) bool {
 	switch previous.Class {
+	case FindingProducerStale, FindingSummaryPipeline:
+		return monitoringRecoveryConfirmed(current, previous)
 	case FindingDead:
 		if !assessmentSupportsRecovery(current, AssessmentSourceResolution) || ruleInputUncertain(current, previous.RuleID) {
 			return false
@@ -417,6 +421,18 @@ func ruleHasAuthoritativeResolved(r *Report, ruleID string) bool {
 }
 
 func starvedRecoveryConfirmed(r *Report, ruleID string) bool {
+	for _, source := range r.SourceImpacts {
+		for _, rule := range source.Detections {
+			if rule.RuleID != ruleID {
+				continue
+			}
+			for _, observation := range source.Freshness {
+				if observation.Basis == rule.Basis && observation.Status == backend.EvidenceAssessed && observation.FreshnessStatus == "ok" {
+					return true
+				}
+			}
+		}
+	}
 	var resolvedSources []string
 	for _, resolution := range r.InputResolutions {
 		if logicalInputResolutionRuleID(resolution) == ruleID && !resolution.Diagnostic && resolution.Status == backend.ResolutionResolved {

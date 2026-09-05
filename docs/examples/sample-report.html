@@ -41,6 +41,14 @@
       justify-content: space-between;
       gap: 20px;
     }
+    .report-nav { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 20px; font-size: 13px; }
+    a { color: inherit; text-underline-offset: 3px; }
+    a:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
+    .report-nav a { padding: 4px 0; }
+    .detail-summary > span:first-child { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+    .detail-summary > .badge { flex-shrink: 0; }
+    .section-heading > .count { white-space: nowrap; flex-shrink: 0; }
+    .evidence-body, .signal-title, .meta { overflow-wrap: anywhere; }
     .brand {
       margin: 0;
       color: var(--ink);
@@ -162,6 +170,7 @@
     .signal-top { align-items: start; }
     .signal-title { margin: 0; font-size: 15px; font-weight: 600; }
     .signal p { margin: 0; color: var(--muted); }
+    .signal .signal-title { color: var(--ink); }
     .signal .action { margin-top: 3px; color: var(--muted); font-size: 13px; }
     .badge {
       display: inline-block;
@@ -175,7 +184,7 @@
       white-space: nowrap;
     }
     .status-ok, .status-assessed, .status-resolved, .status-succeeded { color: var(--good); }
-    .status-stale, .status-empty, .status-failed, .status-incompatible { color: var(--danger); }
+    .status-stale, .status-empty, .status-failed, .status-incompatible, .status-late { color: var(--danger); }
     .status-incomplete, .status-unavailable, .status-unsupported, .status-ambiguous, .status-remote, .status-unknown, .status-disabled { color: var(--warn); }
     .status-maintenance, .status-warming, .status-pending { color: var(--muted); }
     .severity-critical, .severity-high { color: var(--danger); }
@@ -281,6 +290,8 @@
     @media (max-width: 680px) {
       .report { width: min(100% - 28px, 1080px); padding: 22px 0 40px; }
       .hero-top, .section-heading, .signal-top { align-items: flex-start; }
+      .hero-top { flex-wrap: wrap; gap: 12px; }
+      .detail-summary { gap: 12px; }
       h1 { margin-top: 24px; font-size: 2rem; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric, .metric + .metric {
@@ -320,8 +331,8 @@
       <span class="gate gate-failed">Gate failed</span>
     </div>
     <h1>2 detections can&#39;t fire</h1>
-    <p class="lede">Review the affected rules and sources below.</p>
-    <p class="meta"><time datetime="2026-08-22T16:57:51Z">22 Aug 2026, 16:57 UTC</time></p>
+    <p class="lede">The scan completed. Findings matched the configured gate (exit 1).</p>
+    <p class="meta"><time datetime="2026-09-05T13:35:49Z">5 Sep 2026, 13:35 UTC</time></p>
 
 
     <div class="metrics">
@@ -334,7 +345,12 @@
 
 
     </div>
+    <nav class="report-nav" aria-label="Report sections">
+      <a href="#attention-heading">Findings</a>
 
+      <a href="#sources-heading">Sources</a>
+      <a href="#evidence-heading">Evidence</a>
+    </nav>
   </header>
 
 
@@ -401,18 +417,6 @@
 
 
 
-    <h3>Sources that need attention</h3>
-    <ul class="signal-list">
-
-      <li class="signal">
-        <div class="signal-top">
-          <p class="signal-title">okta-system-events-prod</p>
-        </div>
-        <p>No recent events.</p>
-      </li>
-
-    </ul>
-
 
 
 
@@ -422,15 +426,107 @@
   </section>
 
 
+
+
   <section aria-labelledby="sources-heading">
     <div class="section-heading">
       <div>
         <h2 id="sources-heading">Sources</h2>
-        <p class="section-copy">The data feeds deadair resolved for this scan and the detections that depend on them.</p>
+        <p class="section-copy">Open a source for its evidence, consuming detections, and first check.</p>
       </div>
       <span class="count">5 total</span>
     </div>
 
+    <details class="evidence-panel">
+      <summary class="detail-summary"><span>endpoint-process-events-legacy</span><span class="badge status-incomplete">Missing fields</span></summary>
+      <div class="evidence-body">
+        <p><strong>event time:</strong> ok · 5 Sep 2026, 13:35 UTC</p>
+
+        <p>Missing declared fields: <code>process.command_line</code></p>
+
+
+        <p>Ingest lag: p95 0s, max 0s (1 paired event).</p>
+        <h3>1 enabled detection reads this source</h3><ul>
+          <li><span class="badge severity-high">high</span> <a href="http://localhost:15601/app/security/rules/id/8a42beaa-bfa0-411f-a347-ca38b8b80139" rel="noreferrer">PowerShell from legacy endpoints</a> — Reduced visibility</li>
+        </ul>
+        <p class="action">First check: Compare the missing fields with the source mapping and ingestion transform.</p>
+
+        <p><a href="http://localhost:19200/endpoint-process-events-legacy/_mapping" rel="noreferrer">Open source mapping</a></p>
+      </div>
+    </details>
+
+    <details class="evidence-panel">
+      <summary class="detail-summary"><span>cloudflare-firewall-prod</span><span class="badge status-incomplete">Delayed</span></summary>
+      <div class="evidence-body">
+        <p><strong>event time:</strong> ok · 5 Sep 2026, 13:35 UTC</p>
+
+
+
+
+        <p>Ingest lag: p95 45m, max 45m (2 paired events).</p>
+        <h3>1 enabled detection reads this source</h3><ul>
+          <li><span class="badge severity-medium">medium</span> <a href="http://localhost:15601/app/security/rules/id/4051debb-f3f9-4aa9-83cd-dcf8e2919b4a" rel="noreferrer">Cloudflare firewall blocks</a> — Reduced visibility</li>
+        </ul>
+        <p class="action">First check: Check collector queues and event timestamps against the rule&#39;s lookback window.</p>
+
+        <p><a href="http://localhost:19200/cloudflare-firewall-prod/_mapping" rel="noreferrer">Open source mapping</a></p>
+      </div>
+    </details>
+
+    <details class="evidence-panel">
+      <summary class="detail-summary"><span>okta-system-events-prod</span><span class="badge status-stale">stale</span></summary>
+      <div class="evidence-body">
+        <p><strong>event time:</strong> stale · 2 Sep 2026, 13:35 UTC</p>
+
+
+
+
+        <p>Ingest lag: p95 3d, max 3d (1 paired event).</p>
+        <h3>1 enabled detection reads this source</h3><ul>
+          <li><span class="badge severity-medium">medium</span> <a href="http://localhost:15601/app/security/rules/id/7c17eaa5-e12a-4d47-a5e9-bc8b93c19656" rel="noreferrer">Okta authentication failures</a> — Cannot fire</li>
+        </ul>
+        <p class="action">First check: Check the sender and its collector for recent delivery errors.</p>
+
+        <p><a href="http://localhost:19200/okta-system-events-prod/_mapping" rel="noreferrer">Open source mapping</a></p>
+      </div>
+    </details>
+
+    <details class="evidence-panel">
+      <summary class="detail-summary"><span>endpoint-process-events-prod</span><span class="badge status-ok">ok</span></summary>
+      <div class="evidence-body">
+        <p><strong>event time:</strong> ok · 5 Sep 2026, 13:35 UTC</p>
+
+
+
+
+        <p>Ingest lag: p95 0s, max 0s (1 paired event).</p>
+        <h3>1 enabled detection reads this source</h3><ul>
+          <li><span class="badge severity-low">low</span> <a href="http://localhost:15601/app/security/rules/id/eb3398ba-86ed-4696-8e4a-ac8675be4654" rel="noreferrer">Endpoint process starts</a> — Reads this source</li>
+        </ul>
+
+
+        <p><a href="http://localhost:19200/endpoint-process-events-prod/_mapping" rel="noreferrer">Open source mapping</a></p>
+      </div>
+    </details>
+
+    <details class="evidence-panel">
+      <summary class="detail-summary"><span>dns-query-events-prod</span><span class="badge status-ok">ok</span></summary>
+      <div class="evidence-body">
+        <p><strong>event time:</strong> ok · 5 Sep 2026, 13:35 UTC</p>
+
+
+
+
+
+        <p>No enabled consumer was resolved to this source.</p>
+
+
+        <p><a href="http://localhost:19200/dns-query-events-prod/_mapping" rel="noreferrer">Open source mapping</a></p>
+      </div>
+    </details>
+
+
+    <details class="evidence-panel"><summary class="detail-summary">Source inventory and historical checks</summary>
     <div class="table-wrap" tabindex="0" role="region" aria-label="Sources">
       <table class="source-table">
         <thead><tr><th class="source-name">Source</th><th>Status</th><th class="source-age">Age</th><th>Detections</th><th>Documents</th><th>Stored</th><th>Volume</th><th>Schema</th><th>Ingest lag</th></tr></thead>
@@ -439,7 +535,7 @@
           <tr>
             <td class="source-name"><strong>cloudflare-firewall-prod</strong></td>
             <td><span class="badge status-ok">ok</span></td>
-            <td class="source-age">16s</td>
+            <td class="source-age">13s</td>
             <td>1</td>
             <td>2</td>
             <td>15.3 KiB</td>
@@ -451,7 +547,7 @@
           <tr>
             <td class="source-name"><strong>dns-query-events-prod</strong></td>
             <td><span class="badge status-ok">ok</span></td>
-            <td class="source-age">16s</td>
+            <td class="source-age">13s</td>
             <td>0</td>
             <td>1</td>
             <td>6.9 KiB</td>
@@ -463,7 +559,7 @@
           <tr>
             <td class="source-name"><strong>endpoint-process-events-legacy</strong></td>
             <td><span class="badge status-ok">ok</span></td>
-            <td class="source-age">16s</td>
+            <td class="source-age">13s</td>
             <td>1</td>
             <td>1</td>
             <td>7.8 KiB</td>
@@ -475,7 +571,7 @@
           <tr>
             <td class="source-name"><strong>endpoint-process-events-prod</strong></td>
             <td><span class="badge status-ok">ok</span></td>
-            <td class="source-age">16s</td>
+            <td class="source-age">13s</td>
             <td>1</td>
             <td>1</td>
             <td>8.3 KiB</td>
@@ -487,7 +583,7 @@
           <tr>
             <td class="source-name"><strong>okta-system-events-prod</strong></td>
             <td><span class="badge status-stale">stale</span></td>
-            <td class="source-age">72h0m16s</td>
+            <td class="source-age">72h0m13s</td>
             <td>1</td>
             <td>1</td>
             <td>8.3 KiB</td>
@@ -499,6 +595,7 @@
         </tbody>
       </table>
     </div>
+    </details>
 
 
 
@@ -543,7 +640,7 @@
             <tbody>
 
               <tr>
-                <td class="technical">6aa71d51-cf43-443d-a5e2-39f9498ef22f</td>
+                <td class="technical">4051debb-f3f9-4aa9-83cd-dcf8e2919b4a</td>
                 <td>cloudflare-firewall-prod</td>
                 <td>index expression</td>
                 <td><span class="badge status-resolved">resolved</span></td>
@@ -552,7 +649,7 @@
               </tr>
 
               <tr>
-                <td class="technical">43d0d051-ea0e-4db9-88cf-14489d9115b8</td>
+                <td class="technical">eb3398ba-86ed-4696-8e4a-ac8675be4654</td>
                 <td>endpoint-process-events-prod</td>
                 <td>index expression</td>
                 <td><span class="badge status-resolved">resolved</span></td>
@@ -561,7 +658,7 @@
               </tr>
 
               <tr>
-                <td class="technical">c861e637-6d09-456e-8462-b7f0db853265</td>
+                <td class="technical">513e95e6-5194-475e-b0e0-7e9a2b6e817d</td>
                 <td>winlogbeat-sysmon-*</td>
                 <td>index expression</td>
                 <td><span class="badge status-empty">empty</span></td>
@@ -570,7 +667,7 @@
               </tr>
 
               <tr>
-                <td class="technical">f3247394-f0a1-49a7-8f51-2613e8ac1f74</td>
+                <td class="technical">8a42beaa-bfa0-411f-a347-ca38b8b80139</td>
                 <td>endpoint-process-events-legacy</td>
                 <td>index expression</td>
                 <td><span class="badge status-resolved">resolved</span></td>
@@ -579,7 +676,7 @@
               </tr>
 
               <tr>
-                <td class="technical">740f8607-144c-4cea-a6ab-f099db14376e</td>
+                <td class="technical">7c17eaa5-e12a-4d47-a5e9-bc8b93c19656</td>
                 <td>okta-system-events-prod</td>
                 <td>index expression</td>
                 <td><span class="badge status-resolved">resolved</span></td>
@@ -617,7 +714,7 @@
 
 
         <h3>About this scan</h3>
-        <p class="section-copy">Elastic Security 9.4.4 (elastic) · deadair.report.v1 · producer deadair v0.7.0 · recognized versions 8.x, 9.x</p>
+        <p class="section-copy">Elastic Security 9.4.4 (elastic) · deadair.report.v1 · producer deadair v0.8.0 · recognized versions 8.x, 9.x</p>
 
         <div class="table-wrap" tabindex="0" role="region" aria-label="Backend capabilities">
           <table>

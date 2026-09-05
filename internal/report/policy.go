@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/alephnull-sh/deadair/internal/backend"
 	"github.com/alephnull-sh/deadair/internal/graph"
 )
 
@@ -18,29 +21,32 @@ const PolicyVersion = 1
 // reserved for diagnostic per-selector coverage evidence; backends that do
 // not emit that evidence simply never produce the class.
 const (
-	FindingDead           = "dead-detection"
-	FindingImpaired       = "impaired-detection"
-	FindingSourceDegraded = "source-degraded"
-	FindingVolumeLow      = "volume-low"
-	FindingSchemaDrift    = "schema-drift"
-	FindingUnused         = "unused-telemetry"
-	FindingPartialInput   = "partial-input"
+	FindingDead            = "dead-detection"
+	FindingImpaired        = "impaired-detection"
+	FindingSourceDegraded  = "source-degraded"
+	FindingVolumeLow       = "volume-low"
+	FindingSchemaDrift     = "schema-drift"
+	FindingUnused          = "unused-telemetry"
+	FindingPartialInput    = "partial-input"
+	FindingProducerStale   = "producer-stale"
+	FindingSummaryPipeline = "summary-pipeline"
 )
 
 var allowedFindingClasses = map[string]bool{
 	FindingDead: true, FindingImpaired: true, FindingSourceDegraded: true,
 	FindingVolumeLow: true, FindingSchemaDrift: true, FindingUnused: true,
-	FindingPartialInput: true,
+	FindingPartialInput:  true,
+	FindingProducerStale: true, FindingSummaryPipeline: true,
 }
 
-// Policy is a deliberately narrow local gate policy. It is data, not a rule
-// language: source freshness, finding classes, a rule-severity floor, and
-// time-bounded accepted findings are the only controls.
+// Policy configures freshness expectations, report annotations, and which
+// findings fail a scan. It does not define detection rules.
 type Policy struct {
 	Version           int               `json:"version"`
 	SeverityThreshold string            `json:"severity_threshold,omitempty"`
 	GateClasses       []string          `json:"gate_classes"`
 	Sources           []SourcePolicy    `json:"sources,omitempty"`
+	Producers         []ProducerPolicy  `json:"producers,omitempty"`
 	Accepted          []AcceptedFinding `json:"accepted,omitempty"`
 	acceptedByID      map[string]AcceptedFinding
 	expiredByID       map[string]AcceptedFinding
@@ -49,7 +55,43 @@ type Policy struct {
 type SourcePolicy struct {
 	Pattern  string `json:"pattern"`
 	MaxStale string `json:"max_stale"`
+	Owner    string `json:"owner,omitempty"`
+	Runbook  string `json:"runbook,omitempty"`
 	duration time.Duration
+}
+
+type ProducerPolicy struct {
+	ID       string                 `json:"id"`
+	Source   string                 `json:"source"`
+	Match    map[string]string      `json:"match"`
+	MaxStale string                 `json:"max_stale"`
+	Basis    backend.FreshnessBasis `json:"basis,omitempty"`
+	Owner    string                 `json:"owner,omitempty"`
+	Runbook  string                 `json:"runbook,omitempty"`
+	duration time.Duration
+}
+
+func safePolicyText(value string) bool {
+	return len(value) <= 2048 && !strings.ContainsFunc(value, unicode.IsControl)
+}
+
+func validRunbook(value string) bool {
+	if value == "" {
+		return true
+	}
+	u, err := url.Parse(value)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.User == nil && safePolicyText(value)
+}
+
+func (p *Policy) ProducerExpectations() []backend.ProducerExpectation {
+	if p == nil {
+		return nil
+	}
+	out := make([]backend.ProducerExpectation, 0, len(p.Producers))
+	for _, item := range p.Producers {
+		out = append(out, backend.ProducerExpectation{ID: item.ID, Source: item.Source, Match: item.Match, Basis: item.Basis, MaxStale: item.duration})
+	}
+	return out
 }
 
 type AcceptedFinding struct {
@@ -136,6 +178,48 @@ func (p *Policy) validate(now time.Time) error {
 			return fmt.Errorf("sources[%d].max_stale must be a positive duration", i)
 		}
 		source.duration = d
+		if !safePolicyText(source.Owner) || !validRunbook(source.Runbook) {
+			return fmt.Errorf("sources[%d] requires a printable owner and an HTTP(S) runbook URL without credentials", i)
+		}
+	}
+	if len(p.Producers) > 20 {
+		return fmt.Errorf("at most 20 producers can be assessed per scan")
+	}
+	seenProducers := map[string]bool{}
+	for i := range p.Producers {
+		item := &p.Producers[i]
+		if item.ID == "" || len(item.ID) > 80 || strings.ContainsFunc(item.ID, func(r rune) bool { return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') }) {
+			return fmt.Errorf("producers[%d].id must use lowercase letters, digits, hyphens, or underscores", i)
+		}
+		if seenProducers[item.ID] {
+			return fmt.Errorf("duplicate producer ID %q", item.ID)
+		}
+		seenProducers[item.ID] = true
+		if item.Source == "" || !safePolicyText(item.Source) || len(item.Match) == 0 || len(item.Match) > 3 {
+			return fmt.Errorf("producers[%d] requires a local source and identity fields", i)
+		}
+		for field, value := range item.Match {
+			if field != "DeviceVendor" && field != "DeviceProduct" && field != "DeviceName" {
+				return fmt.Errorf("producers[%d].match supports DeviceVendor, DeviceProduct, and DeviceName only", i)
+			}
+			if value == "" || len(value) > 256 || !safePolicyText(value) {
+				return fmt.Errorf("producers[%d] has an invalid identity value", i)
+			}
+		}
+		if item.Basis == "" {
+			item.Basis = backend.FreshnessIngestionTime
+		}
+		if item.Basis != backend.FreshnessEventTime && item.Basis != backend.FreshnessIngestionTime {
+			return fmt.Errorf("producers[%d].basis must be event_time or ingestion_time", i)
+		}
+		d, err := time.ParseDuration(item.MaxStale)
+		if err != nil || d <= 0 || d > 24*time.Hour {
+			return fmt.Errorf("producers[%d].max_stale must be a positive duration no greater than 24h", i)
+		}
+		item.duration = d
+		if !safePolicyText(item.Owner) || !validRunbook(item.Runbook) {
+			return fmt.Errorf("producers[%d] requires a printable owner and an HTTP(S) runbook URL without credentials", i)
+		}
 	}
 	p.acceptedByID = make(map[string]AcceptedFinding, len(p.Accepted))
 	p.expiredByID = make(map[string]AcceptedFinding)
@@ -191,6 +275,9 @@ func (p *Policy) apply(findings []Finding) PolicySummary {
 	}
 	for i := range findings {
 		finding := &findings[i]
+		if finding.Suppressed {
+			continue
+		}
 		if accepted, ok := p.acceptedByID[finding.ID]; ok {
 			finding.Accepted = &FindingAcceptance{Status: "active", Reason: accepted.Reason, ExpiresAt: accepted.ExpiresAt}
 			summary.AcceptedActive++

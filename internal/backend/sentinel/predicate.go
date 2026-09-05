@@ -20,10 +20,13 @@ const (
 )
 
 var predicateFreshnessFields = map[string]struct{}{
-	"DeviceProduct": {},
-	"DeviceVendor":  {},
-	"EventID":       {},
-	"OperationName": {},
+	"DeviceProduct":      {},
+	"DeviceVendor":       {},
+	"DeviceName":         {},
+	"DeviceAction":       {},
+	"DeviceEventClassID": {},
+	"EventID":            {},
+	"OperationName":      {},
 }
 
 var _ backend.RulePredicateFreshnessProvider = (*Client)(nil)

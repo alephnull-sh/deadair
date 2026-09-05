@@ -81,6 +81,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintln(w, "  scan      one-shot report; exit 0 passed, 1 gated findings, 2 error")
 	fmt.Fprintln(w, "  serve     Prometheus exporter with periodic scans")
 	fmt.Fprintln(w, "  diff      compare two reports; exit 1 on regressions")
+	fmt.Fprintln(w, "  inspect   investigate a source or producer in a saved report")
 	fmt.Fprintln(w, "  tune      suggest baseline settings from accumulated state")
 	fmt.Fprintln(w, "  version   print version")
 	fmt.Fprintf(w, "\n%s\n", h("GET STARTED"))
@@ -99,7 +100,7 @@ func printHelp(w io.Writer) {
 	fmt.Fprintf(w, "\nRun \"deadair <command> -h\" for flags. Guide: %s\n", usageGuideURL)
 }
 
-var commands = []string{"scan", "serve", "check", "diff", "tune", "setup", "version", "help"}
+var commands = []string{"scan", "serve", "check", "diff", "inspect", "tune", "setup", "version", "help"}
 
 // suggest returns the closest command name, or "" if nothing is close.
 func suggest(input string) string {
@@ -149,6 +150,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runTune(args[1:], stdout, stderr)
 	case "diff":
 		return runDiff(args[1:], stdout, stderr)
+	case "inspect":
+		return runInspect(args[1:], stdout, stderr)
 	case "setup":
 		return runSetup(args[1:], stdout, stderr)
 	case "version", "-v", "--version":
@@ -618,7 +621,19 @@ func collectFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules [
 			incomplete++
 			continue
 		}
-		if item.Status == backendpkg.EvidenceAssessed && item.LastEvent.IsZero() && request.Window > 0 && item.Window < request.Window {
+		if len(item.Clocks) > 0 {
+			for basis, clock := range item.Clocks {
+				if clock.Status == backendpkg.EvidenceAssessed && clock.LastEvent.IsZero() && request.Window > clock.Window {
+					clock.Status = backendpkg.EvidenceIncomplete
+					clock.Detail = "the measured window is shorter than the source freshness threshold"
+					item.Clocks[basis] = clock
+				}
+				if clock.Status != backendpkg.EvidenceAssessed {
+					item.Status = backendpkg.EvidenceIncomplete
+				}
+			}
+			evidence[request.Source.Name] = item
+		} else if item.Status == backendpkg.EvidenceAssessed && item.LastEvent.IsZero() && request.Window > 0 && item.Window < request.Window {
 			item.Status = backendpkg.EvidenceIncomplete
 			item.Detail = fmt.Sprintf("bounded freshness window %s is shorter than max-stale %s", item.Window, request.Window)
 			evidence[request.Source.Name] = item
@@ -1030,6 +1045,11 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 	if err != nil {
 		return scanResult{}, err
 	}
+	if o.ruleFile == "" {
+		if err := validateProducers(c, o.policy); err != nil {
+			return scanResult{}, err
+		}
+	}
 	observedVersion := ""
 	if provider, ok := c.(backendpkg.VersionProvider); ok {
 		// Product version is useful report evidence, but a restricted root API
@@ -1143,6 +1163,13 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 		return scanResult{}, fmt.Errorf("reading backend enrichment evidence: %w", err)
 	}
 	suppressUnused := o.ruleFile != ""
+	var producerEvidence []backendpkg.ProducerEvidence
+	if !suppressUnused {
+		producerEvidence, err = collectProducers(ctx, c, o.policy, rules)
+		if err != nil {
+			return scanResult{}, err
+		}
+	}
 	unusedTelemetryUnavailableDetail := ""
 	if c.Name() == "sentinel" && !suppressUnused {
 		// The v1 unused-telemetry result requires a source document inventory.
@@ -1160,6 +1187,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 		ProvenanceEvidence:               provenanceEvidence,
 		LineageEvidence:                  lineageEvidence,
 		SummaryRuleRunEvidence:           summaryRunEvidence,
+		ProducerEvidence:                 producerEvidence,
 		Assessments:                      runtimeAssessments(o, g, scoped, stateAssess.schema, fieldAssessment, lagAssessment, freshnessAssessment, predicateFreshnessAssessment),
 		SkipUnused:                       suppressUnused,
 		UnusedTelemetryUnavailableDetail: unusedTelemetryUnavailableDetail,
@@ -1186,6 +1214,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 			}(),
 		},
 		Policy: o.policy, Store: store, TargetID: targetID, Instance: instance,
+		SourceURL: o.navigationFor(c).sourceURL, RuleURL: o.navigationFor(c).ruleURL,
 	})
 	return scanResult{
 		report: r, store: store, path: o.stateFile,
@@ -1258,6 +1287,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	ctx, cancelTimeout := context.WithTimeout(ctx, o.timeout*time.Duration(len(insts)))
 	defer cancelTimeout()
 	run := func(inst fleetInstance, io connOpts) (scanResult, error) {
+		if !*jsonOut && interactiveOutput(stdout) && interactiveOutput(stderr) {
+			fmt.Fprintf(stderr, "Scanning %s (read-only)…\n", terminalText(inst.backend.Name()))
+		}
 		sctx, cancel := context.WithTimeout(ctx, io.timeout)
 		defer cancel()
 		return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
@@ -1455,7 +1487,11 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 			fmt.Fprintf(w, "  [%s] %s — %s%s\n", d.Severity, d.Name, strings.Join(impairedReasonLabels(d.Reasons), ", "), impairedDetail(d))
 		}
 	}
-	printPlainSourceFindings(w, sourceAttentionItems(r))
+	if len(r.SourceImpacts) > 0 || len(r.Producers) > 0 {
+		printInvestigationSummary(w, r)
+	} else {
+		printPlainSourceFindings(w, sourceAttentionItems(r))
+	}
 	if len(r.PartialInputCoverage) > 0 {
 		verb := "are"
 		if s.PartialInputs == 1 {
@@ -1547,15 +1583,18 @@ func printPlainSourceFindings(w io.Writer, items []sourceAttention) {
 }
 
 func printPlainGateStatus(w io.Writer, r *report.Report) {
+	if headline := terminalFindingHeadline(r); headline != "" {
+		fmt.Fprintln(w, headline)
+	}
 	switch terminalGateExitCode(r) {
 	case report.ExitHealthy:
 		if count := sentinelSignalCount(r); count > 0 {
-			fmt.Fprintf(w, "%s — no gated findings; review %s below\n", color(w, "32;1", "GATE PASSED"), countLabel(count, "Sentinel signal", "Sentinel signals"))
+			fmt.Fprintf(w, "GATE PASSED · exit 0 — review %s below\n", countLabel(count, "Sentinel signal", "Sentinel signals"))
 			return
 		}
-		fmt.Fprintf(w, "%s — no gated findings\n", color(w, "32;1", "GATE PASSED"))
+		fmt.Fprintln(w, "GATE PASSED · exit 0 — no findings matched the configured gate")
 	case report.ExitFindings:
-		fmt.Fprintf(w, "%s — one or more findings require attention\n", color(w, "31;1", "GATE FAILED"))
+		fmt.Fprintln(w, "GATE FAILED · exit 1 — findings matched the gate; the scan completed")
 	default:
 		fmt.Fprintf(w, "%s — the gate could not be evaluated safely\n", color(w, "33;1", "SCAN INCOMPLETE"))
 	}
@@ -1572,8 +1611,8 @@ func printPlainSentinelSignals(w io.Writer, r *report.Report) {
 	if count == 1 {
 		verb = "needs"
 	}
-	fmt.Fprintf(w, "\nSENTINEL SIGNALS: %s %s review. Advisory evidence only; gate unchanged.\n",
-		countLabel(count, "signal", "signals"), verb)
+	fmt.Fprintf(w, "\nSENTINEL SIGNALS: %s %s review.\n  %s\n",
+		countLabel(count, "signal", "signals"), verb, sentinelSignalNote(r))
 	shown := 0
 	for _, item := range freshness {
 		if shown >= 10 {
@@ -1839,20 +1878,14 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 	}
 	for _, finding := range d.NewFindings {
 		switch finding.Class {
-		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput, report.FindingProducerStale, report.FindingSummaryPipeline:
+			name := findingSubject(finding)
 			fmt.Fprintf(w, "FINDING  %s — %s (%s)\n", name,
 				report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 		}
 	}
 	for _, finding := range d.NewlyGatedFindings {
-		name := finding.Source
-		if name == "" {
-			name = finding.RuleName
-		}
+		name := findingSubject(finding)
 		fmt.Fprintf(w, "NEW GATE %s — %s (%s)\n", name,
 			report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 	}
@@ -1867,20 +1900,14 @@ func printPlainDiff(w io.Writer, d *report.DiffResult) {
 	}
 	for _, finding := range d.RecoveredFindings {
 		switch finding.Class {
-		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput, report.FindingProducerStale, report.FindingSummaryPipeline:
+			name := findingSubject(finding)
 			fmt.Fprintf(w, "recovered finding: %s — %s (%s)\n", name,
 				report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 		}
 	}
 	for _, finding := range d.NoLongerGated {
-		name := finding.Source
-		if name == "" {
-			name = finding.RuleName
-		}
+		name := findingSubject(finding)
 		fmt.Fprintf(w, "no longer gated: %s — %s (%s)\n", name,
 			report.FindingReasonLabel(finding.Class, finding.Reason), report.FindingClassLabel(finding.Class))
 	}

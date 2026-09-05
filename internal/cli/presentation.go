@@ -150,7 +150,10 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 		}
 	}
 
-	if sourceFindings := sourceAttentionItems(r); len(sourceFindings) > 0 {
+	if len(r.SourceImpacts) > 0 || len(r.Producers) > 0 {
+		printInvestigationSummary(w, r)
+	}
+	if sourceFindings := sourceAttentionItems(r); len(r.SourceImpacts) == 0 && len(sourceFindings) > 0 {
 		visualHeading(w, "33;1", "SOURCE FINDINGS", len(sourceFindings))
 		for i, item := range sourceFindings {
 			if i >= 15 {
@@ -230,17 +233,20 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 }
 
 func printVisualGateStatus(w io.Writer, r *report.Report) {
+	if headline := terminalFindingHeadline(r); headline != "" {
+		fmt.Fprintf(w, "\n%s\n", color(w, "1", headline))
+	}
 	switch terminalGateExitCode(r) {
 	case report.ExitHealthy:
-		fmt.Fprintf(w, "\n%s\n", color(w, "32;1", "GATE PASSED"))
+		fmt.Fprintf(w, "\n%s\n", color(w, "2", "GATE PASSED · exit 0"))
 		if count := sentinelSignalCount(r); count > 0 {
 			fmt.Fprintln(w, color(w, "2", fmt.Sprintf("No gated findings. Review %s below.", countLabel(count, "Sentinel signal", "Sentinel signals"))))
 			return
 		}
-		fmt.Fprintln(w, color(w, "2", "No gated findings."))
+		fmt.Fprintln(w, color(w, "2", "No findings matched the configured gate."))
 	case report.ExitFindings:
-		fmt.Fprintf(w, "\n%s\n", color(w, "31;1", "GATE FAILED"))
-		fmt.Fprintln(w, color(w, "2", "One or more findings require attention."))
+		fmt.Fprintf(w, "\n%s\n", color(w, "2", "GATE FAILED · exit 1"))
+		fmt.Fprintln(w, color(w, "2", "Findings matched the configured gate. The scan completed."))
 	default:
 		fmt.Fprintf(w, "\n%s\n", color(w, "33;1", "SCAN INCOMPLETE"))
 		fmt.Fprintln(w, color(w, "2", "The gate could not be evaluated safely."))
@@ -254,7 +260,7 @@ func printVisualSentinelSignals(w io.Writer, r *report.Report) {
 		return
 	}
 	visualHeading(w, "33;1", "SENTINEL SIGNALS", len(freshness)+len(summaryRuns))
-	fmt.Fprintln(w, color(w, "2", "Advisory evidence only. Gate unchanged."))
+	fmt.Fprintln(w, color(w, "2", sentinelSignalNote(r)))
 	shown := 0
 	for _, item := range freshness {
 		if shown >= 10 {
@@ -412,12 +418,41 @@ func ruleSourceFreshnessWarnings(r *report.Report) []report.RuleSourceFreshness 
 func summaryRuleRunWarnings(r *report.Report) []report.SummaryRuleRun {
 	items := make([]report.SummaryRuleRun, 0, len(r.SummaryRuleRuns))
 	for _, item := range r.SummaryRuleRuns {
-		if item.Status == "assessed" && strings.EqualFold(item.RunStatus, "Succeeded") {
+		if item.HealthStatus == "ok" || (item.HealthStatus == "" && item.Status == "assessed" && strings.EqualFold(item.RunStatus, "Succeeded")) {
 			continue
 		}
 		items = append(items, item)
 	}
 	return items
+}
+
+func sentinelSignalNote(r *report.Report) string {
+	if len(summaryRuleRunWarnings(r)) > 0 {
+		return "Filtered activity is advisory. Summary findings follow the gate policy."
+	}
+	return "Filtered activity is advisory; gate unchanged."
+}
+
+func terminalFindingHeadline(r *report.Report) string {
+	if terminalGateExitCode(r) == report.ExitError {
+		return ""
+	}
+	if r.Summary.DeadDetections > 0 {
+		return countLabel(r.Summary.DeadDetections, "detection can't fire", "detections can't fire")
+	}
+	quiet := 0
+	for _, p := range r.Producers {
+		if !p.Observation.ExpectedDowntime && (p.Observation.FreshnessStatus == "stale" || p.Observation.FreshnessStatus == "empty") {
+			quiet++
+		}
+	}
+	if quiet > 0 {
+		return countLabel(quiet, "expected producer is quiet", "expected producers are quiet")
+	}
+	if r.Summary.ImpairedDetections > 0 {
+		return countLabel(r.Summary.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility")
+	}
+	return ""
 }
 
 func countLabel(n int, singular, plural string) string {
@@ -463,11 +498,8 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 	}
 	for _, finding := range d.NewFindings {
 		switch finding.Class {
-		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput, report.FindingProducerStale, report.FindingSummaryPipeline:
+			name := findingSubject(finding)
 			visualHeading(w, "33;1", strings.ToUpper(report.FindingClassLabel(finding.Class)), 1)
 			fmt.Fprintf(w, "  %s\n", color(w, "1", name))
 			fmt.Fprintf(w, "  %s\n", color(w, "2", report.FindingReasonLabel(finding.Class, finding.Reason)))
@@ -476,10 +508,7 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 	if len(d.NewlyGatedFindings) > 0 {
 		visualHeading(w, "31;1", "NEWLY GATED", len(d.NewlyGatedFindings))
 		for _, finding := range d.NewlyGatedFindings {
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+			name := findingSubject(finding)
 			fmt.Fprintf(w, "  %s\n", color(w, "1", name))
 			fmt.Fprintf(w, "  %s\n", color(w, "2", report.FindingReasonLabel(finding.Class, finding.Reason)+"  ·  "+report.FindingClassLabel(finding.Class)))
 		}
@@ -500,19 +529,13 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 	}
 	for _, finding := range d.RecoveredFindings {
 		switch finding.Class {
-		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput, report.FindingProducerStale, report.FindingSummaryPipeline:
+			name := findingSubject(finding)
 			fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "RECOVERED"), name, report.FindingReasonLabel(finding.Class, finding.Reason))
 		}
 	}
 	for _, finding := range d.NoLongerGated {
-		name := finding.Source
-		if name == "" {
-			name = finding.RuleName
-		}
+		name := findingSubject(finding)
 		fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "NO LONGER GATED"), name, report.FindingReasonLabel(finding.Class, finding.Reason))
 	}
 	for _, n := range d.NewSources {
