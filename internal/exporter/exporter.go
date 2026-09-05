@@ -8,6 +8,7 @@ package exporter
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -16,19 +17,51 @@ import (
 
 // Server holds the snapshot rendered at /metrics.
 type Server struct {
-	snapshot atomic.Pointer[report.FleetReport]
-	healthy  atomic.Bool
+	snapshot atomic.Pointer[metricSnapshot]
 }
 
-// Update stores a new fleet snapshot. Instances that failed this cycle keep
-// last-known-good data out of the listing but flip deadair_up to 0.
+type metricSnapshot struct {
+	fleet   *report.FleetReport
+	failed  map[string]bool
+	healthy bool
+}
+
+// Update retains a failed instance's last report, but marks its current scan
+// down. Reports and health flags are published together for consistent scrapes.
 func (s *Server) Update(f *report.FleetReport) {
+	previous := s.snapshot.Load()
+	failed := make(map[string]bool)
 	if f == nil {
-		s.healthy.Store(false)
+		if previous != nil {
+			for _, r := range previous.fleet.Instances {
+				failed[r.Instance] = true
+			}
+			for _, e := range previous.fleet.Errors {
+				failed[e.Instance] = true
+			}
+			s.snapshot.Store(&metricSnapshot{fleet: previous.fleet, failed: failed})
+		}
 		return
 	}
-	s.snapshot.Store(f)
-	s.healthy.Store(len(f.Errors) == 0 && len(f.Instances) > 0)
+	copyFleet := *f
+	copyFleet.Instances = append([]*report.Report(nil), f.Instances...)
+	present := make(map[string]bool)
+	for _, r := range f.Instances {
+		present[r.Instance] = true
+	}
+	for _, e := range f.Errors {
+		failed[e.Instance] = true
+	}
+	if previous != nil {
+		for _, r := range previous.fleet.Instances {
+			if failed[r.Instance] && !present[r.Instance] {
+				copyFleet.Instances = append(copyFleet.Instances, r)
+				present[r.Instance] = true
+			}
+		}
+	}
+	sort.Slice(copyFleet.Instances, func(i, j int) bool { return copyFleet.Instances[i].Instance < copyFleet.Instances[j].Instance })
+	s.snapshot.Store(&metricSnapshot{fleet: &copyFleet, failed: failed, healthy: len(f.Errors) == 0 && len(f.Instances) > 0})
 }
 
 // Handler returns the /metrics handler.
@@ -43,21 +76,37 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 	var b strings.Builder
 
 	up := 0
-	if s.healthy.Load() {
+	snap := s.snapshot.Load()
+	if snap != nil && snap.healthy {
 		up = 1
 	}
 	fmt.Fprintf(&b, "# HELP deadair_up Whether the most recent scan cycle succeeded for every instance.\n# TYPE deadair_up gauge\ndeadair_up %d\n", up)
 
-	f := s.snapshot.Load()
-	if f != nil {
+	if snap != nil {
+		f := snap.fleet
 		fmt.Fprintf(&b, "# HELP deadair_last_scan_timestamp_seconds Unix time of the last scan cycle.\n# TYPE deadair_last_scan_timestamp_seconds gauge\ndeadair_last_scan_timestamp_seconds %d\n", f.GeneratedAt.Unix())
 
 		fmt.Fprintf(&b, "# HELP deadair_instance_up Whether the last scan of this instance succeeded.\n# TYPE deadair_instance_up gauge\n")
+		seen := make(map[string]bool)
 		for _, r := range f.Instances {
-			fmt.Fprintf(&b, "deadair_instance_up{instance=%s} 1\n", label(r.Instance))
+			instanceUp := 1
+			if snap.failed[r.Instance] {
+				instanceUp = 0
+			}
+			fmt.Fprintf(&b, "deadair_instance_up{instance=%s} %d\n", label(r.Instance), instanceUp)
+			seen[r.Instance] = true
 		}
 		for _, e := range f.Errors {
-			fmt.Fprintf(&b, "deadair_instance_up{instance=%s} 0\n", label(e.Instance))
+			if !seen[e.Instance] {
+				fmt.Fprintf(&b, "deadair_instance_up{instance=%s} 0\n", label(e.Instance))
+				seen[e.Instance] = true
+			}
+		}
+		fmt.Fprint(&b, "# HELP deadair_instance_last_success_timestamp_seconds Unix time of the retained successful report.\n# TYPE deadair_instance_last_success_timestamp_seconds gauge\n")
+		for _, r := range f.Instances {
+			if !r.GeneratedAt.IsZero() {
+				fmt.Fprintf(&b, "deadair_instance_last_success_timestamp_seconds{instance=%s} %d\n", label(r.Instance), r.GeneratedAt.Unix())
+			}
 		}
 
 		fmt.Fprintf(&b, "# HELP deadair_sources Number of sources by health status.\n# TYPE deadair_sources gauge\n")

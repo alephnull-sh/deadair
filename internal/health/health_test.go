@@ -22,10 +22,16 @@ func TestEvaluate(t *testing.T) {
 		{"empty", backend.Source{Docs: 0}, StatusEmpty},
 		{"unknown freshness", backend.Source{Docs: 10}, StatusUnknown},
 		{"unknown docs and freshness", backend.Source{Docs: -1}, StatusUnknown},
+		{"clock skew boundary", backend.Source{Docs: 10, LastEvent: now.Add(backend.FreshnessClockSkew)}, StatusOK},
+		{"future timestamp", backend.Source{Docs: 10, LastEvent: now.Add(backend.FreshnessClockSkew + time.Nanosecond)}, StatusUnknown},
+		{"far future timestamp", backend.Source{Docs: 10, LastEvent: now.Add(24 * time.Hour)}, StatusUnknown},
 	}
 	for _, tt := range tests {
 		if got := check.Evaluate(tt.source); got.Status != tt.want {
 			t.Errorf("%s: Evaluate() = %s, want %s", tt.name, got.Status, tt.want)
+		}
+		if got := check.Evaluate(tt.source); got.Age < 0 {
+			t.Errorf("%s: negative age %s", tt.name, got.Age)
 		}
 	}
 }

@@ -29,6 +29,10 @@ deadair scan
 `check` verifies the connection, required privileges, and optional capabilities such as schema
 visibility. `scan` prints the terminal report.
 
+Freshness checks allow up to five minutes of clock skew. Later timestamps are excluded so they
+cannot hide older events. If no usable timestamp remains, freshness is unknown unless a bounded
+query proves there were no recent events.
+
 ![deadair check reporting READY against a disposable Elastic lab](assets/check-lab.png)
 
 The screenshot above is captured from the same disposable Elastic lab as the README scan with
@@ -58,6 +62,9 @@ Useful connection flags:
 | `--insecure-skip-verify` | lab use only; skip TLS verification |
 | `--kibana-space soc` | read Elastic rules from a non-default Kibana space |
 | `--timeout 90s` | raise the per-scan timeout |
+
+Connections honor `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, including their lowercase forms.
+Use `--ca-cert` if the connection requires a private CA.
 
 ### Microsoft Sentinel
 
@@ -410,6 +417,9 @@ ambiguous, remote, or otherwise not safely assessed. Existing source-health find
 the candidate gate. A fleet candidate scan must use one backend because the accepted candidate
 formats differ by backend.
 
+Elastic indicator-match rules and ES|QL pipelines with lookup, enrichment, or subquery dependencies
+currently exit `2` in candidate mode. Their event source alone is not enough to assess the rule.
+
 The official GitHub Action wraps single-instance candidate gates for Elastic, OpenSearch, and
 Sentinel. It keeps the JSON evidence as a workflow artifact and writes the useful counts to the job
 summary. For Elastic or OpenSearch, pass the connection details through repository or environment
@@ -537,6 +547,10 @@ suppressing its finding, and gates normally. Source entries use the first matchi
 severity threshold applies to rule findings; source findings are controlled by their class.
 Malformed policy files fail the scan.
 
+Sentinel uses each source's `max_stale` policy when checking its 24-hour freshness evidence. An
+empty 24-hour result proves a source is stale under a 1-hour policy, but cannot settle a 48-hour
+policy. That longer threshold leaves the assessment incomplete and returns `2` in candidate mode.
+
 A policy can name source patterns, accepted finding IDs, and the reason an exception exists. Check
 one in only when repository access matches the sensitivity of that information. For a public
 repository, keep sensitive entries in a restricted file created on the runner and pass that path to
@@ -554,6 +568,8 @@ set, and assessment configuration. The normalized Sentinel remote-workspace mapp
 to target and assessment identity, so changing it requires a new baseline. Incomparable reports
 exit `2`. Comparable reports diff stable reason-level finding IDs, so one newly missing field does
 not make every impairment on that rule look new. Recoveries are shown but do not fail the command.
+Candidate comparisons also exit `2` if either scan could not assess the candidate safely. Rerun
+that scan after resolving the access or input problem before using it in a comparison.
 
 Reports created before v0.6.0 do not contain the comparison identity fields. After upgrading,
 create a new baseline with v0.6.0 or later.

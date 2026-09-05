@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +15,37 @@ import (
 
 	"github.com/alephnull-sh/deadair/internal/backend"
 )
+
+func TestFutureDataStreamMaximumFallsBackToBoundedSearch(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		if !strings.Contains(string(body), `"lte":"now+300s"`) {
+			t.Errorf("missing future bound: %s", body)
+		}
+		if strings.Contains(r.URL.Path, "only-future") {
+			fmt.Fprint(w, `{"aggregations":{"latest":{"value":null}}}`)
+			return
+		}
+		fmt.Fprintf(w, `{"aggregations":{"latest":{"value":%d}}}`, now.Add(-48*time.Hour).UnixMilli())
+	}))
+	defer server.Close()
+	client := &Client{URL: server.URL, HTTP: server.Client(), Concurrency: 1}
+	sources := []backend.Source{
+		{Name: "mixed", Docs: 2, LastEvent: now.Add(24 * time.Hour)},
+		{Name: "only-future", Docs: 1, LastEvent: now.Add(24 * time.Hour)},
+		{Name: "current", Docs: 1, LastEvent: now},
+	}
+	client.fillFreshness(context.Background(), sources)
+	if calls != 2 || !sources[0].LastEvent.Equal(now.Add(-48*time.Hour)) || !sources[1].LastEvent.IsZero() || !sources[2].LastEvent.Equal(now) {
+		t.Fatalf("future maximum was trusted: calls=%d sources=%+v", calls, sources)
+	}
+}
 
 func TestRulesSearchDetectors(t *testing.T) {
 	var gotAuth string

@@ -114,6 +114,51 @@ func TestMetricsFleetInstanceFailure(t *testing.T) {
 	}
 }
 
+func TestMetricsRetainOnlyFailedInstancesAndReplaceOnRecovery(t *testing.T) {
+	s := &Server{}
+	scrape := func() string {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
+		return w.Body.String()
+	}
+	a := &report.Report{Instance: "a", GeneratedAt: time.Unix(1000, 0)}
+	a.Summary.DeadDetections = 3
+	b := &report.Report{Instance: "b", GeneratedAt: time.Unix(1000, 0)}
+	s.Update(fleetOf(a, b))
+	failure := report.BuildFleet(nil, []report.InstanceError{{Instance: "a", Error: "offline"}, {Instance: "new", Error: "offline"}})
+	s.Update(failure)
+	text := scrape()
+	for _, want := range []string{`deadair_instance_up{instance="a"} 0`, `deadair_instance_up{instance="new"} 0`, `deadair_detections_dead{instance="a"} 3`, `deadair_instance_last_success_timestamp_seconds{instance="a"} 1000`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	for _, absent := range []string{`deadair_instance_up{instance="a"} 1`, `instance="b"`, `deadair_detections_dead{instance="new"}`} {
+		if strings.Contains(text, absent) {
+			t.Errorf("unexpected %s", absent)
+		}
+	}
+	if len(failure.Instances) != 0 {
+		t.Fatal("Update mutated the input fleet")
+	}
+	s.Update(failure)
+	if strings.Count(scrape(), `deadair_instance_up{instance="a"}`) != 1 {
+		t.Fatal("duplicate health series")
+	}
+	recovered := &report.Report{Instance: "a", GeneratedAt: time.Unix(2000, 0)}
+	s.Update(fleetOf(recovered))
+	text = scrape()
+	for _, want := range []string{`deadair_instance_up{instance="a"} 1`, `deadair_detections_dead{instance="a"} 0`, `deadair_instance_last_success_timestamp_seconds{instance="a"} 2000`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("recovery missing %s", want)
+		}
+	}
+	s.Update(nil)
+	if !strings.Contains(scrape(), `deadair_instance_up{instance="a"} 0`) {
+		t.Fatal("nil cycle kept instance up")
+	}
+}
+
 func TestMetricsMaintenanceFreshnessEmitted(t *testing.T) {
 	s := &Server{}
 	ts := httptest.NewServer(s.Handler())

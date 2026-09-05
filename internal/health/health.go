@@ -90,6 +90,12 @@ func (c Check) Evaluate(s backend.Source) Assessment {
 		return Assessment{Status: StatusUnknown}
 	}
 	age := t.Sub(s.LastEvent)
+	if age < -backend.FreshnessClockSkew {
+		return Assessment{Status: StatusUnknown}
+	}
+	if age < 0 {
+		age = 0
+	}
 	if age > c.MaxStale {
 		if inDowntime {
 			return Assessment{Status: StatusMaintenance, Age: age, ExpectedDowntime: true}

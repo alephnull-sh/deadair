@@ -268,10 +268,15 @@ func readSecretFile(path, label string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading %s file: %w", label, err)
 	}
-	return strings.TrimSpace(string(data)), nil
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return "", fmt.Errorf("%s file is empty", label)
+	}
+	return value, nil
 }
 
-// httpClient builds the HTTP client honoring --ca-cert / --insecure-skip-verify.
+// httpClient preserves standard proxy and connection settings, then applies
+// --ca-cert / --insecure-skip-verify.
 func (o *connOpts) httpClient(stderr io.Writer) (*http.Client, error) {
 	tc := &tls.Config{InsecureSkipVerify: o.insecureTLS}
 	if o.insecureTLS {
@@ -288,7 +293,9 @@ func (o *connOpts) httpClient(stderr io.Writer) (*http.Client, error) {
 		}
 		tc.RootCAs = pool
 	}
-	return &http.Client{Timeout: o.timeout, Transport: &http.Transport{TLSClientConfig: tc}}, nil
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tc
+	return &http.Client{Timeout: o.timeout, Transport: transport}, nil
 }
 
 func (o *connOpts) elasticClient(stderr io.Writer) (backendpkg.Backend, error) {
@@ -320,6 +327,17 @@ func (o *connOpts) elasticClient(stderr io.Writer) (backendpkg.Backend, error) {
 	}, nil
 }
 
+func validateOpenSearchAuth(username, password, key string) error {
+	if (strings.TrimSpace(username) == "") != (strings.TrimSpace(password) == "") ||
+		(username != "" && strings.TrimSpace(username) == "") {
+		return fmt.Errorf("OpenSearch basic auth requires both username and password")
+	}
+	if key != "" && username != "" {
+		return fmt.Errorf("OpenSearch auth is ambiguous: use either API key auth or username/password, not both")
+	}
+	return nil
+}
+
 func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error) {
 	if o.opensearchURL == "" {
 		return nil, fmt.Errorf("--opensearch-url is required (or DEADAIR_OPENSEARCH_URL)")
@@ -327,6 +345,9 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 	username := o.opensearchUsername
 	password := os.Getenv("DEADAIR_OPENSEARCH_PASSWORD")
 	if o.opensearchPasswordFile != "" {
+		if password != "" {
+			return nil, fmt.Errorf("choose either DEADAIR_OPENSEARCH_PASSWORD or --opensearch-password-file")
+		}
 		filePassword, err := readSecretFile(o.opensearchPasswordFile, "OpenSearch password")
 		if err != nil {
 			return nil, err
@@ -339,6 +360,9 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 
 	key := os.Getenv("DEADAIR_OPENSEARCH_API_KEY")
 	if o.apiKeyFile != "" {
+		if key != "" || os.Getenv("DEADAIR_API_KEY") != "" {
+			return nil, fmt.Errorf("choose either an API key environment variable or --api-key-file")
+		}
 		fileKey, err := readSecretFile(o.apiKeyFile, "api key")
 		if err != nil {
 			return nil, err
@@ -348,8 +372,8 @@ func (o *connOpts) openSearchClient(stderr io.Writer) (backendpkg.Backend, error
 	if key == "" && username == "" {
 		key = os.Getenv("DEADAIR_API_KEY")
 	}
-	if key != "" && username != "" {
-		return nil, fmt.Errorf("OpenSearch auth is ambiguous: use either API key auth or username/password, not both")
+	if err := validateOpenSearchAuth(username, password, key); err != nil {
+		return nil, err
 	}
 	if key == "" && username == "" {
 		fmt.Fprintln(stderr, "deadair: warning: no OpenSearch auth (DEADAIR_OPENSEARCH_API_KEY, DEADAIR_API_KEY, --api-key-file, or username/password); connecting unauthenticated")
@@ -518,7 +542,7 @@ func enabledConcreteSources(rules []backendpkg.Rule, g *graph.Graph, inventory [
 	return sources
 }
 
-func freshnessRequests(rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration) []backendpkg.FreshnessRequest {
+func freshnessRequests(rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration, policy *report.Policy) []backendpkg.FreshnessRequest {
 	type clocks struct{ event, ingestion bool }
 	wanted := make(map[string]clocks)
 	for _, rule := range rules {
@@ -549,19 +573,19 @@ func freshnessRequests(rules []backendpkg.Rule, g *graph.Graph, inventory []back
 		case use.ingestion:
 			basis = backendpkg.FreshnessIngestionTime
 		}
-		requests = append(requests, backendpkg.FreshnessRequest{Source: source, Basis: basis, Window: maxStale})
+		requests = append(requests, backendpkg.FreshnessRequest{Source: source, Basis: basis, Window: policy.MaxStaleFor(source.Name, maxStale)})
 	}
 	return requests
 }
 
-func collectFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration) (map[string]backendpkg.FreshnessEvidence, report.RuntimeAssessment, error) {
+func collectFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source, maxStale time.Duration, policy *report.Policy) (map[string]backendpkg.FreshnessEvidence, report.RuntimeAssessment, error) {
 	assessment := report.RuntimeAssessment{Name: report.AssessmentSourceFreshness}
 	provider, legacy := c.(backendpkg.FreshnessProvider)
 	requestProvider, ruleAware := c.(backendpkg.FreshnessRequestProvider)
 	if !legacy && !ruleAware {
 		return nil, report.RuntimeAssessment{}, nil
 	}
-	requests := freshnessRequests(rules, g, inventory, maxStale)
+	requests := freshnessRequests(rules, g, inventory, maxStale, policy)
 	if len(requests) == 0 {
 		assessment.Status = backendpkg.EvidenceDisabled
 		assessment.Detail = "no enabled rule resolved to a local source"
@@ -588,16 +612,16 @@ func collectFreshnessEvidence(ctx context.Context, c backendpkg.Backend, rules [
 	}
 
 	assessed, unavailable, incomplete := 0, 0, 0
-	for _, source := range sources {
-		item, found := evidence[source.Name]
+	for _, request := range requests {
+		item, found := evidence[request.Source.Name]
 		if !found {
 			incomplete++
 			continue
 		}
-		if item.Status == backendpkg.EvidenceAssessed && item.LastEvent.IsZero() && maxStale > 0 && item.Window < maxStale {
+		if item.Status == backendpkg.EvidenceAssessed && item.LastEvent.IsZero() && request.Window > 0 && item.Window < request.Window {
 			item.Status = backendpkg.EvidenceIncomplete
-			item.Detail = fmt.Sprintf("bounded freshness window %s is shorter than max-stale %s", item.Window, maxStale)
-			evidence[source.Name] = item
+			item.Detail = fmt.Sprintf("bounded freshness window %s is shorter than max-stale %s", item.Window, request.Window)
+			evidence[request.Source.Name] = item
 		}
 		switch item.Status {
 		case backendpkg.EvidenceAssessed:
@@ -1052,7 +1076,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 		return scanResult{}, fmt.Errorf("resolving rule inputs: %w", err)
 	}
 	g := graph.BuildResolved(rules, all, resolutions)
-	freshnessEvidence, freshnessAssessment, err := collectFreshnessEvidence(ctx, c, rules, g, all, o.maxStale)
+	freshnessEvidence, freshnessAssessment, err := collectFreshnessEvidence(ctx, c, rules, g, all, o.maxStale, o.policy)
 	if err != nil {
 		return scanResult{}, fmt.Errorf("reading source-freshness evidence: %w", err)
 	}
@@ -1959,6 +1983,10 @@ func runServe(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "deadair: serve does not accept positional arguments: %q\n", fs.Arg(0))
 		return report.ExitError
 	}
+	if *interval <= 0 {
+		fmt.Fprintln(stderr, "deadair: --interval must be greater than zero")
+		return report.ExitError
+	}
 	if err := validateScanOptions(o, ""); err != nil {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
@@ -1986,56 +2014,84 @@ func runServe(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "deadair: warning: exporter bound beyond loopback — metric labels enumerate your log sources; put an authenticated proxy (mTLS/reverse proxy) in front")
 	}
 
+	listener, err := net.Listen("tcp", *bind)
+	if err != nil {
+		fmt.Fprintf(stderr, "deadair: cannot listen on %s: %v\n", *bind, err)
+		return report.ExitError
+	}
+	defer listener.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	srv := &exporter.Server{}
-	httpSrv := &http.Server{Addr: *bind, Handler: srv.Handler()}
-
-	go func() {
-		scan := func() {
-			run := func(inst fleetInstance, io connOpts) (scanResult, error) {
-				sctx, cancel := context.WithTimeout(ctx, io.timeout)
-				defer cancel()
-				return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
-			}
-			f, commits := scanFleet(insts, o, run)
-			if redactionEnabled {
-				f.RedactWith(redactor)
-			}
-			for _, e := range f.Errors {
-				fmt.Fprintf(stderr, "deadair: scan failed (%s): %s\n", e.Instance, e.Error)
-			}
-			srv.Update(f)
-			for _, c := range commits {
-				if err := c.commitState(); err != nil {
-					printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
-				}
+	scan := func(ctx context.Context) {
+		run := func(inst fleetInstance, io connOpts) (scanResult, error) {
+			sctx, cancel := context.WithTimeout(ctx, io.timeout)
+			defer cancel()
+			return scanOnce(sctx, inst.backend, io, inst.name, inst.targetID)
+		}
+		f, commits := scanFleet(insts, o, run)
+		if ctx.Err() != nil {
+			return
+		}
+		if redactionEnabled {
+			f.RedactWith(redactor)
+		}
+		for _, e := range f.Errors {
+			fmt.Fprintf(stderr, "deadair: scan failed (%s): %s\n", e.Instance, e.Error)
+		}
+		srv.Update(f)
+		for _, c := range commits {
+			if err := c.commitState(); err != nil {
+				printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
 			}
 		}
-		scan()
-		t := time.NewTicker(*interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				scan()
-			}
-		}
-	}()
-	go func() {
-		<-ctx.Done()
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(sctx)
-	}()
-
-	fmt.Fprintf(stderr, "deadair: serving metrics on http://%s/metrics (scan interval %s)\n", *bind, *interval)
-	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	}
+	fmt.Fprintf(stderr, "deadair: serving metrics on http://%s/metrics (scan interval %s)\n", listener.Addr(), *interval)
+	if err := serveMetrics(ctx, listener, *interval, srv.Handler(), scan); err != nil {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
 	}
 	return 0
+}
+
+func serveMetrics(parent context.Context, listener net.Listener, interval time.Duration, handler http.Handler, scan func(context.Context)) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	httpSrv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			scan(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-ctx.Done()
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			_ = httpSrv.Close()
+		}
+	}()
+	err := httpSrv.Serve(listener)
+	cancel()
+	<-workerDone
+	<-shutdownDone
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
 }

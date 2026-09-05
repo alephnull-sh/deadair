@@ -65,6 +65,15 @@ Recommended permissions:
 
 ## Fleet config
 
+Instance names must be unique without regard to case. Use 1–64 ASCII letters, digits, dots,
+underscores or hyphens, starting with a letter or digit. Trailing dots and reserved device names
+such as `CON` are rejected. Names become state-file suffixes, so paths and Unicode names are not
+accepted. Fleet files reject unknown fields and extra JSON documents.
+
+Choose one credential source for each secret: an environment variable or a file. Explicit secret
+references must resolve to a nonempty value. OpenSearch accepts either an API key or a complete
+username/password pair; omit both to connect without authentication.
+
 ```json
 {"instances": [
   {

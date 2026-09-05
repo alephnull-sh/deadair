@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// FreshnessClockSkew allows small differences between producer and scanner
+// clocks. Later timestamps cannot establish current telemetry freshness.
+const FreshnessClockSkew = 5 * time.Minute
+
 // Rule is a detection rule as inventoried from a SIEM.
 type Rule struct {
 	// ID is the backend's logical rule identifier. It is expected to survive
@@ -312,7 +316,7 @@ const (
 )
 
 // FreshnessRequest carries the timing model of enabled rules that consume one
-// concrete source. Window is the caller's stale threshold.
+// concrete source. Window is the effective stale threshold after source policy.
 type FreshnessRequest struct {
 	Source Source
 	Basis  FreshnessBasis

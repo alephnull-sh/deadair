@@ -5,12 +5,14 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/alephnull-sh/deadair/internal/backend"
@@ -179,6 +181,41 @@ func Load(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading state file: %w", err)
 	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil || root == nil {
+		return nil, fmt.Errorf("state file must contain a JSON object")
+	}
+	// encoding/json accepts case-insensitive field aliases and duplicate keys.
+	// Neither may override the version after the preflight check.
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	_, _ = decoder.Token() // The complete JSON object was validated above.
+	seenVersion := false
+	for decoder.More() {
+		key, _ := decoder.Token()
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return nil, fmt.Errorf("parsing state file: %w", err)
+		}
+		name := key.(string)
+		if strings.EqualFold(name, "version") {
+			if name != "version" || seenVersion {
+				return nil, fmt.Errorf("state version must appear once as lowercase version")
+			}
+			seenVersion = true
+		}
+	}
+	version := 0
+	if raw, present := root["version"]; present {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, fmt.Errorf("state version must be an integer")
+		}
+		if err := json.Unmarshal(raw, &version); err != nil {
+			return nil, fmt.Errorf("state version must be an integer: %w", err)
+		}
+	}
+	if version != 0 && version != Version {
+		return nil, fmt.Errorf("unsupported state version %d (supported: %d)", version, Version)
+	}
 	var s Store
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("parsing state file: %w", err)
@@ -231,6 +268,9 @@ func (s *Store) SaveFindingUpdates(path string) error {
 }
 
 func (s *Store) save(path string, pruneSources bool) error {
+	if s.Version != 0 && s.Version != Version {
+		return fmt.Errorf("unsupported state version %d (supported: %d)", s.Version, Version)
+	}
 	s.Version = Version
 	if pruneSources {
 		s.PruneStale(time.Now().UTC(), pruneRetention)
