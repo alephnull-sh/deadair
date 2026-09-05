@@ -118,7 +118,8 @@ threshold. Restoring that feed cleared the producer finding in the next scan.
 
 The producer view lists rules whose parsed filters require that exact feed, separately from other
 table consumers. It doesn't label every detection on `CommonSecurityLog` as broken. The
-[investigation guide](investigate.md) shows the policy and maintenance settings.
+[investigation guide](https://github.com/alephnull-sh/deadair/blob/main/docs/investigate.md) shows the
+policy and maintenance settings.
 
 <figure class="bordered" id="sentinel-demo">
   <video controls playsinline preload="none" poster="{{ '/assets/sentinel-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" aria-label="A Sentinel firewall feed stops and recovers inside a busy shared table">
