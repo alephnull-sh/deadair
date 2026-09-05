@@ -8,6 +8,9 @@ deadair scan --json-out report.json --html-out report.html
 deadair inspect --source logs-system.auth-default report.json
 ```
 
+Run `deadair inspect report.json` without a selector to browse all saved sources and expected feeds.
+Use `--source` or `--producer` to focus on one.
+
 The source view lists its enabled consumers in severity order, the freshness observation, and a
 first check based on the evidence. The HTML report has the same view. A source that has stopped
 reporting points you toward the sender and collector; a missing field points you toward the mapping

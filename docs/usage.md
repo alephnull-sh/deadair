@@ -84,10 +84,6 @@ deadair check
 deadair scan --json-out sentinel-report.json
 ```
 
-The disposable demo intentionally includes broken data paths. Its scan should print `GATE FAILED`
-and exit `1`, meaning the scan completed and the configured gate found the seeded problems. Exit
-`2` means the scan itself could not complete.
-
 `DEADAIR_SENTINEL_WORKSPACE_ID` can override the discovered Log Analytics customer ID, but deadair
 still verifies it against the workspace returned by ARM. Workload identity, managed identity, and
 service-principal authentication use the same scan variables. See the
@@ -229,6 +225,13 @@ the custom role also needs
 `Microsoft.OperationalInsights/workspaces/query/*/read` action.
 
 ## Read the findings
+
+The scan lists affected detections first, then sources and the policy result. The disposable
+demo exits `1` because its seeded problems match the gate. Exit `2` means the assessment could
+not complete safely.
+
+Terminal colours mark failures and warnings; the labels carry the same meaning without colour.
+Set `NO_COLOR=1` to disable styling. Redirected output is always plain text.
 
 A finding states what deadair observed. If several rules point to the same source, start there:
 

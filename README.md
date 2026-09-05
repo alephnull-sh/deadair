@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <a href="https://alephnull-sh.github.io/deadair/#elastic-demo"><img alt="Investigating a missing process.command_line field in a saved Elastic lab scan" src="docs/assets/scan-lab.png" width="860"></a>
+  <a href="https://alephnull-sh.github.io/deadair/#elastic-demo"><img alt="An Elastic scan showing missing and stale inputs, missing fields, and delayed events" src="docs/assets/scan-lab.png" width="860"></a>
 </p>
 
 <p align="center">

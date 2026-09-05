@@ -1322,6 +1322,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 				return report.ExitError
 			}
 		}
+		if !*jsonOut && !redactionEnabled {
+			printSavedReport(stdout, outFile, false)
+		}
 		if o.ruleFile != "" {
 			return f.CandidateExitCode()
 		}
@@ -1370,6 +1373,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	if err := res.commitState(); err != nil {
 		printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
 		return report.ExitError
+	}
+	if !*jsonOut && !redactionEnabled {
+		printSavedReport(stdout, outFile, len(r.SourceImpacts)+len(r.Producers) > 0)
 	}
 	if o.ruleFile != "" {
 		return r.CandidateExitCode()
@@ -1423,68 +1429,30 @@ func printSummary(w io.Writer, r *report.Report) {
 func printPlainSummary(w io.Writer, r *report.Report) {
 	s := r.Summary
 	visibleUnmapped := r.VisibleUnmappedRules()
-	fmt.Fprintf(w, "deadair scan — %s — %s\n", r.Backend, r.GeneratedAt.Format(time.RFC3339))
-	printPlainGateStatus(w, r)
-	counts := map[string]int{}
-	for _, src := range r.Sources {
-		counts[src.Status]++
-	}
-	fmt.Fprintf(w, "sources:    %d (%d ok, %d stale, %d empty, %d unknown, %d maintenance)\n",
-		s.Sources, counts["ok"], counts["stale"], counts["empty"], counts["unknown"], counts["maintenance"])
-	fmt.Fprintf(w, "detections: %d enabled / %d total", s.EnabledRules, s.Rules)
-	if len(visibleUnmapped) > 0 {
-		fmt.Fprintf(w, " (%d not fully assessed)", len(visibleUnmapped))
-	}
-	fmt.Fprintln(w)
-	if len(r.InputResolutions) > 0 {
-		resolution := humanInputResolution(r)
-		fmt.Fprintf(w, "inputs:     %d resolved, %d empty, %d incompatible, %d unsupported, %d unavailable, %d remote, %d ambiguous\n",
-			resolution.Resolved, resolution.Empty, resolution.Incompatible, resolution.Unsupported, resolution.Unavailable,
-			resolution.Remote, resolution.Ambiguous)
-	}
-	if r.Policy != nil {
-		fmt.Fprintf(w, "policy:     %d gated, %d accepted, %d expired\n",
-			s.GatedFindings, r.Policy.AcceptedActive, r.Policy.AcceptedExpired)
-	}
-	if s.VolumeLowSources > 0 {
-		fmt.Fprintf(w, "volume:     %s below same weekday/hour baseline\n", countLabel(s.VolumeLowSources, "source", "sources"))
-	}
-	if s.SchemaDriftSources > 0 {
-		fmt.Fprintf(w, "schema:     %s changed field_caps since previous snapshot\n", countLabel(s.SchemaDriftSources, "source", "sources"))
-	}
-	if checks := unassessedChecks(r); len(checks) > 0 {
-		fmt.Fprintln(w, "checks:")
-		for _, check := range checks {
-			fmt.Fprintf(w, "  %s\n", check)
-		}
-	}
+	printScanHeading(w, r)
 	if len(r.DeadDetections) > 0 {
-		fmt.Fprintf(w, "\n%s\n", color(w, "31;1", fmt.Sprintf("DEAD: %s cannot fire right now", countLabel(s.DeadDetections, "enabled detection", "enabled detections"))))
+		if terminalGateExitCode(r) == report.ExitError {
+			visualHeading(w, "31;1", "Cannot fire", len(r.DeadDetections))
+		}
 		for i, d := range r.DeadDetections {
 			// severity-sorted, so the cut tail is always the least severe
 			if i >= 15 {
 				fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", s.DeadDetections-15)
 				break
 			}
-			fmt.Fprintf(w, "  [%s] %s — %s", d.Severity, d.Name, report.DeadReasonLabel(d.Reason))
-			if len(d.Sources) > 0 {
-				fmt.Fprintf(w, " (%s)", strings.Join(d.Sources, ", "))
-			}
-			fmt.Fprintln(w)
+			printParagraph(w, "  ", fmt.Sprintf("[%s] %s — %s", d.Severity, d.Name, strings.Join(visualDeadEvidence(d), " · ")))
 		}
 	}
 	if len(r.ImpairedDetections) > 0 {
-		verb := "run"
-		if s.ImpairedDetections == 1 {
-			verb = "runs"
+		if terminalFindingHeadline(r) != countLabel(s.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility") {
+			visualHeading(w, "33;1", "Reduced visibility", len(r.ImpairedDetections))
 		}
-		fmt.Fprintf(w, "\n%s\n", color(w, "33;1", fmt.Sprintf("IMPAIRED: %s %s with reduced visibility", countLabel(s.ImpairedDetections, "enabled detection", "enabled detections"), verb)))
 		for i, d := range r.ImpairedDetections {
 			if i >= 15 {
 				fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", s.ImpairedDetections-15)
 				break
 			}
-			fmt.Fprintf(w, "  [%s] %s — %s%s\n", d.Severity, d.Name, strings.Join(impairedReasonLabels(d.Reasons), ", "), impairedDetail(d))
+			printParagraph(w, "  ", fmt.Sprintf("[%s] %s — %s", d.Severity, d.Name, strings.Join(visualImpairmentEvidence(d), " · ")))
 		}
 	}
 	if len(r.SourceImpacts) > 0 || len(r.Producers) > 0 {
@@ -1552,6 +1520,8 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 			fmt.Fprintln(w, ")")
 		}
 	}
+	printScanDetails(w, r)
+	printPlainGateStatus(w, r)
 }
 
 func humanInputResolution(r *report.Report) report.InputResolutionSummary {
@@ -1568,11 +1538,7 @@ func printPlainSourceFindings(w io.Writer, items []sourceAttention) {
 	if len(items) == 0 {
 		return
 	}
-	verb := "need"
-	if len(items) == 1 {
-		verb = "needs"
-	}
-	fmt.Fprintf(w, "\nSOURCE FINDINGS: %s %s attention\n", countLabel(len(items), "source", "sources"), verb)
+	visualHeading(w, "1", "Sources to investigate", 0)
 	for i, item := range items {
 		if i >= 15 {
 			fmt.Fprintf(w, "  … and %d more (use --json for the full list)\n", len(items)-i)
@@ -1583,20 +1549,14 @@ func printPlainSourceFindings(w io.Writer, items []sourceAttention) {
 }
 
 func printPlainGateStatus(w io.Writer, r *report.Report) {
-	if headline := terminalFindingHeadline(r); headline != "" {
-		fmt.Fprintln(w, headline)
-	}
+	fmt.Fprintln(w)
 	switch terminalGateExitCode(r) {
 	case report.ExitHealthy:
-		if count := sentinelSignalCount(r); count > 0 {
-			fmt.Fprintf(w, "GATE PASSED · exit 0 — review %s below\n", countLabel(count, "Sentinel signal", "Sentinel signals"))
-			return
-		}
-		fmt.Fprintln(w, "GATE PASSED · exit 0 — no findings matched the configured gate")
+		fmt.Fprintln(w, "Policy: no findings matched the gate · exit 0")
 	case report.ExitFindings:
-		fmt.Fprintln(w, "GATE FAILED · exit 1 — findings matched the gate; the scan completed")
+		fmt.Fprintln(w, "Policy: findings matched the gate · exit 1")
 	default:
-		fmt.Fprintf(w, "%s — the gate could not be evaluated safely\n", color(w, "33;1", "SCAN INCOMPLETE"))
+		fmt.Fprintln(w, "Exit 2 · assessment incomplete; policy result unavailable")
 	}
 }
 
@@ -1606,13 +1566,7 @@ func printPlainSentinelSignals(w io.Writer, r *report.Report) {
 	if len(freshness)+len(summaryRuns) == 0 {
 		return
 	}
-	count := len(freshness) + len(summaryRuns)
-	verb := "need"
-	if count == 1 {
-		verb = "needs"
-	}
-	fmt.Fprintf(w, "\nSENTINEL SIGNALS: %s %s review.\n  %s\n",
-		countLabel(count, "signal", "signals"), verb, sentinelSignalNote(r))
+	printSentinelSignalsHeading(w, r, len(freshness)+len(summaryRuns))
 	shown := 0
 	for _, item := range freshness {
 		if shown >= 10 {
@@ -1732,6 +1686,11 @@ func humanMilliseconds(milliseconds int64) string {
 // color wraps s in an ANSI code only when writing to an interactive
 // terminal. Honors NO_COLOR; pipes and CI always get plain text.
 func color(w io.Writer, code, s string) string {
+	// Keep secondary evidence at the terminal's normal contrast. Faint text
+	// can disappear on both light themes and low-contrast dark palettes.
+	if code == "" || code == "2" {
+		return s
+	}
 	f, ok := w.(*os.File)
 	if !ok || os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return s
@@ -1747,24 +1706,6 @@ func color(w io.Writer, code, s string) string {
 		return s
 	}
 	return "\x1b[" + code + "m" + s + "\x1b[0m"
-}
-
-func impairedDetail(d report.ImpairedDetection) string {
-	var parts []string
-	if len(d.MissingFields) > 0 {
-		parts = append(parts, "missing "+strings.Join(d.MissingFields, ", "))
-	}
-	if len(d.LagSources) > 0 {
-		parts = append(parts, fmt.Sprintf("p95 ingest delay %s (max %s) exceeds the rule's lookback margin in %s",
-			humanDuration(d.P95LagSeconds), humanDuration(d.MaxLagSeconds), strings.Join(d.LagSources, ", ")))
-	}
-	if len(d.IncompatibleSources) > 0 {
-		parts = append(parts, incompatibleSourceDetail(d.IncompatibleSources))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return " (" + strings.Join(parts, "; ") + ")"
 }
 
 func impairedReasonLabels(reasons []string) []string {

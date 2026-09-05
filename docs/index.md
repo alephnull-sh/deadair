@@ -53,15 +53,15 @@ A no-match finding is not always an incident. During onboarding, a rule pack may
 the SOC has chosen to collect it. The report includes the rule, configured patterns, matched sources,
 and source state so the operator can distinguish accepted scope from a regression.
 
-Here is a source investigation from a disposable Elastic lab. Its enabled rules have deliberately
-missing, stale, late, and schema-incompatible inputs. The recording opens two sources in a saved scan.
+This disposable Elastic lab has missing, stale, late, and schema-incompatible inputs. The recording
+starts with a live scan, then opens two sources to show their evidence and affected detections.
 
 <figure class="bordered" id="elastic-demo">
   <video controls playsinline preload="none" poster="{{ '/assets/scan-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" aria-label="Investigating missing fields and delayed events in an Elastic lab">
     <source src="{{ '/assets/scan-lab.mp4' | relative_url }}" type="video/mp4">
     <a href="{{ '/assets/scan-lab.gif' | relative_url }}">Watch the Elastic recording</a>
   </video>
-  <figcaption>Live Elastic 9.4.4 evidence, inspected without another API call. Pause either source view to read its evidence and first check.</figcaption>
+  <figcaption>Live Elastic 9.4.4 scan, followed by two source investigations from the saved report. Pause at any point to read the output.</figcaption>
 </figure>
 
 ## Resolving sources and affected rules

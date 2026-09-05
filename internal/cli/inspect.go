@@ -20,15 +20,9 @@ func runInspect(args []string, stdout, stderr io.Writer) int {
 	producer := fs.String("producer", "", "expected producer ID to investigate")
 	instance := fs.String("instance", "", "instance name in a saved fleet report")
 	links := fs.Bool("links", false, "include native SIEM and runbook links")
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: deadair inspect [options] report.json\n\nRead a saved report without contacting the SIEM.\nChoose --source or --producer to focus the result; use --instance for a fleet.")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
-		return report.ExitError
+	fs.Usage = func() { inspectUsage(stderr) }
+	if ok, code := parseFlags(fs, args); !ok {
+		return code
 	}
 	if fs.NArg() != 1 || (*source != "" && *producer != "") {
 		fs.Usage()
@@ -152,7 +146,7 @@ func printSourceImpact(w io.Writer, s report.SourceImpact, limit int, links bool
 	} else if s.Status == "ok" && s.FirstCheck != "" {
 		status = "delayed"
 	}
-	fmt.Fprintf(w, "\n%s — %s\n", terminalText(s.Source), terminalText(status))
+	fmt.Fprintf(w, "\n%s — %s\n", color(w, "1", terminalText(s.Source)), color(w, observationColor(status), terminalText(status)))
 	for _, o := range s.Freshness {
 		printObservation(w, o)
 	}
@@ -182,7 +176,7 @@ func printSourceImpact(w io.Writer, s report.SourceImpact, limit int, links bool
 	fmt.Fprintf(w, "  %s:\n", countLabel(len(s.Detections), "enabled detection reads this source", "enabled detections read this source"))
 	printConsumers(w, s.Detections, limit, links)
 	if s.FirstCheck != "" {
-		printParagraph(w, "  ", "First check: "+s.FirstCheck)
+		printParagraph(w, "  ", s.FirstCheck)
 	}
 	if links && s.Runbook != "" {
 		fmt.Fprintf(w, "  Runbook: %s\n", terminalText(s.Runbook))
@@ -210,7 +204,12 @@ func printObservation(w io.Writer, o report.SourceObservation) {
 	if o.ExpectedDowntime {
 		fmt.Fprint(&line, " (maintenance; alert suppressed)")
 	}
-	printParagraph(w, "  ", line.String())
+	var wrapped strings.Builder
+	printParagraph(&wrapped, "  ", line.String())
+	status := terminalText(o.FreshnessStatus)
+	// Colour the status, not the timestamps and other evidence beside it.
+	text := strings.Replace(wrapped.String(), ": "+status, ": "+color(w, observationColor(o.FreshnessStatus), status), 1)
+	fmt.Fprint(w, text)
 	if o.Status != "assessed" && o.Detail != "" {
 		printParagraph(w, "    ", o.Detail)
 	}
@@ -243,7 +242,7 @@ func printConsumers(w io.Writer, rules []report.SourceConsumer, limit int, links
 }
 
 func printProducer(w io.Writer, p report.ProducerHealth, detail, links bool) {
-	fmt.Fprintf(w, "\n%s · %s\n", terminalText(p.ID), terminalText(p.Source))
+	fmt.Fprintf(w, "\n%s · %s\n", color(w, "1", terminalText(p.ID)), terminalText(p.Source))
 	printObservation(w, p.Observation)
 	fmt.Fprintf(w, "  Expected at least once every %s\n", humanDuration(p.MaxStaleSeconds))
 	if p.Owner != "" {
@@ -262,9 +261,6 @@ func printProducer(w io.Writer, p report.ProducerHealth, detail, links bool) {
 			printConsumers(w, p.OtherTableConsumers, 0, false)
 		}
 	}
-	if p.Observation.FreshnessStatus == "stale" || p.Observation.FreshnessStatus == "empty" {
-		printParagraph(w, "  ", "First check: check this producer's sender and collector for delivery errors.")
-	}
 	if links && p.Runbook != "" {
 		fmt.Fprintf(w, "  Runbook: %s\n", terminalText(p.Runbook))
 	}
@@ -272,10 +268,14 @@ func printProducer(w io.Writer, p report.ProducerHealth, detail, links bool) {
 
 // Wrap prose without truncating identifiers or breaking copyable native URLs.
 func printParagraph(w io.Writer, indent, value string) {
+	printStyledParagraph(w, indent, value, "")
+}
+
+func printStyledParagraph(w io.Writer, indent, value, code string) {
 	line := indent
 	for _, word := range strings.Fields(terminalText(value)) {
 		if line != indent && utf8.RuneCountInString(line)+1+utf8.RuneCountInString(word) > 78 {
-			fmt.Fprintln(w, line)
+			fmt.Fprintln(w, color(w, code, line))
 			line = indent
 		}
 		if line != indent {
@@ -283,7 +283,18 @@ func printParagraph(w io.Writer, indent, value string) {
 		}
 		line += word
 	}
-	fmt.Fprintln(w, line)
+	fmt.Fprintln(w, color(w, code, line))
+}
+
+func observationColor(status string) string {
+	switch status {
+	case "ok":
+		return "32"
+	case "maintenance":
+		return "36"
+	default:
+		return "33"
+	}
 }
 
 func printInvestigationSummary(w io.Writer, r *report.Report) {
@@ -297,7 +308,7 @@ func printInvestigationSummary(w io.Writer, r *report.Report) {
 			break
 		}
 		if shown == 0 {
-			fmt.Fprintln(w, "\nSOURCE FINDINGS")
+			visualHeading(w, "1", "Sources to investigate", 0)
 		}
 		detail := s.Status
 		if len(s.MissingFields) > 0 {
@@ -309,15 +320,41 @@ func printInvestigationSummary(w io.Writer, r *report.Report) {
 		} else if s.IngestLag != nil && s.IngestLag.Status == "assessed" && s.IngestLag.P95Seconds > 0 && s.Status == "ok" {
 			detail = "p95 ingest lag " + humanDuration(s.IngestLag.P95Seconds)
 		}
-		fmt.Fprintf(w, "  %s — %s\n", terminalText(s.Source), terminalText(detail))
+		fmt.Fprintf(w, "  %s — %s\n", color(w, "1", terminalText(s.Source)), terminalText(detail))
 		shown++
-	}
-	if shown > 0 {
-		fmt.Fprintln(w, "  Inspect a source: deadair inspect --source NAME report.json")
 	}
 	for _, p := range r.Producers {
 		if p.Observation.FreshnessStatus != "ok" {
 			printProducer(w, p, false, false)
 		}
 	}
+}
+
+func printSavedReport(w io.Writer, path string, canInspect bool) {
+	if path == "" {
+		return
+	}
+	if arg, ok := commandPath(path); canInspect && ok {
+		fmt.Fprintf(w, "Inspect: deadair inspect -- %s\n", arg)
+		return
+	}
+	fmt.Fprintf(w, "Saved JSON: %s\n", terminalText(path))
+}
+
+// Only suggest commands whose arguments are safe in common Unix and Windows
+// shells. Other filenames remain visible without inviting a misleading paste.
+func commandPath(path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	for _, c := range path {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strings.ContainsRune("/._:- ", c) {
+			continue
+		}
+		return "", false
+	}
+	if strings.ContainsRune(path, ' ') {
+		return `"` + path + `"`, true
+	}
+	return path, true
 }

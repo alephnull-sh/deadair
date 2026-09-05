@@ -138,9 +138,13 @@ credential is embedded in the test.
   becomes incomplete once it exceeds its cadence and delay plus the documented eight-hour retry
   allowance. Failed or overdue runs create `summary-pipeline` findings; the policy decides whether
   they fail the gate. Recovery requires a new successful run, not a repeated read of an old result.
-  The live lab proved structural lineage, a
-  successful bounded runtime record, and the matching source/output bin under the scanner identity.
-  Failed-run, overdue-run, and recovery transitions are covered by contract tests, not the live lab.
+  The live lab proved structural lineage, a successful bounded runtime record, and the matching
+  source/output bin under the scanner identity. On 5 September 2026, a second disposable lab
+  removed a summary rule's raw input table, observed a native failed run, then restored the table
+  without changing the summary rule. A newer successful run recovered the finding in ordinary
+  and redacted report diffs; the exporter changed from unhealthy to successful. The successful
+  retry returned zero rows for an older bin, so this test proved runtime recovery, not current
+  output freshness. Overdue-run transitions remain covered by contract tests.
   Azure advanced `LASummaryLogs.RuleLastModifiedTime` between bins while the ARM definition stayed
   unchanged, so deadair does not present that field as an exact revision ID. It requires the run to
   start after the ARM modification time and rejects native timestamps that are too old or later

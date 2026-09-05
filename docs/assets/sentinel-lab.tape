@@ -24,7 +24,7 @@ Enter
 Sleep 500ms
 Type `deadair inspect --producer london-edge producer-failed.json`
 Enter
-Wait+Screen /delivery errors/
+Wait+Screen /Outbound connection blocks/
 Show
 Sleep 500ms
 Screenshot docs/assets/sentinel-lab.png

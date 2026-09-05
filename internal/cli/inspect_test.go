@@ -16,6 +16,23 @@ import (
 	"github.com/alephnull-sh/deadair/internal/report"
 )
 
+func TestInspectHelpUsesExamplesAndLongFlags(t *testing.T) {
+	for _, help := range []string{"-h", "--help"} {
+		var out, errors bytes.Buffer
+		if code := runInspect([]string{help}, &out, &errors); code != 0 {
+			t.Fatalf("help exit %d", code)
+		}
+		for _, want := range []string{"Usage: deadair inspect", "--source NAME", "--producer ID", "--instance NAME", "--links", "Examples:", "does not contact the SIEM", "docs/investigate.md"} {
+			if !strings.Contains(errors.String(), want) {
+				t.Errorf("help missing %q: %s", want, errors.String())
+			}
+		}
+		if strings.Contains(errors.String(), "\n  -source ") {
+			t.Fatal("default flag help leaked")
+		}
+	}
+}
+
 func TestInspectDoesNotPrintTerminalControls(t *testing.T) {
 	var out bytes.Buffer
 	printSourceImpact(&out, report.SourceImpact{Source: "x\x1b[2J", Status: "stale\x1b[2J", Freshness: []report.SourceObservation{{Basis: "event\x1b[2J", FreshnessStatus: "unknown\x1b[2J"}}}, 0, true)
@@ -48,7 +65,7 @@ func TestSourceInspectionUsesEvidenceAndFitsAnOrdinaryTerminal(t *testing.T) {
 		Detections:    []report.SourceConsumer{{Name: "PowerShell from legacy endpoints", Severity: "high", Status: "impaired"}},
 	}, 0, false)
 	text := out.String()
-	for _, want := range []string{"— missing fields", "1 paired event)", "1 enabled detection reads", "process.command_line", "First check:"} {
+	for _, want := range []string{"— missing fields", "1 paired event)", "1 enabled detection reads", "process.command_line", "Compare the missing fields"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q: %s", want, text)
 		}
@@ -56,6 +73,46 @@ func TestSourceInspectionUsesEvidenceAndFitsAnOrdinaryTerminal(t *testing.T) {
 	for _, line := range strings.Split(text, "\n") {
 		if utf8.RuneCountInString(line) > 80 {
 			t.Errorf("inspection line exceeds 80 columns: %s", line)
+		}
+	}
+}
+
+func TestInspectionDoesNotPresentGenericAdviceAsANextStep(t *testing.T) {
+	var out bytes.Buffer
+	printProducer(&out, report.ProducerHealth{ID: "london-edge", Source: "CommonSecurityLog",
+		Observation: report.SourceObservation{FreshnessStatus: "stale"}, Owner: "Network operations",
+		Runbook: "https://soc.example/runbooks/firewall-feed",
+	}, true, true)
+	if strings.Contains(out.String(), "Next:") || strings.Contains(out.String(), "delivery errors") {
+		t.Fatal(out.String())
+	}
+	for _, want := range []string{"stale", "Owner: Network operations", "Runbook: https://soc.example/runbooks/firewall-feed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q: %s", want, out.String())
+		}
+	}
+}
+
+func TestSavedReportHintUsesTheActualFile(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		inspect bool
+		want    string
+	}{
+		{"", true, ""},
+		{"scan.json", true, "Inspect: deadair inspect -- scan.json\n"},
+		{"-scan.json", true, "Inspect: deadair inspect -- -scan.json\n"},
+		{"reports/site scan.json", true, "Inspect: deadair inspect -- \"reports/site scan.json\"\n"},
+		{"fleet.json", false, "Saved JSON: fleet.json\n"},
+		{"scan$(whoami).json", true, "Saved JSON: scan$(whoami).json\n"},
+		{"scan`whoami`.json", true, "Saved JSON: scan`whoami`.json\n"},
+		{"scan%PATH%.json", true, "Saved JSON: scan%PATH%.json\n"},
+		{"scan\x1b[2J.json", true, "Saved JSON: scan [2J.json\n"},
+	} {
+		var out bytes.Buffer
+		printSavedReport(&out, tc.path, tc.inspect)
+		if out.String() != tc.want {
+			t.Errorf("%q: got %q, want %q", tc.path, out.String(), tc.want)
 		}
 	}
 }

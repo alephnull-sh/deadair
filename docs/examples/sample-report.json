@@ -1,6 +1,6 @@
 {
   "schema_version": "deadair.report.v1",
-  "generated_at": "2026-09-05T14:17:06.601558Z",
+  "generated_at": "2026-09-05T16:00:41.056685Z",
   "producer": {
     "name": "deadair",
     "version": "v0.8.0"
@@ -134,7 +134,7 @@
     {
       "name": "cloudflare-firewall-prod",
       "status": "ok",
-      "age_seconds": 12.601638,
+      "age_seconds": 13.056756,
       "docs": 2,
       "size_bytes": 15627,
       "volume": {
@@ -147,18 +147,18 @@
       "ingest_lag": {
         "status": "assessed",
         "method": "paired-recent-events",
-        "observed_at": "2026-09-05T14:17:06.59732Z",
+        "observed_at": "2026-09-05T16:00:41.05205Z",
         "window_seconds": 86400,
         "sample_count": 2,
-        "p95_seconds": 2700,
-        "max_seconds": 2700
+        "p95_seconds": 2699,
+        "max_seconds": 2699
       },
       "consumers": 1
     },
     {
       "name": "dns-query-events-prod",
       "status": "ok",
-      "age_seconds": 12.601637,
+      "age_seconds": 13.056756,
       "docs": 1,
       "size_bytes": 7018,
       "volume": {
@@ -173,7 +173,7 @@
     {
       "name": "endpoint-process-events-legacy",
       "status": "ok",
-      "age_seconds": 12.601635,
+      "age_seconds": 13.056755,
       "docs": 1,
       "size_bytes": 8003,
       "volume": {
@@ -186,7 +186,7 @@
       "ingest_lag": {
         "status": "assessed",
         "method": "paired-recent-events",
-        "observed_at": "2026-09-05T14:17:06.597322Z",
+        "observed_at": "2026-09-05T16:00:41.052056Z",
         "window_seconds": 86400,
         "sample_count": 1
       },
@@ -195,7 +195,7 @@
     {
       "name": "endpoint-process-events-prod",
       "status": "ok",
-      "age_seconds": 12.601636,
+      "age_seconds": 13.056756,
       "docs": 1,
       "size_bytes": 8505,
       "volume": {
@@ -208,7 +208,7 @@
       "ingest_lag": {
         "status": "assessed",
         "method": "paired-recent-events",
-        "observed_at": "2026-09-05T14:17:06.597322Z",
+        "observed_at": "2026-09-05T16:00:41.052071Z",
         "window_seconds": 86400,
         "sample_count": 1
       },
@@ -217,7 +217,7 @@
     {
       "name": "okta-system-events-prod",
       "status": "stale",
-      "age_seconds": 259212.601619,
+      "age_seconds": 259213.056741,
       "docs": 1,
       "size_bytes": 8512,
       "volume": {
@@ -230,7 +230,7 @@
       "ingest_lag": {
         "status": "assessed",
         "method": "paired-recent-events",
-        "observed_at": "2026-09-05T14:17:06.597329Z",
+        "observed_at": "2026-09-05T16:00:41.052062Z",
         "window_seconds": 86400,
         "sample_count": 1,
         "p95_seconds": 259200,
@@ -241,9 +241,9 @@
   ],
   "dead_detections": [
     {
-      "id": "cadf6669-10ab-4bbc-8ffe-a5c67b20306f",
+      "id": "01dbca7a-6e3e-48ec-a44b-8ff9ad0cedcd",
       "rule_id": "deadair-lab-missing",
-      "backend_object_id": "cadf6669-10ab-4bbc-8ffe-a5c67b20306f",
+      "backend_object_id": "01dbca7a-6e3e-48ec-a44b-8ff9ad0cedcd",
       "name": "Sysmon registry run-key modification",
       "severity": "high",
       "reason": "disconnected",
@@ -252,9 +252,9 @@
       ]
     },
     {
-      "id": "9a532ecc-df61-4627-9a70-306734700883",
+      "id": "e604f91c-c3ff-4677-966b-a77785a37183",
       "rule_id": "deadair-lab-stale",
-      "backend_object_id": "9a532ecc-df61-4627-9a70-306734700883",
+      "backend_object_id": "e604f91c-c3ff-4677-966b-a77785a37183",
       "name": "Okta authentication failures",
       "severity": "medium",
       "reason": "starved",
@@ -268,9 +268,9 @@
   ],
   "impaired_detections": [
     {
-      "id": "e37dcce0-4e61-40b7-86d8-a07e14b9e9f9",
+      "id": "0d461b3c-50d9-4292-8667-2077444ad2b3",
       "rule_id": "deadair-lab-schema",
-      "backend_object_id": "e37dcce0-4e61-40b7-86d8-a07e14b9e9f9",
+      "backend_object_id": "0d461b3c-50d9-4292-8667-2077444ad2b3",
       "name": "PowerShell from legacy endpoints",
       "severity": "high",
       "reasons": [
@@ -284,9 +284,9 @@
       ]
     },
     {
-      "id": "2ca4162e-50d7-43a6-8da8-242b9f94886c",
+      "id": "4135972a-e5b9-4a0d-8108-0e24ecb63256",
       "rule_id": "deadair-lab-lag",
-      "backend_object_id": "2ca4162e-50d7-43a6-8da8-242b9f94886c",
+      "backend_object_id": "4135972a-e5b9-4a0d-8108-0e24ecb63256",
       "name": "Cloudflare firewall blocks",
       "severity": "medium",
       "reasons": [
@@ -294,8 +294,8 @@
       ],
       "lookback_seconds": 360,
       "interval_seconds": 300,
-      "max_lag_seconds": 2700,
-      "p95_lag_seconds": 2700,
+      "max_lag_seconds": 2699,
+      "p95_lag_seconds": 2699,
       "lag_sources": [
         "cloudflare-firewall-prod"
       ],
@@ -306,65 +306,65 @@
   ],
   "input_resolutions": [
     {
-      "rule_id": "2ca4162e-50d7-43a6-8da8-242b9f94886c",
+      "rule_id": "4135972a-e5b9-4a0d-8108-0e24ecb63256",
       "logical_rule_id": "deadair-lab-lag",
-      "backend_object_id": "2ca4162e-50d7-43a6-8da8-242b9f94886c",
+      "backend_object_id": "4135972a-e5b9-4a0d-8108-0e24ecb63256",
       "expression": "cloudflare-firewall-prod",
       "selector_kind": "index_expression",
       "resolved_sources": [
         "cloudflare-firewall-prod"
       ],
       "resolution_method": "resolve_index",
-      "observed_at": "2026-09-05T14:17:06.590119Z",
+      "observed_at": "2026-09-05T16:00:41.046729Z",
       "status": "resolved"
     },
     {
-      "rule_id": "60fbe8d0-1298-4607-842b-33d328ccd91f",
+      "rule_id": "cf5c7680-0600-4bfc-b782-d3af9a34e415",
       "logical_rule_id": "deadair-lab-live",
-      "backend_object_id": "60fbe8d0-1298-4607-842b-33d328ccd91f",
+      "backend_object_id": "cf5c7680-0600-4bfc-b782-d3af9a34e415",
       "expression": "endpoint-process-events-prod",
       "selector_kind": "index_expression",
       "resolved_sources": [
         "endpoint-process-events-prod"
       ],
       "resolution_method": "resolve_index",
-      "observed_at": "2026-09-05T14:17:06.590115Z",
+      "observed_at": "2026-09-05T16:00:41.046727Z",
       "status": "resolved"
     },
     {
-      "rule_id": "cadf6669-10ab-4bbc-8ffe-a5c67b20306f",
+      "rule_id": "01dbca7a-6e3e-48ec-a44b-8ff9ad0cedcd",
       "logical_rule_id": "deadair-lab-missing",
-      "backend_object_id": "cadf6669-10ab-4bbc-8ffe-a5c67b20306f",
+      "backend_object_id": "01dbca7a-6e3e-48ec-a44b-8ff9ad0cedcd",
       "expression": "winlogbeat-sysmon-*",
       "selector_kind": "index_expression",
       "resolution_method": "resolve_index",
-      "observed_at": "2026-09-05T14:17:06.590112Z",
+      "observed_at": "2026-09-05T16:00:41.046654Z",
       "status": "empty"
     },
     {
-      "rule_id": "e37dcce0-4e61-40b7-86d8-a07e14b9e9f9",
+      "rule_id": "0d461b3c-50d9-4292-8667-2077444ad2b3",
       "logical_rule_id": "deadair-lab-schema",
-      "backend_object_id": "e37dcce0-4e61-40b7-86d8-a07e14b9e9f9",
+      "backend_object_id": "0d461b3c-50d9-4292-8667-2077444ad2b3",
       "expression": "endpoint-process-events-legacy",
       "selector_kind": "index_expression",
       "resolved_sources": [
         "endpoint-process-events-legacy"
       ],
       "resolution_method": "resolve_index",
-      "observed_at": "2026-09-05T14:17:06.590119Z",
+      "observed_at": "2026-09-05T16:00:41.046729Z",
       "status": "resolved"
     },
     {
-      "rule_id": "9a532ecc-df61-4627-9a70-306734700883",
+      "rule_id": "e604f91c-c3ff-4677-966b-a77785a37183",
       "logical_rule_id": "deadair-lab-stale",
-      "backend_object_id": "9a532ecc-df61-4627-9a70-306734700883",
+      "backend_object_id": "e604f91c-c3ff-4677-966b-a77785a37183",
       "expression": "okta-system-events-prod",
       "selector_kind": "index_expression",
       "resolved_sources": [
         "okta-system-events-prod"
       ],
       "resolution_method": "resolve_index",
-      "observed_at": "2026-09-05T14:17:06.590118Z",
+      "observed_at": "2026-09-05T16:00:41.046656Z",
       "status": "resolved"
     }
   ],
@@ -381,12 +381,12 @@
       "class": "impaired-detection",
       "reason": "lag-blind-window",
       "rule_id": "deadair-lab-lag",
-      "backend_object_id": "2ca4162e-50d7-43a6-8da8-242b9f94886c",
+      "backend_object_id": "4135972a-e5b9-4a0d-8108-0e24ecb63256",
       "rule_name": "Cloudflare firewall blocks",
       "severity": "medium",
       "source": "cloudflare-firewall-prod",
-      "first_seen": "2026-09-05T14:17:06.601558Z",
-      "last_seen": "2026-09-05T14:17:06.601558Z",
+      "first_seen": "2026-09-05T16:00:41.056685Z",
+      "last_seen": "2026-09-05T16:00:41.056685Z",
       "occurrences": 1,
       "gates": false
     },
@@ -395,13 +395,13 @@
       "class": "impaired-detection",
       "reason": "missing-fields",
       "rule_id": "deadair-lab-schema",
-      "backend_object_id": "e37dcce0-4e61-40b7-86d8-a07e14b9e9f9",
+      "backend_object_id": "0d461b3c-50d9-4292-8667-2077444ad2b3",
       "rule_name": "PowerShell from legacy endpoints",
       "severity": "high",
       "source": "endpoint-process-events-legacy",
       "dependency": "process.command_line",
-      "first_seen": "2026-09-05T14:17:06.601558Z",
-      "last_seen": "2026-09-05T14:17:06.601558Z",
+      "first_seen": "2026-09-05T16:00:41.056685Z",
+      "last_seen": "2026-09-05T16:00:41.056685Z",
       "occurrences": 1,
       "gates": false
     },
@@ -410,8 +410,8 @@
       "class": "unused-telemetry",
       "reason": "unused",
       "source": "dns-query-events-prod",
-      "first_seen": "2026-09-05T14:17:06.601558Z",
-      "last_seen": "2026-09-05T14:17:06.601558Z",
+      "first_seen": "2026-09-05T16:00:41.056685Z",
+      "last_seen": "2026-09-05T16:00:41.056685Z",
       "occurrences": 1,
       "gates": false
     },
@@ -420,8 +420,8 @@
       "class": "source-degraded",
       "reason": "stale",
       "source": "okta-system-events-prod",
-      "first_seen": "2026-09-05T14:17:06.601558Z",
-      "last_seen": "2026-09-05T14:17:06.601558Z",
+      "first_seen": "2026-09-05T16:00:41.056685Z",
+      "last_seen": "2026-09-05T16:00:41.056685Z",
       "occurrences": 1,
       "gates": false
     },
@@ -430,11 +430,11 @@
       "class": "dead-detection",
       "reason": "starved",
       "rule_id": "deadair-lab-stale",
-      "backend_object_id": "9a532ecc-df61-4627-9a70-306734700883",
+      "backend_object_id": "e604f91c-c3ff-4677-966b-a77785a37183",
       "rule_name": "Okta authentication failures",
       "severity": "medium",
-      "first_seen": "2026-09-05T14:17:06.601558Z",
-      "last_seen": "2026-09-05T14:17:06.601558Z",
+      "first_seen": "2026-09-05T16:00:41.056685Z",
+      "last_seen": "2026-09-05T16:00:41.056685Z",
       "occurrences": 1,
       "gates": false
     },
@@ -443,11 +443,11 @@
       "class": "dead-detection",
       "reason": "disconnected",
       "rule_id": "deadair-lab-missing",
-      "backend_object_id": "cadf6669-10ab-4bbc-8ffe-a5c67b20306f",
+      "backend_object_id": "01dbca7a-6e3e-48ec-a44b-8ff9ad0cedcd",
       "rule_name": "Sysmon registry run-key modification",
       "severity": "high",
-      "first_seen": "2026-09-05T14:17:06.601558Z",
-      "last_seen": "2026-09-05T14:17:06.601558Z",
+      "first_seen": "2026-09-05T16:00:41.056685Z",
+      "last_seen": "2026-09-05T16:00:41.056685Z",
       "occurrences": 1,
       "gates": false
     }
@@ -482,7 +482,7 @@
       "ingest_lag": {
         "status": "assessed",
         "method": "paired-recent-events",
-        "observed_at": "2026-09-05T14:17:06.597322Z",
+        "observed_at": "2026-09-05T16:00:41.052056Z",
         "window_seconds": 86400,
         "sample_count": 1
       },
@@ -498,21 +498,21 @@
           "basis": "event_time",
           "status": "assessed",
           "freshness_status": "ok",
-          "observed_at": "2026-09-05T14:17:06.601558Z",
-          "last_event": "2026-09-05T15:16:54+01:00",
-          "age_seconds": 12.601685,
+          "observed_at": "2026-09-05T16:00:41.056685Z",
+          "last_event": "2026-09-05T17:00:28+01:00",
+          "age_seconds": 13.056798,
           "method": "source-inventory"
         }
       ],
       "detections": [
         {
           "rule_id": "deadair-lab-schema",
-          "backend_object_id": "e37dcce0-4e61-40b7-86d8-a07e14b9e9f9",
+          "backend_object_id": "0d461b3c-50d9-4292-8667-2077444ad2b3",
           "name": "PowerShell from legacy endpoints",
           "severity": "high",
           "basis": "event_time",
           "status": "impaired",
-          "url": "http://localhost:15601/app/security/rules/id/e37dcce0-4e61-40b7-86d8-a07e14b9e9f9"
+          "url": "http://localhost:15601/app/security/rules/id/0d461b3c-50d9-4292-8667-2077444ad2b3"
         }
       ]
     },
@@ -524,11 +524,11 @@
       "ingest_lag": {
         "status": "assessed",
         "method": "paired-recent-events",
-        "observed_at": "2026-09-05T14:17:06.59732Z",
+        "observed_at": "2026-09-05T16:00:41.05205Z",
         "window_seconds": 86400,
         "sample_count": 2,
-        "p95_seconds": 2700,
-        "max_seconds": 2700
+        "p95_seconds": 2699,
+        "max_seconds": 2699
       },
       "volume": {
         "status": "unknown"
@@ -542,21 +542,21 @@
           "basis": "event_time",
           "status": "assessed",
           "freshness_status": "ok",
-          "observed_at": "2026-09-05T14:17:06.601558Z",
-          "last_event": "2026-09-05T15:16:54+01:00",
-          "age_seconds": 12.60169,
+          "observed_at": "2026-09-05T16:00:41.056685Z",
+          "last_event": "2026-09-05T17:00:28+01:00",
+          "age_seconds": 13.056803,
           "method": "source-inventory"
         }
       ],
       "detections": [
         {
           "rule_id": "deadair-lab-lag",
-          "backend_object_id": "2ca4162e-50d7-43a6-8da8-242b9f94886c",
+          "backend_object_id": "4135972a-e5b9-4a0d-8108-0e24ecb63256",
           "name": "Cloudflare firewall blocks",
           "severity": "medium",
           "basis": "event_time",
           "status": "impaired",
-          "url": "http://localhost:15601/app/security/rules/id/2ca4162e-50d7-43a6-8da8-242b9f94886c"
+          "url": "http://localhost:15601/app/security/rules/id/4135972a-e5b9-4a0d-8108-0e24ecb63256"
         }
       ]
     },
@@ -568,7 +568,7 @@
       "ingest_lag": {
         "status": "assessed",
         "method": "paired-recent-events",
-        "observed_at": "2026-09-05T14:17:06.597329Z",
+        "observed_at": "2026-09-05T16:00:41.052062Z",
         "window_seconds": 86400,
         "sample_count": 1,
         "p95_seconds": 259200,
@@ -586,21 +586,21 @@
           "basis": "event_time",
           "status": "assessed",
           "freshness_status": "stale",
-          "observed_at": "2026-09-05T14:17:06.601558Z",
-          "last_event": "2026-09-02T15:16:54+01:00",
-          "age_seconds": 259212.601682,
+          "observed_at": "2026-09-05T16:00:41.056685Z",
+          "last_event": "2026-09-02T17:00:28+01:00",
+          "age_seconds": 259213.056796,
           "method": "source-inventory"
         }
       ],
       "detections": [
         {
           "rule_id": "deadair-lab-stale",
-          "backend_object_id": "9a532ecc-df61-4627-9a70-306734700883",
+          "backend_object_id": "e604f91c-c3ff-4677-966b-a77785a37183",
           "name": "Okta authentication failures",
           "severity": "medium",
           "basis": "event_time",
           "status": "cannot_fire",
-          "url": "http://localhost:15601/app/security/rules/id/9a532ecc-df61-4627-9a70-306734700883"
+          "url": "http://localhost:15601/app/security/rules/id/e604f91c-c3ff-4677-966b-a77785a37183"
         }
       ]
     },
@@ -611,7 +611,7 @@
       "ingest_lag": {
         "status": "assessed",
         "method": "paired-recent-events",
-        "observed_at": "2026-09-05T14:17:06.597322Z",
+        "observed_at": "2026-09-05T16:00:41.052071Z",
         "window_seconds": 86400,
         "sample_count": 1
       },
@@ -627,21 +627,21 @@
           "basis": "event_time",
           "status": "assessed",
           "freshness_status": "ok",
-          "observed_at": "2026-09-05T14:17:06.601558Z",
-          "last_event": "2026-09-05T15:16:54+01:00",
-          "age_seconds": 12.601687,
+          "observed_at": "2026-09-05T16:00:41.056685Z",
+          "last_event": "2026-09-05T17:00:28+01:00",
+          "age_seconds": 13.0568,
           "method": "source-inventory"
         }
       ],
       "detections": [
         {
           "rule_id": "deadair-lab-live",
-          "backend_object_id": "60fbe8d0-1298-4607-842b-33d328ccd91f",
+          "backend_object_id": "cf5c7680-0600-4bfc-b782-d3af9a34e415",
           "name": "Endpoint process starts",
           "severity": "low",
           "basis": "event_time",
           "status": "consumes_source",
-          "url": "http://localhost:15601/app/security/rules/id/60fbe8d0-1298-4607-842b-33d328ccd91f"
+          "url": "http://localhost:15601/app/security/rules/id/cf5c7680-0600-4bfc-b782-d3af9a34e415"
         }
       ]
     },
@@ -661,9 +661,9 @@
           "basis": "event_time",
           "status": "assessed",
           "freshness_status": "ok",
-          "observed_at": "2026-09-05T14:17:06.601558Z",
-          "last_event": "2026-09-05T15:16:54+01:00",
-          "age_seconds": 12.601688,
+          "observed_at": "2026-09-05T16:00:41.056685Z",
+          "last_event": "2026-09-05T17:00:28+01:00",
+          "age_seconds": 13.056801,
           "method": "source-inventory"
         }
       ]
