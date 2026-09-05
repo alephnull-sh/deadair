@@ -60,6 +60,19 @@ source-bin count.
 The [validation record](../docs/validation.md#sentinel-live-conformance) separates these live cases
 from the paths covered by fixtures.
 
+### Record a producer investigation
+
+Save `producer-failed.json` and `producer-recovered.json` from two live scans of a disposable
+workspace. Keep the shared table active while one configured producer goes quiet, then restore
+that producer and scan again with the same policy. Keep both reports outside the repository.
+
+Set `DEADAIR_SENTINEL_CAPTURE_REPORT_DIR` to their directory and
+`DEADAIR_SENTINEL_CAPTURE_CONFIRM=record-disposable-sentinel:<workspace>`, along with the workspace
+settings below. `make record-sentinel-lab` records the saved inspections without querying Azure.
+It writes a poster, GIF, and pausable MP4 to the existing Sentinel demo paths.
+
+### Run the conformance checks
+
 ```sh
 DEADAIR_IT_SENTINEL=1 \
 DEADAIR_AZURE_SUBSCRIPTION_ID=... \

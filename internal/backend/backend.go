@@ -302,6 +302,10 @@ type FreshnessEvidence struct {
 	Window     time.Duration
 	LastEvent  time.Time
 	Detail     string
+	// Clocks retains independent observations when a source has consumers
+	// using both event time and ingestion time. The outer record is not a
+	// substitute for either clock.
+	Clocks map[FreshnessBasis]FreshnessEvidence
 }
 
 // FreshnessBasis identifies the timestamp that determines whether a rule can
@@ -463,6 +467,7 @@ type SummaryRuleRunEvidence struct {
 	RuleModifiedAt      time.Time
 	Error               string
 	Detail              string
+	Overdue             bool
 }
 
 // SummaryRuleRunProvider is an optional read-only runtime evidence source for

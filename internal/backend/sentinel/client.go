@@ -1338,11 +1338,26 @@ func (c *Client) FreshnessEvidenceFor(ctx context.Context, requests []backend.Fr
 		}
 		seen[source.Name] = true
 		if request.Basis == backend.FreshnessMixed {
-			out[source.Name] = backend.FreshnessEvidence{
-				Status: backend.EvidenceIncomplete, Method: "mixed-rule-timing",
-				ObservedAt: time.Now().UTC(), Window: freshnessWindow,
-				Detail: "source is shared by Scheduled and NRT rules; source-level freshness cannot represent both clocks",
+			combined := backend.FreshnessEvidence{Status: backend.EvidenceAssessed,
+				Method: "separate-rule-clocks", ObservedAt: time.Now().UTC(),
+				Clocks: make(map[backend.FreshnessBasis]backend.FreshnessEvidence)}
+			for _, basis := range []backend.FreshnessBasis{backend.FreshnessEventTime, backend.FreshnessIngestionTime} {
+				part := request
+				part.Basis = basis
+				result, err := c.FreshnessEvidenceFor(ctx, []backend.FreshnessRequest{part})
+				if err != nil {
+					return nil, err
+				}
+				item, ok := result[source.Name]
+				if !ok {
+					item = backend.FreshnessEvidence{Status: backend.EvidenceIncomplete, Detail: "clock observation was not returned"}
+				}
+				combined.Clocks[basis] = item
+				if item.Status != backend.EvidenceAssessed {
+					combined.Status = backend.EvidenceIncomplete
+				}
 			}
+			out[source.Name] = combined
 			continue
 		}
 		if !c.claimEvidenceSource(source.Name) {

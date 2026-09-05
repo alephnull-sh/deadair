@@ -117,7 +117,7 @@ func TestSentinelCapabilityDetailsDescribeAssessmentBoundaries(t *testing.T) {
 	checks := map[string][]string{
 		CapabilityRuleInventory:        {"Scheduled", "2025-09-01", "NRT", "2025-10-01-preview", "non-query rule kinds"},
 		CapabilitySourceResolution:     {"direct local tables", "union/join/lookup", "tabular let aliases", "closed scalar arguments", "metadata-backed ASIM", "positive table and permission evidence", "mapped literal workspace()", "dynamic table names"},
-		CapabilityFreshness:            {"resolved local or explicitly mapped remote Analytics tables", "informational rule-source freshness", "one parser-proved local Analytics table", "closed literal predicate"},
+		CapabilityFreshness:            {"TimeGenerated", "ingestion_time()", "Scheduled", "NRT", "producer findings"},
 		CapabilityDocsStorage:          {"does not expose", "document inventory"},
 		CapabilitySchema:               {"resolved local or explicitly mapped remote Analytics tables"},
 		CapabilityRequiredFields:       {"not authoritative"},
@@ -126,7 +126,7 @@ func TestSentinelCapabilityDetailsDescribeAssessmentBoundaries(t *testing.T) {
 		CapabilityRemote:               {"mapped literal workspace()", "Sentinel-onboarded", "unmapped or dynamic", "app()", "resource()", "unassessed"},
 		CapabilityDependencyResolution: {"literal _GetWatchlist()", "native ASIM", "permission evidence", "informational", "concrete monitorable tables", "source-health edges"},
 		CapabilityCrossWorkspace:       {"configured literal workspace()", "onboardingStates/default", "scoped Logs evidence", "textual aliases", "original-literal Logs proof", "canonical counting", "GUID and ARM-ID mappings", "20 workspaces per analytics-rule query", "conservatively counts the home workspace", "19 distinct remotes per rule", "20 or more distinct normalized workspace regions", "after any alias proof", "ordinary dependency and freshness probes", "missing workspace location", "warning at five regions", "guidance", "same-subscription mapped source evidence is conclusive", "eligible installed rule that references another subscription", "exact successful SentinelHealth", "latest rule change", "expected run cadence plus scheduling delay", "candidate", "absent", "stale", "ambiguous", "mismatched", "non-successful", "creator's credentials", "tenant boundaries are not separately identified", "Azure Lighthouse", "cross-tenant topology", "not live-validated", "compatible", "unavailable"},
-		CapabilitySourceLineage:        {"ARM-only structural lineage", "summary-rule", "Analytics output table", "separate from bounded schedule-aware latest-completed-run LASummaryLogs evidence", "invalid runtime configuration", "overdue successes", "incomplete", "informational", "native runtime failures", "findings or gates"},
+		CapabilitySourceLineage:        {"ARM", "LASummaryLogs", "summary-pipeline findings", "explicit policy", "cannot establish recovery"},
 		CapabilityRuleProvenance:       {"informational exact-ID joins", "Content Hub", "display names", "guess provenance"},
 	}
 	wantPartial := map[string]bool{

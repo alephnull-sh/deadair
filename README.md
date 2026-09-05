@@ -28,11 +28,11 @@
 </p>
 
 <p align="center">
-  <a href="docs/assets/scan-lab.gif"><img alt="deadair scan of a disposable Elastic lab showing dead and impaired detections" src="docs/assets/scan-lab.png" width="860"></a>
+  <a href="https://alephnull-sh.github.io/deadair/#elastic-demo"><img alt="An Elastic scan showing missing and stale inputs, missing fields, and delayed events" src="docs/assets/scan-lab.png" width="860"></a>
 </p>
 
 <p align="center">
-  <sub>Real scan of a disposable Elastic lab with deliberately missing, stale, late, and unused telemetry. Open the image for the short replay, or reproduce it with <code>make record-scan-lab</code>.</sub>
+  <sub>Missing fields and delayed events in a disposable Elastic lab. Open the image for the short recording with playback controls, or reproduce it with <code>make record-scan-lab</code>.</sub>
 </p>
 
 ## Why deadair
@@ -79,6 +79,16 @@ deadair scan    # assess live rules and telemetry
 
 Exit codes are stable: `0` passes the configured gate, `1` means gated findings, and `2` means the scan failed.
 
+To investigate a source and its consuming detections:
+
+```sh
+deadair scan --json-out report.json --html-out report.html
+deadair inspect --source CommonSecurityLog report.json
+```
+
+Use a source name from your report. The [investigation guide](docs/investigate.md) also covers
+individual Sentinel feeds, maintenance, and recovery tracking.
+
 ## How it works
 
 | Stage | What deadair does |
@@ -96,11 +106,11 @@ The [usage guide](docs/usage.md#microsoft-sentinel) describes the evidence rules
 [validation record](docs/validation.md#sentinel-live-conformance) records the live test coverage.
 
 <p align="center">
-  <a href="docs/assets/sentinel-lab.gif"><img alt="deadair scan of a disposable Microsoft Sentinel lab showing missing, stale, late, and incompatible telemetry" src="docs/assets/sentinel-lab.png" width="860"></a>
+  <a href="https://alephnull-sh.github.io/deadair/#sentinel-demo"><img alt="A quiet London firewall feed and its dependent detection inside Sentinel CommonSecurityLog" src="docs/assets/sentinel-lab.png" width="860"></a>
 </p>
 
 <p align="center">
-  <sub>Live scan of a disposable Sentinel lab seeded with missing, stale, late, and incompatible telemetry. Open the image for the short replay. See the <a href="docs/validation.md#sentinel-live-conformance">separate Azure conformance record</a> for the read-only and write-denial tests.</sub>
+  <sub>Two firewall feeds share <code>CommonSecurityLog</code>. One stops; the other keeps reporting. The recording shows the saved failure and recovery scans. See the <a href="docs/validation.md#sentinel-live-conformance">validation record</a> for the lab conditions.</sub>
 </p>
 
 deadair checks whether a detection's telemetry is present and healthy. It does not validate rule
@@ -119,6 +129,11 @@ detection tests for those jobs.
 | source plan incompatible | a Sentinel rule depends on a Basic or Auxiliary table that is not eligible for the analytics-rule evidence path | table plan and rule type |
 | source degradation | a source is stale, empty, low-volume, or schema-drifted | source history and expected maintenance |
 | unused telemetry | on Elastic or OpenSearch, data is being stored but no enabled local detection resolves to it | disabled rules and intentional collection |
+| expected producer quiet | a configured Sentinel vendor, product, or device feed hasn't reported within its threshold | that feed's sender and collector |
+| summary pipeline unhealthy | a relevant Sentinel summary job failed or its last success is overdue | the native execution record and summary query |
+
+Producer and summary-pipeline findings affect exit status when their classes are selected in the
+policy. A quiet device feed is reported separately from other consumers of its shared table.
 
 Every verdict is limited to what the configured credential can see. JSON reports include the
 configured expressions, resolved sources, resolution method, assessment status, backend metadata,
@@ -234,6 +249,7 @@ and unused collection.
 ## Documentation
 
 - [Usage guide](docs/usage.md) — first scans, report evidence, findings, CI gates, state, and fleets
+- [Investigate a telemetry gap](docs/investigate.md) — source consumers, expected feeds, and recovery
 - [Validation status](docs/validation.md) — tested paths and current limits
 - [Architecture](docs/architecture.md) — backend contract, data model, safety properties, and limits
 - [Best practices](docs/best-practices.md) — rollout order, alert context, and routing

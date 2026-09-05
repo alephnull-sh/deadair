@@ -78,6 +78,8 @@
       "type": "array",
       "items": { "$ref": "#/$defs/summaryRuleRun" }
     },
+    "source_impacts": { "type": "array", "items": { "$ref": "#/$defs/sourceImpact" } },
+    "producers": { "type": "array", "items": { "$ref": "#/$defs/producerHealth" } },
     "unused_telemetry": {
       "type": ["array", "null"],
       "items": { "$ref": "#/$defs/unusedSource" }
@@ -98,6 +100,72 @@
   },
   "additionalProperties": true,
   "$defs": {
+    "sourceObservation": {
+      "type": "object",
+      "required": ["basis", "status", "freshness_status", "observed_at"],
+      "properties": {
+        "basis": { "type": "string", "enum": ["event_time", "ingestion_time"] },
+        "status": { "type": "string", "enum": ["assessed", "disabled", "incomplete", "unavailable"] },
+        "freshness_status": { "type": "string", "enum": ["ok", "stale", "empty", "unknown", "maintenance"] },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "last_event": { "type": "string", "format": "date-time" },
+        "window_seconds": { "type": "number", "minimum": 0 },
+        "age_seconds": { "type": "number", "minimum": 0 },
+        "age_lower_bound": { "type": "boolean" },
+        "expected_downtime": { "type": "boolean" },
+        "method": { "type": "string" },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "sourceConsumer": {
+      "type": "object",
+      "required": ["rule_id", "name", "severity", "basis", "status"],
+      "properties": {
+        "rule_id": { "type": "string" },
+        "backend_object_id": { "type": "string" },
+        "name": { "type": "string" },
+        "severity": { "type": "string" },
+        "basis": { "type": "string", "enum": ["event_time", "ingestion_time"] },
+        "status": { "type": "string", "enum": ["consumes_source", "cannot_fire", "impaired", "unassessed"] },
+        "url": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "sourceImpact": {
+      "type": "object",
+      "required": ["source", "status"],
+      "properties": {
+        "source": { "type": "string" },
+        "status": { "type": "string" },
+        "owner": { "type": "string" },
+        "runbook": { "type": "string" },
+        "url": { "type": "string" },
+        "first_check": { "type": "string" },
+        "volume": { "$ref": "#/$defs/volumeHealth" },
+        "schema": { "$ref": "#/$defs/schemaHealth" },
+        "missing_fields": { "type": "array", "items": { "type": "string" } },
+        "ingest_lag": { "$ref": "#/$defs/ingestLagHealth" },
+        "freshness": { "type": "array", "items": { "$ref": "#/$defs/sourceObservation" } },
+        "detections": { "type": "array", "items": { "$ref": "#/$defs/sourceConsumer" } }
+      },
+      "additionalProperties": true
+    },
+    "producerHealth": {
+      "type": "object",
+      "required": ["id", "source", "max_stale_seconds", "observation"],
+      "properties": {
+        "id": { "type": "string" },
+        "source": { "type": "string" },
+        "owner": { "type": "string" },
+        "runbook": { "type": "string" },
+        "max_stale_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "observation": { "$ref": "#/$defs/sourceObservation" },
+        "confirmed_detections": { "type": "array", "items": { "$ref": "#/$defs/sourceConsumer" } },
+        "other_table_consumers": { "type": "array", "items": { "$ref": "#/$defs/sourceConsumer" } }
+      },
+      "additionalProperties": true
+    },
     "scanScope": {
       "type": "object",
       "required": ["mode"],
@@ -129,7 +197,7 @@
         "id": { "type": "string" },
         "class": {
           "type": "string",
-          "enum": ["dead-detection", "impaired-detection", "source-degraded", "volume-low", "schema-drift", "unused-telemetry", "partial-input"]
+          "enum": ["dead-detection", "impaired-detection", "source-degraded", "volume-low", "schema-drift", "unused-telemetry", "partial-input", "producer-stale", "summary-pipeline"]
         },
         "reason": { "type": "string" },
         "rule_id": { "type": "string" },
@@ -143,7 +211,8 @@
         "occurrences": { "type": "integer", "minimum": 1 },
         "recovered_at": { "type": "string", "format": "date-time" },
         "accepted": { "$ref": "#/$defs/findingAcceptance" },
-        "gates": { "type": "boolean" }
+        "gates": { "type": "boolean" },
+        "suppressed": { "type": "boolean" }
       },
       "additionalProperties": true
     },
@@ -627,6 +696,8 @@
         "window_seconds": { "type": "number", "minimum": 0 },
         "run_at": { "type": "string", "format": "date-time" },
         "run_status": { "type": "string" },
+        "health_status": { "enum": ["ok", "failed", "late", "unknown"] },
+        "expected_downtime": { "type": "boolean" },
         "query_duration_millis": { "type": "integer", "minimum": 0 },
         "result_count": { "type": "integer", "minimum": 0 },
         "rule_modified_at": { "type": "string", "format": "date-time" },

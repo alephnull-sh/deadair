@@ -213,6 +213,9 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
+	if snap != nil {
+		writeMonitoring(&b, snap.fleet.Instances)
+	}
 	_, _ = w.Write([]byte(b.String()))
 }
 

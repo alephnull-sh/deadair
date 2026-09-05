@@ -5,7 +5,7 @@ title: Detections that run but can't see
 author: Nikhil Satyakrishna
 description: A read-only look at enabled detections that run on schedule, report success, and quietly stop seeing their data, plus what native SIEM health views already cover.
 date: 2026-07-16
-updated: 2026-08-22
+updated: 2026-09-05
 hero_image: /assets/coverage-hero.png
 ---
 
@@ -53,12 +53,15 @@ A no-match finding is not always an incident. During onboarding, a rule pack may
 the SOC has chosen to collect it. The report includes the rule, configured patterns, matched sources,
 and source state so the operator can distinguish accepted scope from a regression.
 
-Here is a scan from a disposable Elastic lab. Every rule is enabled; the lab deliberately creates
-missing input, stale source, missing-field, ingest-lag, and unused-telemetry conditions.
+This disposable Elastic lab has missing, stale, late, and schema-incompatible inputs. The recording
+starts with a live scan, then opens two sources to show their evidence and affected detections.
 
-<figure class="bordered">
-  <a href="{{ '/assets/scan-lab.gif' | relative_url }}"><img loading="lazy" src="{{ '/assets/scan-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Real deadair scan of a disposable Elastic lab showing missing, stale, late, and schema-incompatible telemetry"></a>
-  <figcaption>This is output from the real CLI against Elastic 9.4.4. The terminal view is a summary. Click the image to play the short recording.</figcaption>
+<figure class="bordered" id="elastic-demo">
+  <video controls playsinline preload="none" poster="{{ '/assets/scan-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" aria-label="Investigating missing fields and delayed events in an Elastic lab">
+    <source src="{{ '/assets/scan-lab.mp4' | relative_url }}" type="video/mp4">
+    <a href="{{ '/assets/scan-lab.gif' | relative_url }}">Watch the Elastic recording</a>
+  </video>
+  <figcaption>Live Elastic 9.4.4 scan, followed by two source investigations from the saved report. Pause at any point to read the output.</figcaption>
 </figure>
 
 ## Resolving sources and affected rules
@@ -103,13 +106,26 @@ FortiGate wrote a row two minutes ago. In a
 one practical recommendation was to filter `CommonSecurityLog` by `DeviceVendor` when several
 firewalls share the table.
 
-deadair can make the same check when a rule reads one local Analytics table and uses a fixed literal
-filter. The lab reproduced it in `PerimeterSecurity_CL`: FortiGate stayed current while the PAN-OS
-slice went stale. The result appears in the report but does not fail the gate.
+deadair checks that slice when a rule reads one local Analytics table and uses a fixed literal
+filter. A quiet slice is useful context, but it isn't automatically an outage: a rule may be looking
+for a rare attack event.
 
-<figure class="bordered">
-  <a href="{{ '/assets/sentinel-lab.gif' | relative_url }}"><img loading="lazy" src="{{ '/assets/sentinel-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" alt="Real deadair scan of a disposable Microsoft Sentinel lab showing missing, stale, late, incompatible, partial, and filtered telemetry paths"></a>
-  <figcaption>This disposable Sentinel workspace contains deliberately broken data paths. <strong>Gate failed</strong> means the scan completed and found them. Click the image to play the short recording.</figcaption>
+For a feed that should report regularly, define a producer expectation. Give it the vendor,
+product, or device values found in the table and its normal reporting interval. In the latest lab,
+two synthetic firewalls sent to `CommonSecurityLog`. We stopped the London PAN-OS feed while
+FortiGate kept reporting. The table stayed fresh; the London producer failed its two-minute lab
+threshold. Restoring that feed cleared the producer finding in the next scan.
+
+The producer view lists rules whose parsed filters require that exact feed, separately from other
+table consumers. It doesn't label every detection on `CommonSecurityLog` as broken. The
+[investigation guide](investigate.md) shows the policy and maintenance settings.
+
+<figure class="bordered" id="sentinel-demo">
+  <video controls playsinline preload="none" poster="{{ '/assets/sentinel-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" aria-label="A Sentinel firewall feed stops and recovers inside a busy shared table">
+    <source src="{{ '/assets/sentinel-lab.mp4' | relative_url }}" type="video/mp4">
+    <a href="{{ '/assets/sentinel-lab.gif' | relative_url }}">Watch the Sentinel recording</a>
+  </video>
+  <figcaption>Saved scans from a disposable UK South workspace, using synthetic firewall events and a two-minute reporting threshold. Playback controls let you pause on failure or recovery.</figcaption>
 </figure>
 
 Sentinel has a second source problem: analytics rules cannot query Basic or Auxiliary tables directly.
@@ -152,7 +168,8 @@ fallback, and rule-type differences.
 On Elastic, deadair reads the timestamp field, `from`, interval, and paired `@timestamp` and
 `event.ingested` samples. On Sentinel Scheduled rules, `queryPeriod` and `queryFrequency` provide the
 same window and cadence, while `TimeGenerated` and `ingestion_time()` provide the paired sample.
-Sentinel NRT rules use ingestion-time freshness instead of this Scheduled-rule calculation.
+Sentinel NRT rules use ingestion-time freshness instead of this Scheduled-rule calculation. If both
+rule types read one table, deadair keeps both clocks and applies the appropriate one to each rule.
 
 ## The check I got wrong
 

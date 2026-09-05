@@ -1558,7 +1558,7 @@ func TestFreshnessRejectsFutureOutliers(t *testing.T) {
 	}
 }
 
-func TestRuleAwareFreshnessUsesTheRuleClockAndLeavesSharedSourcesIncomplete(t *testing.T) {
+func TestRuleAwareFreshnessKeepsBothSharedSourceClocks(t *testing.T) {
 	credential := &recordingCredential{}
 	var queries []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1580,6 +1580,12 @@ func TestRuleAwareFreshnessUsesTheRuleClockAndLeavesSharedSourcesIncomplete(t *t
 			writeAllowedLogsResult(w, "ScheduledTable", `[{"name":"PrimaryResult","columns":[{"name":"LastEvent","type":"datetime"}],"rows":[["2026-08-10T12:00:00Z"]]}]`)
 		case strings.HasPrefix(request.Query, "NRTTable "):
 			writeAllowedLogsResult(w, "NRTTable", `[{"name":"PrimaryResult","columns":[{"name":"LastEvent","type":"datetime"}],"rows":[["2026-08-20T12:00:00Z"]]}]`)
+		case strings.HasPrefix(request.Query, "SharedTable "):
+			stamp := "2026-08-10T12:00:00Z"
+			if strings.Contains(request.Query, "ingestion_time()") {
+				stamp = "2026-08-20T12:00:00Z"
+			}
+			writeAllowedLogsResult(w, "SharedTable", fmt.Sprintf(`[{"name":"PrimaryResult","columns":[{"name":"LastEvent","type":"datetime"}],"rows":[[%q]]}]`, stamp))
 		default:
 			t.Errorf("unexpected query %q", request.Query)
 		}
@@ -1601,7 +1607,7 @@ func TestRuleAwareFreshnessUsesTheRuleClockAndLeavesSharedSourcesIncomplete(t *t
 	if got := evidence["NRTTable"]; got.Status != backend.EvidenceAssessed || got.Method != "bounded-max-ingestion-time" || got.LastEvent.Day() != 20 {
 		t.Fatalf("NRT freshness = %+v", got)
 	}
-	if got := evidence["SharedTable"]; got.Status != backend.EvidenceIncomplete || got.Method != "mixed-rule-timing" {
+	if got := evidence["SharedTable"]; got.Status != backend.EvidenceAssessed || len(got.Clocks) != 2 || got.Clocks[backend.FreshnessEventTime].LastEvent.Day() != 10 || got.Clocks[backend.FreshnessIngestionTime].LastEvent.Day() != 20 {
 		t.Fatalf("shared freshness = %+v", got)
 	}
 	now := time.Date(2026, 8, 20, 12, 10, 0, 0, time.UTC)
@@ -1612,8 +1618,8 @@ func TestRuleAwareFreshnessUsesTheRuleClockAndLeavesSharedSourcesIncomplete(t *t
 	if got := check.Evaluate(backend.Source{Docs: -1, LastEvent: evidence["NRTTable"].LastEvent, Freshness: evidence["NRTTable"]}); got.Status != health.StatusOK {
 		t.Fatalf("NRT source with recent ingestion time = %+v, want healthy", got)
 	}
-	if got := check.Evaluate(backend.Source{Docs: -1, Freshness: evidence["SharedTable"]}); got.Status != health.StatusUnknown {
-		t.Fatalf("shared source timing = %+v, want unknown", got)
+	if got := check.Evaluate(backend.Source{Docs: -1, Freshness: evidence["SharedTable"]}); got.Status != health.StatusStale {
+		t.Fatalf("shared source timing = %+v, want stale event clock", got)
 	}
 	var scheduledQuery, nrtQuery string
 	for _, query := range queries {
@@ -1624,7 +1630,7 @@ func TestRuleAwareFreshnessUsesTheRuleClockAndLeavesSharedSourcesIncomplete(t *t
 			nrtQuery = query
 		}
 	}
-	if len(queries) != 2 || !strings.Contains(scheduledQuery, "max(TimeGenerated)") || strings.Contains(scheduledQuery, "max(IngestionTime)") ||
+	if len(queries) != 4 || !strings.Contains(scheduledQuery, "max(TimeGenerated)") || strings.Contains(scheduledQuery, "max(IngestionTime)") ||
 		!strings.Contains(nrtQuery, "max(IngestionTime)") || !strings.Contains(scheduledQuery, "TimeGenerated <= now() + 300s") || !strings.Contains(nrtQuery, "IngestionTime <= now() + 300s") {
 		t.Fatalf("rule-aware freshness queries = %v", queries)
 	}

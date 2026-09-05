@@ -3,8 +3,8 @@
 This directory contains optional Prometheus, Grafana, and Alertmanager examples for
 `deadair serve`.
 
-deadair itself does not ship a UI or alert delivery system. It exposes metrics; your monitoring
-stack handles dashboards and routing.
+deadair writes reports and exposes metrics. Your monitoring stack handles dashboards and alert
+delivery.
 
 Included examples:
 

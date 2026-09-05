@@ -1,19 +1,27 @@
-deadair scan — elastic — 2026-08-22T16:57:51Z
-GATE FAILED — one or more findings require attention
-sources:    5 (4 ok, 1 stale, 0 empty, 0 unknown, 0 maintenance)
-detections: 5 enabled / 5 total
-inputs:     4 resolved, 1 empty, 0 incompatible, 0 unsupported, 0 unavailable, 0 remote, 0 ambiguous
+deadair · elastic · 5 Sep 2026, 16:00 UTC
 
-DEAD: 2 enabled detections cannot fire right now
-  [high] Sysmon registry run-key modification — no matching source
-  [medium] Okta authentication failures — all matching sources stale or empty (okta-system-events-prod)
+2 detections can't fire
+  [high] Sysmon registry run-key modification — no matching source ·
+  winlogbeat-sysmon-*
+  [medium] Okta authentication failures — all matching sources stale or empty
+  · okta-system-events-prod
 
-IMPAIRED: 2 enabled detections run with reduced visibility
-  [high] PowerShell from legacy endpoints — required fields are missing (missing process.command_line)
-  [medium] Cloudflare firewall blocks — events may arrive too late for the rule (p95 ingest delay 45m (max 45m) exceeds the rule's lookback margin in cloudflare-firewall-prod)
+Reduced visibility  2
+  [high] PowerShell from legacy endpoints — missing process.command_line
+  [medium] Cloudflare firewall blocks — p95 ingest delay 44m59s (max 44m59s)
+  exceeds the rule's lookback margin in cloudflare-firewall-prod
 
-SOURCE FINDINGS: 1 source needs attention
-  okta-system-events-prod — no recent events
+Sources to investigate
+  endpoint-process-events-legacy — missing fields: process.command_line
+  cloudflare-firewall-prod — p95 ingest lag 44m59s
+  okta-system-events-prod — stale
 
 unused telemetry: 1 source, 6.9 KiB stored with no enabled detection reading it
   dns-query-events-prod (6.9 KiB)
+
+Scanned 5 enabled detections · 5 sources
+  Sources: 4 ok, 1 stale
+  Inputs: 4 resolved, 1 missing
+
+Policy: findings matched the gate · exit 1
+Inspect: deadair inspect -- sample-report.json
