@@ -864,8 +864,8 @@ func TestBuildAddsRuleSourceFreshnessAndSummaryRuleRunsAsInformationalEvidence(t
 		run.Error != "native summary execution failed" {
 		t.Fatalf("summary run was not preserved: %+v", run)
 	}
-	if len(r.Findings) != 0 || r.ExitCode() != ExitHealthy {
-		t.Fatalf("informational runtime evidence changed the gate: exit=%d findings=%+v", r.ExitCode(), r.Findings)
+	if len(r.Findings) != 1 || r.Findings[0].Class != FindingSummaryPipeline || r.ExitCode() != ExitHealthy {
+		t.Fatalf("summary finding should require an explicit gate policy: exit=%d findings=%+v", r.ExitCode(), r.Findings)
 	}
 	zero := int64(0)
 	r.SummaryRuleRuns[0].QueryDurationMillis = &zero
@@ -1002,7 +1002,7 @@ func TestHTMLAdvisoryFailureUsesGateLanguageWithoutHealthyClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(data)
-	for _, want := range []string{"Gate passed", "1 advisory signal needs review", "Summary pipeline failed", "do not change the gate"} {
+	for _, want := range []string{"Gate passed", "1 advisory signal needs review", "Summary pipeline failed", "configured gate policy"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("HTML advisory report missing %q", want)
 		}

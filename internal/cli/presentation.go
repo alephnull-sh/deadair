@@ -53,81 +53,12 @@ func interactiveOutput(w io.Writer) bool {
 func printVisualSummary(w io.Writer, r *report.Report) {
 	s := r.Summary
 	visibleUnmapped := r.VisibleUnmappedRules()
-	fmt.Fprintln(w, color(w, "1", "deadair"))
-	context := []string{strings.ToUpper(r.Backend)}
-	if r.Instance != "" && !strings.EqualFold(r.Instance, r.Backend) {
-		context = append([]string{r.Instance}, context...)
-	}
-	context = append(context, r.GeneratedAt.UTC().Format("15:04 UTC"))
-	fmt.Fprintln(w, color(w, "2", strings.Join(context, "  ·  ")))
-	printVisualGateStatus(w, r)
-
-	fmt.Fprintln(w)
-	printMetricRow(w, []visualMetric{
-		{text: countLabel(s.Sources, "source", "sources"), code: "1"},
-		{text: countLabel(s.EnabledRules, "detection", "detections"), code: "1"},
-	})
-
-	var sourceHealth []visualMetric
-	counts := map[string]int{}
-	for _, src := range r.Sources {
-		counts[src.Status]++
-	}
-	appendSource := func(n int, singular, plural, code string) {
-		if n > 0 {
-			sourceHealth = append(sourceHealth, visualMetric{
-				text: countLabel(n, singular, plural),
-				code: code,
-			})
-		}
-	}
-	appendSource(counts["ok"], "healthy", "healthy", "32")
-	appendSource(counts["stale"], "stale", "stale", "33")
-	appendSource(counts["empty"], "empty", "empty", "31")
-	appendSource(counts["unknown"], "unknown", "unknown", "33")
-	appendSource(counts["maintenance"], "in maintenance", "in maintenance", "36")
-	if len(sourceHealth) > 0 {
-		printMetricRow(w, sourceHealth)
-	}
-
-	var inputHealth []visualMetric
-	appendInput := func(n int, singular, plural, code string) {
-		if n > 0 {
-			inputHealth = append(inputHealth, visualMetric{
-				text: countLabel(n, singular, plural),
-				code: code,
-			})
-		}
-	}
-	if len(r.InputResolutions) > 0 {
-		resolution := humanInputResolution(r)
-		appendInput(resolution.Resolved, "resolved input", "resolved inputs", "32")
-		appendInput(resolution.Empty, "missing input", "missing inputs", "31")
-		appendInput(resolution.Incompatible, "incompatible input", "incompatible inputs", "33")
-		appendInput(resolution.Unsupported, "unsupported input", "unsupported inputs", "33")
-		appendInput(resolution.Unavailable, "unavailable input", "unavailable inputs", "33")
-		appendInput(resolution.Remote, "remote input", "remote inputs", "36")
-		appendInput(resolution.Ambiguous, "ambiguous input", "ambiguous inputs", "33")
-	}
-	if disabled := s.Rules - s.EnabledRules; disabled > 0 {
-		appendInput(disabled, "disabled detection", "disabled detections", "2")
-	}
-	if len(inputHealth) > 0 {
-		printMetricRow(w, inputHealth)
-	}
-	if checks := unassessedChecks(r); len(checks) > 0 {
-		fmt.Fprintln(w, color(w, "33;1", "CHECK COVERAGE"))
-		for _, check := range checks {
-			fmt.Fprintf(w, "  %s\n", color(w, "2", check))
-		}
-	}
-	if r.Policy != nil {
-		fmt.Fprintf(w, "%s  %d gated  ·  %d accepted  ·  %d expired\n",
-			color(w, "36;1", "POLICY"), r.Summary.GatedFindings, r.Policy.AcceptedActive, r.Policy.AcceptedExpired)
-	}
+	printScanHeading(w, r)
 
 	if len(r.DeadDetections) > 0 {
-		visualHeading(w, "31;1", "DEAD", len(r.DeadDetections))
+		if terminalGateExitCode(r) == report.ExitError {
+			visualHeading(w, "31;1", "Cannot fire", len(r.DeadDetections))
+		}
 		for i, d := range r.DeadDetections {
 			if i >= 15 {
 				visualMore(w, len(r.DeadDetections)-i)
@@ -139,7 +70,9 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 	}
 
 	if len(r.ImpairedDetections) > 0 {
-		visualHeading(w, "33;1", "IMPAIRED", len(r.ImpairedDetections))
+		if terminalFindingHeadline(r) != countLabel(s.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility") {
+			visualHeading(w, "33;1", "Reduced visibility", len(r.ImpairedDetections))
+		}
 		for i, d := range r.ImpairedDetections {
 			if i >= 15 {
 				visualMore(w, len(r.ImpairedDetections)-i)
@@ -150,8 +83,11 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 		}
 	}
 
-	if sourceFindings := sourceAttentionItems(r); len(sourceFindings) > 0 {
-		visualHeading(w, "33;1", "SOURCE FINDINGS", len(sourceFindings))
+	if len(r.SourceImpacts) > 0 || len(r.Producers) > 0 {
+		printInvestigationSummary(w, r)
+	}
+	if sourceFindings := sourceAttentionItems(r); len(r.SourceImpacts) == 0 && len(sourceFindings) > 0 {
+		visualHeading(w, "1", "Sources to investigate", 0)
 		for i, item := range sourceFindings {
 			if i >= 15 {
 				visualMore(w, len(sourceFindings)-i)
@@ -163,7 +99,7 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 	}
 
 	if len(r.PartialInputCoverage) > 0 {
-		visualHeading(w, "33;1", "PARTIAL INPUT", len(r.PartialInputCoverage))
+		visualHeading(w, "33;1", "Missing selectors", len(r.PartialInputCoverage))
 		for i, coverage := range r.PartialInputCoverage {
 			if i >= 10 {
 				visualMore(w, len(r.PartialInputCoverage)-i)
@@ -179,7 +115,7 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 	}
 
 	if len(visibleUnmapped) > 0 || len(r.RemoteRules) > 0 {
-		visualHeading(w, "33;1", "NOT ASSESSED", len(visibleUnmapped)+len(r.RemoteRules))
+		visualHeading(w, "33;1", "Assessment incomplete", len(visibleUnmapped)+len(r.RemoteRules))
 		shown := 0
 		for _, rule := range visibleUnmapped {
 			if shown >= 10 {
@@ -209,10 +145,10 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 	printVisualSentinelSignals(w, r)
 
 	if s.UnusedTelemetryAssessment == report.UnusedAssessmentUnavailable && !strings.EqualFold(r.Backend, "sentinel") {
-		visualHeading(w, "33;1", "UNUSED NOT ASSESSED", 0)
+		visualHeading(w, "33;1", "Unused telemetry could not be assessed", 0)
 		fmt.Fprintf(w, "  %s\n", color(w, "2", s.UnusedTelemetryExplanation()))
 	} else if len(r.UnusedTelemetry) > 0 {
-		visualHeading(w, "36;1", "UNUSED", len(r.UnusedTelemetry))
+		visualHeading(w, "1", "Unused telemetry", len(r.UnusedTelemetry))
 		for i, u := range r.UnusedTelemetry {
 			if i >= 5 {
 				visualMore(w, len(r.UnusedTelemetry)-i)
@@ -226,24 +162,75 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 			fmt.Fprintf(w, "  %s\n", color(w, "2", detail))
 		}
 	}
-
+	printScanDetails(w, r)
+	printPlainGateStatus(w, r)
 }
 
-func printVisualGateStatus(w io.Writer, r *report.Report) {
-	switch terminalGateExitCode(r) {
-	case report.ExitHealthy:
-		fmt.Fprintf(w, "\n%s\n", color(w, "32;1", "GATE PASSED"))
-		if count := sentinelSignalCount(r); count > 0 {
-			fmt.Fprintln(w, color(w, "2", fmt.Sprintf("No gated findings. Review %s below.", countLabel(count, "Sentinel signal", "Sentinel signals"))))
-			return
+func printScanHeading(w io.Writer, r *report.Report) {
+	context := []string{"deadair", terminalText(r.Backend)}
+	if r.Instance != "" && !strings.EqualFold(r.Instance, r.Backend) {
+		context = append(context, terminalText(r.Instance))
+	}
+	context = append(context, r.GeneratedAt.UTC().Format("2 Jan 2006, 15:04 UTC"))
+	fmt.Fprintln(w, strings.Join(context, " · "))
+	code := "1"
+	if terminalGateExitCode(r) == report.ExitError {
+		code = "33;1"
+	} else if r.Summary.DeadDetections > 0 {
+		code = "31;1"
+	} else if terminalFindingHeadline(r) != "Scan complete" {
+		code = "33;1"
+	}
+	fmt.Fprintf(w, "\n%s\n", color(w, code, terminalFindingHeadline(r)))
+}
+
+func printScanDetails(w io.Writer, r *report.Report) {
+	s := r.Summary
+	fmt.Fprintf(w, "\nScanned %s · %s\n", countLabel(s.EnabledRules, "enabled detection", "enabled detections"), countLabel(s.Sources, "source", "sources"))
+	counts := map[string]int{}
+	for _, src := range r.Sources {
+		counts[src.Status]++
+	}
+	var statuses []string
+	for _, status := range []string{"ok", "stale", "empty", "unknown", "maintenance"} {
+		if counts[status] > 0 {
+			statuses = append(statuses, fmt.Sprintf("%d %s", counts[status], status))
 		}
-		fmt.Fprintln(w, color(w, "2", "No gated findings."))
-	case report.ExitFindings:
-		fmt.Fprintf(w, "\n%s\n", color(w, "31;1", "GATE FAILED"))
-		fmt.Fprintln(w, color(w, "2", "One or more findings require attention."))
-	default:
-		fmt.Fprintf(w, "\n%s\n", color(w, "33;1", "SCAN INCOMPLETE"))
-		fmt.Fprintln(w, color(w, "2", "The gate could not be evaluated safely."))
+	}
+	if len(statuses) > 0 {
+		printParagraph(w, "  ", "Sources: "+strings.Join(statuses, ", "))
+	}
+	if len(r.InputResolutions) > 0 {
+		x := humanInputResolution(r)
+		var inputs []string
+		for _, item := range []struct {
+			count int
+			label string
+		}{{x.Resolved, "resolved"}, {x.Empty, "missing"}, {x.Incompatible, "incompatible"}, {x.Unsupported, "unsupported"}, {x.Unavailable, "unavailable"}, {x.Remote, "remote"}, {x.Ambiguous, "ambiguous"}} {
+			if item.count > 0 {
+				inputs = append(inputs, fmt.Sprintf("%d %s", item.count, item.label))
+			}
+		}
+		if len(inputs) > 0 {
+			printParagraph(w, "  ", "Inputs: "+strings.Join(inputs, ", "))
+		}
+	}
+	if disabled := s.Rules - s.EnabledRules; disabled > 0 {
+		fmt.Fprintf(w, "  %s excluded\n", countLabel(disabled, "disabled detection", "disabled detections"))
+	}
+	if r.Policy != nil {
+		if r.Policy.AcceptedActive > 0 {
+			fmt.Fprintf(w, "  %s\n", countLabel(r.Policy.AcceptedActive, "active acceptance", "active acceptances"))
+		}
+		if r.Policy.AcceptedExpired > 0 {
+			fmt.Fprintf(w, "  %s\n", countLabel(r.Policy.AcceptedExpired, "expired acceptance", "expired acceptances"))
+		}
+	}
+	if checks := unassessedChecks(r); len(checks) > 0 {
+		fmt.Fprintln(w, color(w, "33;1", "Check coverage"))
+		for _, check := range checks {
+			fmt.Fprintf(w, "  %s\n", check)
+		}
 	}
 }
 
@@ -253,8 +240,7 @@ func printVisualSentinelSignals(w io.Writer, r *report.Report) {
 	if len(freshness)+len(summaryRuns) == 0 {
 		return
 	}
-	visualHeading(w, "33;1", "SENTINEL SIGNALS", len(freshness)+len(summaryRuns))
-	fmt.Fprintln(w, color(w, "2", "Advisory evidence only. Gate unchanged."))
+	printSentinelSignalsHeading(w, r, len(freshness)+len(summaryRuns))
 	shown := 0
 	for _, item := range freshness {
 		if shown >= 10 {
@@ -262,7 +248,7 @@ func printVisualSentinelSignals(w io.Writer, r *report.Report) {
 			return
 		}
 		shown++
-		fmt.Fprintf(w, "  %s\n", color(w, "1", "FILTERED DATA  "+ruleSourceLabel(item)))
+		fmt.Fprintf(w, "  %s\n", color(w, "1", "Filtered data · "+ruleSourceLabel(item)))
 		fmt.Fprintf(w, "  %s\n", color(w, "2", filteredFreshnessDetail(item)))
 		fmt.Fprintln(w, color(w, "2", "  Review this rule's filter and matching connector."))
 	}
@@ -272,10 +258,17 @@ func printVisualSentinelSignals(w io.Writer, r *report.Report) {
 			return
 		}
 		shown++
-		fmt.Fprintf(w, "  %s\n", color(w, "1", "SUMMARY PIPELINE  "+summaryRuleLabel(item)))
+		fmt.Fprintf(w, "  %s\n", color(w, "1", "Summary pipeline · "+summaryRuleLabel(item)))
 		fmt.Fprintf(w, "  %s\n", color(w, "2", summaryRunDetail(r, item)))
 		fmt.Fprintln(w, color(w, "2", "  Open the summary rule run history in Sentinel."))
 	}
+}
+
+func printSentinelSignalsHeading(w io.Writer, r *report.Report, count int) {
+	if !strings.Contains(terminalFindingHeadline(r), "Sentinel signal") {
+		visualHeading(w, "33;1", "Sentinel signals", count)
+	}
+	printParagraph(w, "  ", sentinelSignalNote(r))
 }
 
 func visualHeading(w io.Writer, code, label string, count int) {
@@ -290,40 +283,8 @@ func visualMore(w io.Writer, count int) {
 	fmt.Fprintf(w, "  %s\n", color(w, "2", fmt.Sprintf("%d more in JSON", count)))
 }
 
-type visualMetric struct {
-	text string
-	code string
-}
-
-func printMetricRow(w io.Writer, metrics []visualMetric) {
-	for i, metric := range metrics {
-		if i > 0 {
-			fmt.Fprint(w, color(w, "2", "  ·  "))
-		}
-		fmt.Fprint(w, color(w, metric.code, metric.text))
-	}
-	fmt.Fprintln(w)
-}
-
 func printVisualFindingDetail(w io.Writer, severity string, evidence ...string) {
-	fmt.Fprintf(w, "  %s", color(w, severityColor(severity), strings.ToUpper(severity)))
-	for _, item := range evidence {
-		fmt.Fprint(w, color(w, "2", "  ·  "+item))
-	}
-	fmt.Fprintln(w)
-}
-
-func severityColor(severity string) string {
-	switch strings.ToLower(severity) {
-	case "critical", "high":
-		return "31;1"
-	case "medium":
-		return "33;1"
-	case "low":
-		return "36;1"
-	default:
-		return "1"
-	}
+	printParagraph(w, "    ", "["+strings.ToLower(severity)+"] "+strings.Join(evidence, " · "))
 }
 
 func visualDeadEvidence(d report.DeadDetection) []string {
@@ -412,12 +373,47 @@ func ruleSourceFreshnessWarnings(r *report.Report) []report.RuleSourceFreshness 
 func summaryRuleRunWarnings(r *report.Report) []report.SummaryRuleRun {
 	items := make([]report.SummaryRuleRun, 0, len(r.SummaryRuleRuns))
 	for _, item := range r.SummaryRuleRuns {
-		if item.Status == "assessed" && strings.EqualFold(item.RunStatus, "Succeeded") {
+		if item.HealthStatus == "ok" || (item.HealthStatus == "" && item.Status == "assessed" && strings.EqualFold(item.RunStatus, "Succeeded")) {
 			continue
 		}
 		items = append(items, item)
 	}
 	return items
+}
+
+func sentinelSignalNote(r *report.Report) string {
+	if len(summaryRuleRunWarnings(r)) > 0 {
+		return "Filtered activity is advisory. Summary findings follow the gate policy."
+	}
+	return "Filtered activity is advisory; gate unchanged."
+}
+
+func terminalFindingHeadline(r *report.Report) string {
+	if terminalGateExitCode(r) == report.ExitError {
+		return "Scan incomplete"
+	}
+	if r.Summary.DeadDetections > 0 {
+		return countLabel(r.Summary.DeadDetections, "detection can't fire", "detections can't fire")
+	}
+	quiet := 0
+	for _, p := range r.Producers {
+		if !p.Observation.ExpectedDowntime && (p.Observation.FreshnessStatus == "stale" || p.Observation.FreshnessStatus == "empty") {
+			quiet++
+		}
+	}
+	if quiet > 0 {
+		return countLabel(quiet, "expected producer is quiet", "expected producers are quiet")
+	}
+	if r.Summary.ImpairedDetections > 0 {
+		return countLabel(r.Summary.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility")
+	}
+	if sources := sourceAttentionItems(r); len(sources) > 0 {
+		return countLabel(len(sources), "source needs attention", "sources need attention")
+	}
+	if count := sentinelSignalCount(r); count > 0 {
+		return countLabel(count, "Sentinel signal needs review", "Sentinel signals need review")
+	}
+	return "Scan complete"
 }
 
 func countLabel(n int, singular, plural string) string {
@@ -463,11 +459,8 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 	}
 	for _, finding := range d.NewFindings {
 		switch finding.Class {
-		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput, report.FindingProducerStale, report.FindingSummaryPipeline:
+			name := findingSubject(finding)
 			visualHeading(w, "33;1", strings.ToUpper(report.FindingClassLabel(finding.Class)), 1)
 			fmt.Fprintf(w, "  %s\n", color(w, "1", name))
 			fmt.Fprintf(w, "  %s\n", color(w, "2", report.FindingReasonLabel(finding.Class, finding.Reason)))
@@ -476,10 +469,7 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 	if len(d.NewlyGatedFindings) > 0 {
 		visualHeading(w, "31;1", "NEWLY GATED", len(d.NewlyGatedFindings))
 		for _, finding := range d.NewlyGatedFindings {
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+			name := findingSubject(finding)
 			fmt.Fprintf(w, "  %s\n", color(w, "1", name))
 			fmt.Fprintf(w, "  %s\n", color(w, "2", report.FindingReasonLabel(finding.Class, finding.Reason)+"  ·  "+report.FindingClassLabel(finding.Class)))
 		}
@@ -500,19 +490,13 @@ func printVisualDiff(w io.Writer, d *report.DiffResult) {
 	}
 	for _, finding := range d.RecoveredFindings {
 		switch finding.Class {
-		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput:
-			name := finding.Source
-			if name == "" {
-				name = finding.RuleName
-			}
+		case report.FindingVolumeLow, report.FindingSchemaDrift, report.FindingPartialInput, report.FindingProducerStale, report.FindingSummaryPipeline:
+			name := findingSubject(finding)
 			fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "RECOVERED"), name, report.FindingReasonLabel(finding.Class, finding.Reason))
 		}
 	}
 	for _, finding := range d.NoLongerGated {
-		name := finding.Source
-		if name == "" {
-			name = finding.RuleName
-		}
+		name := findingSubject(finding)
 		fmt.Fprintf(w, "\n%s  %s — %s\n", color(w, "32;1", "NO LONGER GATED"), name, report.FindingReasonLabel(finding.Class, finding.Reason))
 	}
 	for _, n := range d.NewSources {

@@ -88,9 +88,15 @@ owner:              detection engineering
 | lag blind window | detection engineering and pipeline owner |
 | unused telemetry | detection engineering and cost/platform owner |
 | failed tenant scan | tenant onboarding or credential owner |
+| expected Sentinel producer quiet | owner of that device feed and its collector |
+| failed or overdue summary job | summary-query owner and Log Analytics platform team |
 
 The finding class matters. A rule dependency finding and a source-health finding may describe the
 same incident, but they often belong to different queues.
+
+Use the [source and producer view](investigate.md) to keep those relationships in the ticket. Don't
+attach every `CommonSecurityLog` consumer to an outage affecting one firewall. Define expected feed
+cadence explicitly, and use maintenance to suppress alerts without erasing what the scan observed.
 
 ## Credentials
 

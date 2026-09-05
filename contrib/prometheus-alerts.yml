@@ -11,7 +11,7 @@ groups:
           severity: warning
         annotations:
           summary: "deadair exporter is not being scraped"
-          description: "No deadair_up series for 10m — the monitor that watches your monitoring is down."
+          description: "Prometheus has received no deadair_up series for 10m. Check the exporter and scrape target."
 
       - alert: DeadairScanFailing
         expr: deadair_up == 0
@@ -32,34 +32,34 @@ groups:
           description: "The last scan for this instance failed. Check tenant credentials, network reachability, and SIEM API health."
 
       - alert: DeadairDeadDetections
-        expr: deadair_detections_dead > 0
+        expr: (deadair_detections_dead > 0) and ignoring(source) (deadair_instance_up == 1)
         for: 30m
         labels:
           severity: critical
         annotations:
           summary: "{{ $value }} enabled detection(s) cannot fire"
-          description: "Enabled detection rules are disconnected or starved of data. See the deadair report for blast radius."
+          description: "These rules have no matching source, or all their sources are stale or empty. Open the source view to see the shared dependencies."
 
       - alert: DeadairImpairedDetections
-        expr: deadair_detections_impaired > 0
+        expr: (deadair_detections_impaired > 0) and ignoring(source) (deadair_instance_up == 1)
         for: 30m
         labels:
           severity: warning
         annotations:
           summary: "{{ $value }} detection(s) running with reduced visibility"
-          description: "Truncated lookback, missing fields, or ingest-lag blind windows. See the deadair report."
+          description: "The scan found missing fields, ingest-lag blind windows, or an incompatible input. See the rule evidence in the report."
 
       - alert: DeadairSourceStale
-        expr: deadair_source_freshness_seconds > 6 * 3600
+        expr: (deadair_source_freshness_seconds > 6 * 3600) and ignoring(source) (deadair_instance_up == 1)
         for: 30m
         labels:
           severity: warning
         annotations:
           summary: "source {{ $labels.source }} stale for 6h+"
-          description: "No new events in {{ $labels.source }} — every detection reading it is degraded."
+          description: "No recent events in {{ $labels.source }}. Check expected downtime and the detections that depend on this source."
 
       - alert: DeadairVolumeLow
-        expr: deadair_source_volume_low == 1
+        expr: (deadair_source_volume_low == 1) and ignoring(source) (deadair_instance_up == 1)
         for: 15m
         labels:
           severity: warning
@@ -68,9 +68,45 @@ groups:
           description: "Volume is below the same weekday/hour baseline after warmup and hysteresis."
 
       - alert: DeadairSchemaDrift
-        expr: deadair_source_schema_drift == 1
+        expr: (deadair_source_schema_drift == 1) and ignoring(source) (deadair_instance_up == 1)
         labels:
           severity: info
         annotations:
           summary: "source {{ $labels.source }} schema changed"
           description: "field_caps changed since the previous snapshot; removed or retyped fields can silently break detections."
+
+      - alert: DeadairProducerQuiet
+        expr: (deadair_producer_stale == 1) and (deadair_producer_suppressed == 0) and on(instance) (deadair_instance_up == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.producer }} has stopped reporting"
+          description: "The feed exceeded its configured interval. Inspect this producer in the saved report for dependent detections and the runbook."
+
+      - alert: DeadairProducerEvidenceUnavailable
+        expr: (deadair_producer_assessed == 0) and (deadair_producer_suppressed == 0) and on(instance) (deadair_instance_up == 1)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cannot check {{ $labels.producer }}"
+          description: "The feed's status is unknown. Check Logs permissions, table schema, and the scan query budget."
+
+      - alert: DeadairSummaryPipelineUnhealthy
+        expr: (deadair_summary_pipeline_unhealthy == 1) and (deadair_summary_pipeline_suppressed == 0) and on(instance) (deadair_instance_up == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Summary pipeline for {{ $labels.source }} needs attention"
+          description: "The latest completed run failed or is overdue. Open the summary rule's run history to check the error and schedule."
+
+      - alert: DeadairSummaryEvidenceUnavailable
+        expr: (deadair_summary_pipeline_assessed == 0) and (deadair_summary_pipeline_suppressed == 0) and on(instance) (deadair_instance_up == 1)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cannot check summary pipeline for {{ $labels.source }}"
+          description: "No conclusive runtime observation was returned. This does not mean the pipeline recovered."

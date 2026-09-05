@@ -58,6 +58,8 @@ func htmlHeadline(r *Report) string {
 		return htmlCount(r.Summary.DeadDetections, "detection can't fire", "detections can't fire")
 	case r.Summary.ImpairedDetections > 0:
 		return htmlCount(r.Summary.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility")
+	case quietProducerCount(r) > 0:
+		return htmlCount(quietProducerCount(r), "expected producer is quiet", "expected producers are quiet")
 	case len(sourceFindings) > 0:
 		return htmlCount(len(sourceFindings), "source needs attention", "sources need attention")
 	case r.ExitCode() == ExitFindings:
@@ -71,6 +73,32 @@ func htmlHeadline(r *Report) string {
 	default:
 		return "No gated findings"
 	}
+}
+
+func quietProducerCount(r *Report) int {
+	count := 0
+	for _, p := range r.Producers {
+		if !p.Observation.ExpectedDowntime && (p.Observation.FreshnessStatus == "stale" || p.Observation.FreshnessStatus == "empty") {
+			count++
+		}
+	}
+	return count
+}
+
+func htmlSourceState(s SourceImpact) string {
+	if len(s.MissingFields) > 0 {
+		return "Missing fields"
+	}
+	if s.Schema != nil && s.Schema.Status == "drift" {
+		return "Schema changed"
+	}
+	if s.Volume != nil && s.Volume.Status == "low" {
+		return "Low volume"
+	}
+	if s.Status == "ok" && s.FirstCheck != "" {
+		return "Delayed"
+	}
+	return htmlHumanLabel(s.Status)
 }
 
 func htmlGateLabel(r *Report) string {
@@ -109,7 +137,7 @@ func htmlFreshnessWarnings(r *Report) []RuleSourceFreshness {
 func htmlSummaryWarnings(r *Report) []SummaryRuleRun {
 	items := make([]SummaryRuleRun, 0, len(r.SummaryRuleRuns))
 	for _, item := range r.SummaryRuleRuns {
-		if item.Status == "assessed" && strings.EqualFold(item.RunStatus, "Succeeded") {
+		if item.HealthStatus == "ok" || (item.HealthStatus == "" && item.Status == "assessed" && strings.EqualFold(item.RunStatus, "Succeeded")) {
 			continue
 		}
 		items = append(items, item)
@@ -177,7 +205,10 @@ func htmlGateNote(r *Report) string {
 		if r.Policy != nil && r.Summary.GatedFindings > 0 {
 			return htmlCount(r.Summary.GatedFindings, "finding is configured to fail this scan.", "findings are configured to fail this scan.")
 		}
-		return "Review the affected rules and sources below."
+		return "The scan completed. Findings matched the configured gate (exit 1)."
+	}
+	if len(r.Findings) > 0 {
+		return "Findings are listed below, but none matched the configured gate (exit 0)."
 	}
 	if count := len(r.PartialInputCoverage); count > 0 {
 		return fmt.Sprintf("No gated findings. Review %s below.", htmlCount(count, "partial rule input", "partial rule inputs"))
@@ -397,12 +428,26 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
 		}
 		return fmt.Sprintf("%d", *value)
 	},
-	"reason":               DeadReasonLabel,
+	"reason": DeadReasonLabel,
+	"consumerStatus": func(status string) string {
+		switch status {
+		case "cannot_fire":
+			return "Cannot fire"
+		case "impaired":
+			return "Reduced visibility"
+		case "unassessed":
+			return "Assessment incomplete"
+		default:
+			return "Reads this source"
+		}
+	},
 	"impairedReason":       ImpairedReasonLabel,
 	"headline":             htmlHeadline,
 	"gateLabel":            htmlGateLabel,
 	"gateClass":            htmlGateClass,
 	"gateNote":             htmlGateNote,
+	"count":                htmlCount,
+	"sourceState":          htmlSourceState,
 	"advisoryCount":        htmlAdvisoryCount,
 	"freshnessWarnings":    htmlFreshnessWarnings,
 	"summaryWarnings":      htmlSummaryWarnings,
@@ -465,6 +510,14 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
       justify-content: space-between;
       gap: 20px;
     }
+    .report-nav { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 20px; font-size: 13px; }
+    a { color: inherit; text-underline-offset: 3px; }
+    a:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
+    .report-nav a { padding: 4px 0; }
+    .detail-summary > span:first-child { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+    .detail-summary > .badge { flex-shrink: 0; }
+    .section-heading > .count { white-space: nowrap; flex-shrink: 0; }
+    .evidence-body, .signal-title, .meta { overflow-wrap: anywhere; }
     .brand {
       margin: 0;
       color: var(--ink);
@@ -586,6 +639,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     .signal-top { align-items: start; }
     .signal-title { margin: 0; font-size: 15px; font-weight: 600; }
     .signal p { margin: 0; color: var(--muted); }
+    .signal .signal-title { color: var(--ink); }
     .signal .action { margin-top: 3px; color: var(--muted); font-size: 13px; }
     .badge {
       display: inline-block;
@@ -599,7 +653,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
       white-space: nowrap;
     }
     .status-ok, .status-assessed, .status-resolved, .status-succeeded { color: var(--good); }
-    .status-stale, .status-empty, .status-failed, .status-incompatible { color: var(--danger); }
+    .status-stale, .status-empty, .status-failed, .status-incompatible, .status-late { color: var(--danger); }
     .status-incomplete, .status-unavailable, .status-unsupported, .status-ambiguous, .status-remote, .status-unknown, .status-disabled { color: var(--warn); }
     .status-maintenance, .status-warming, .status-pending { color: var(--muted); }
     .severity-critical, .severity-high { color: var(--danger); }
@@ -705,6 +759,8 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     @media (max-width: 680px) {
       .report { width: min(100% - 28px, 1080px); padding: 22px 0 40px; }
       .hero-top, .section-heading, .signal-top { align-items: flex-start; }
+      .hero-top { flex-wrap: wrap; gap: 12px; }
+      .detail-summary { gap: 12px; }
       h1 { margin-top: 24px; font-size: 2rem; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric, .metric + .metric {
@@ -758,7 +814,12 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
       {{if .Summary.VolumeLowSources}}<div class="metric metric-warn"><span>Low-volume sources</span><strong>{{.Summary.VolumeLowSources}}</strong></div>{{end}}
       {{if .Summary.SchemaDriftSources}}<div class="metric metric-warn"><span>Schema changes</span><strong>{{.Summary.SchemaDriftSources}}</strong></div>{{end}}
     </div>
-
+    <nav class="report-nav" aria-label="Report sections">
+      {{if or .DeadDetections .ImpairedDetections .PartialInputCoverage $unmappedRules .RemoteRules $freshnessWarnings $summaryWarnings $sourceFindings}}<a href="#attention-heading">Findings</a>{{end}}
+      {{if .Producers}}<a href="#producers-heading">Producers</a>{{end}}
+      <a href="#sources-heading">Sources</a>
+      <a href="#evidence-heading">Evidence</a>
+    </nav>
   </header>
 
   {{if or .DeadDetections .ImpairedDetections .PartialInputCoverage $unmappedRules .RemoteRules $freshnessWarnings $summaryWarnings $sourceFindings}}
@@ -804,7 +865,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     </ul>
     {{end}}
 
-    {{if $sourceFindings}}
+    {{if and $sourceFindings (not .SourceImpacts)}}
     <h3>Sources that need attention</h3>
     <ul class="signal-list">
       {{range $sourceFindings}}
@@ -859,8 +920,8 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
     {{end}}
 
     {{if or $freshnessWarnings $summaryWarnings}}
-    <h3>Sentinel advisory signals</h3>
-    <p class="advisory-note">These checks are advisory. They do not change the gate or exit code.</p>
+    <h3>Filtered activity and summary pipelines</h3>
+    <p class="advisory-note">Filtered rule activity is context. Summary-pipeline findings use the configured gate policy.</p>
     <ul class="signal-list">
       {{range $freshnessWarnings}}
       <li class="signal">
@@ -888,15 +949,62 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
   </section>
   {{end}}
 
+  {{if .Producers}}
+  <section aria-labelledby="producers-heading">
+    <div class="section-heading"><h2 id="producers-heading">Expected producers</h2><span class="count">{{len .Producers}} configured</span></div>
+    {{range .Producers}}
+    <details class="evidence-panel" {{if ne .Observation.FreshnessStatus "ok"}}open{{end}}>
+      <summary class="detail-summary"><span>{{.ID}} · {{.Source}}</span><span class="badge status-{{if .Observation.ExpectedDowntime}}maintenance{{else}}{{.Observation.FreshnessStatus}}{{end}}">{{human .Observation.FreshnessStatus}}{{if .Observation.ExpectedDowntime}} · maintenance{{end}}</span></summary>
+      <div class="evidence-body">
+        <p>Expected at least once every {{duration .MaxStaleSeconds}}. {{human .Observation.Basis}}: {{if .Observation.LastEvent}}{{duration .Observation.AgeSeconds}} ago.{{else if .Observation.AgeLowerBound}}no event in the measured {{duration .Observation.WindowSeconds}}.{{else}}no usable timestamp was returned.{{end}}</p>
+        {{if .Observation.ExpectedDowntime}}<p>Maintenance is suppressing the alert. The observation is unchanged.</p>{{end}}
+        {{if .Owner}}<p>Owner: {{.Owner}}{{if .Runbook}} · <a href="{{.Runbook}}" rel="noreferrer">Runbook</a>{{end}}</p>{{else}}{{if .Runbook}}<p><a href="{{.Runbook}}" rel="noreferrer">Runbook</a></p>{{end}}{{end}}
+        {{if .ConfirmedDetections}}
+        <h3>Detections that require this producer</h3>
+        <ul>{{range .ConfirmedDetections}}<li><span class="badge severity-{{.Severity}}">{{.Severity}}</span> {{if .URL}}<a href="{{.URL}}" rel="noreferrer">{{.Name}}</a>{{else}}{{.Name}}{{end}}</li>{{end}}</ul>
+        {{else}}<p>No detection filter was proved to require this producer.</p>{{end}}
+        {{if .OtherTableConsumers}}<details><summary>{{count (len .OtherTableConsumers) "other detection reads this table" "other detections read this table"}}</summary><p>Their dependency on this producer has not been established.</p><ul>{{range .OtherTableConsumers}}<li>{{.Name}}</li>{{end}}</ul></details>{{end}}
+        {{if or (eq .Observation.FreshnessStatus "stale") (eq .Observation.FreshnessStatus "empty")}}<p class="action">First check: look for delivery errors on this producer's sender and collector.</p>{{end}}
+        {{if .Observation.Detail}}<p class="count">{{.Observation.Detail}}</p>{{end}}
+      </div>
+    </details>
+    {{end}}
+  </section>
+  {{end}}
+
   <section aria-labelledby="sources-heading">
     <div class="section-heading">
       <div>
         <h2 id="sources-heading">Sources</h2>
-        <p class="section-copy">The data feeds deadair resolved for this scan and the detections that depend on them.</p>
+        <p class="section-copy">Open a source for its evidence, consuming detections, and first check.</p>
       </div>
       <span class="count">{{.Summary.Sources}} total</span>
     </div>
+    {{range .SourceImpacts}}
+    <details class="evidence-panel">
+      <summary class="detail-summary"><span>{{.Source}}</span><span class="badge status-{{if and .FirstCheck (eq .Status "ok")}}incomplete{{else}}{{.Status}}{{end}}">{{sourceState .}}</span></summary>
+      <div class="evidence-body">
+        {{range .Freshness}}<p><strong>{{human .Basis}}:</strong> {{human .FreshnessStatus}}{{if .LastEvent}} · {{time .LastEvent}}{{else if .AgeLowerBound}} · no event in the measured {{duration .WindowSeconds}}{{end}}{{if .ExpectedDowntime}} · maintenance{{end}}</p>{{end}}
+        {{if .Owner}}<p>Owner: {{.Owner}}</p>{{end}}
+        {{if .MissingFields}}<p>Missing declared fields: {{range $i, $field := .MissingFields}}{{if $i}}, {{end}}<code>{{$field}}</code>{{end}}</p>{{end}}
+        {{with .Volume}}{{if eq .Status "low"}}<p>Volume: {{printf "%.1f" .RatePerHour}} events/hour; baseline {{printf "%.1f" .BaselineMean}} ({{count .SampleCount "sample" "samples"}}).</p>{{end}}{{end}}
+        {{with .Schema}}{{if eq .Status "drift"}}
+          {{if .Removed}}<p>Removed fields: {{join .Removed}}</p>{{end}}
+          {{if .Added}}<p>Added fields: {{join .Added}}</p>{{end}}
+          {{range .TypeChanged}}<p>Changed type: <code>{{.Name}}</code> ({{join .Before}} → {{join .After}})</p>{{end}}
+        {{end}}{{end}}
+        {{with .IngestLag}}{{if eq .Status "assessed"}}<p>Ingest lag: p95 {{duration .P95Seconds}}, max {{duration .MaxSeconds}} ({{count .SampleCount "paired event" "paired events"}}).</p>{{end}}{{end}}
+        {{if .Detections}}<h3>{{count (len .Detections) "enabled detection reads this source" "enabled detections read this source"}}</h3><ul>
+          {{range .Detections}}<li><span class="badge severity-{{.Severity}}">{{.Severity}}</span> {{if .URL}}<a href="{{.URL}}" rel="noreferrer">{{.Name}}</a>{{else}}{{.Name}}{{end}} — {{consumerStatus .Status}}</li>{{end}}
+        </ul>{{else}}<p>No enabled consumer was resolved to this source.</p>{{end}}
+        {{if .FirstCheck}}<p class="action">First check: {{.FirstCheck}}</p>{{end}}
+        {{if .Runbook}}<p><a href="{{.Runbook}}" rel="noreferrer">Open runbook</a></p>{{end}}
+        {{if .URL}}<p><a href="{{.URL}}" rel="noreferrer">{{if eq $.Backend "sentinel"}}Open workspace Logs{{else}}Open source mapping{{end}}</a></p>{{end}}
+      </div>
+    </details>
+    {{end}}
     {{if .Sources}}
+    {{if .SourceImpacts}}<details class="evidence-panel"><summary class="detail-summary">Source inventory and historical checks</summary>{{end}}
     <div class="table-wrap" tabindex="0" role="region" aria-label="Sources">
       <table class="source-table{{if and (not $showDocsStorage) (not $showVolume)}} source-table-compact{{end}}">
         <thead><tr><th class="source-name">Source</th><th>Status</th><th class="source-age">Age</th><th>Detections</th>{{if $showDocsStorage}}<th>Documents</th><th>Stored</th>{{end}}{{if $showVolume}}<th>Volume</th>{{end}}<th>Schema</th><th>Ingest lag</th></tr></thead>
@@ -917,6 +1025,7 @@ var htmlReport = template.Must(template.New("report").Funcs(template.FuncMap{
         </tbody>
       </table>
     </div>
+    {{if .SourceImpacts}}</details>{{end}}
     {{else}}
     <p class="empty-note">No source inventory was available for this scan.</p>
     {{end}}

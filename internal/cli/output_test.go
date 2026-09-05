@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,81 @@ import (
 	"github.com/alephnull-sh/deadair/internal/backend"
 	"github.com/alephnull-sh/deadair/internal/report"
 )
+
+func TestScanDetailsOmitZeroCountsAndKeepUnknownEvidence(t *testing.T) {
+	r := &report.Report{
+		Backend: "sentinel", Summary: report.Summary{Sources: 1, Rules: 2, EnabledRules: 1,
+			InputResolution: report.InputResolutionSummary{Unavailable: 1}},
+		Sources:          []report.SourceHealth{{Name: "CommonSecurityLog", Status: "unknown"}},
+		InputResolutions: []backend.InputResolution{{Status: backend.ResolutionUnavailable}},
+		Assessments:      []report.RuntimeAssessment{{Name: report.AssessmentSourceResolution, Status: backend.EvidenceIncomplete}},
+	}
+	before, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := r.ExitCode()
+	for name, render := range map[string]func(*bytes.Buffer){
+		"plain":  func(out *bytes.Buffer) { printPlainSummary(out, r) },
+		"visual": func(out *bytes.Buffer) { printVisualSummary(out, r) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			render(&out)
+			for _, want := range []string{"Sources: 1 unknown", "Inputs: 1 unavailable", "source resolution incomplete", "1 disabled detection excluded"} {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("missing %q: %s", want, out.String())
+				}
+			}
+			for _, unwanted := range []string{"0 ok", "0 empty", "0 remote", "0 unsupported", "0 accepted", "healthy", "\x1b["} {
+				if strings.Contains(out.String(), unwanted) {
+					t.Errorf("unexpected %q: %s", unwanted, out.String())
+				}
+			}
+		})
+	}
+	after, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || r.ExitCode() != exit {
+		t.Fatal("rendering changed report evidence or exit status")
+	}
+}
+
+func TestTerminalColorDoesNotChangePlainOutput(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	f, err := os.CreateTemp(t.TempDir(), "terminal-output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, code := range []string{"", "1", "2", "31;1", "32", "33"} {
+		if got := color(f, code, "evidence"); got != "evidence" {
+			t.Fatalf("file output gained styling: %q", got)
+		}
+	}
+	device, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer device.Close()
+	for _, mode := range []string{"NO_COLOR", "dumb"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "NO_COLOR" {
+				t.Setenv("NO_COLOR", "1")
+			} else {
+				t.Setenv("TERM", "dumb")
+			}
+			if got := color(device, "31;1", "missing"); got != "missing" {
+				t.Fatalf("color override ignored: %q", got)
+			}
+		})
+	}
+	if got := color(device, "2", "evidence"); got != "evidence" {
+		t.Fatalf("evidence was dimmed: %q", got)
+	}
+}
 
 func TestSentinelSignalsKeepGateResultHonest(t *testing.T) {
 	generatedAt := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
@@ -42,7 +119,7 @@ func TestSentinelSignalsKeepGateResultHonest(t *testing.T) {
 			render(&output)
 			text := output.String()
 			for _, want := range []string{
-				"GATE PASSED", "SENTINEL SIGNALS",
+				"Policy: no findings matched the gate · exit 0", "Sentinel signals",
 				"Suspicious firewall traffic → CommonSecurityLog",
 				"Summarize sign-ins → SummarySignin_CL", "Failed 18m ago", "1.2s", "0 rows",
 			} {
@@ -50,7 +127,7 @@ func TestSentinelSignalsKeepGateResultHonest(t *testing.T) {
 					t.Errorf("%s output missing %q:\n%s", name, want, text)
 				}
 			}
-			if !strings.Contains(strings.ToLower(text), "gate unchanged") {
+			if !strings.Contains(text, "Filtered activity is advisory. Summary findings follow the gate policy.") {
 				t.Errorf("%s output does not explain the advisory/gate boundary:\n%s", name, text)
 			}
 			if strings.Contains(text, "HEALTHY") || strings.Contains(text, "DeviceVendor=") {
@@ -60,7 +137,7 @@ func TestSentinelSignalsKeepGateResultHonest(t *testing.T) {
 	}
 }
 
-func TestGateFailureLeadsTheTerminalReport(t *testing.T) {
+func TestFindingsLeadAndPolicyClosesTheTerminalReport(t *testing.T) {
 	r := &report.Report{
 		Backend: "elastic",
 		Summary: report.Summary{DeadDetections: 1},
@@ -76,10 +153,15 @@ func TestGateFailureLeadsTheTerminalReport(t *testing.T) {
 			var output bytes.Buffer
 			render(&output)
 			text := output.String()
-			gate := strings.Index(text, "GATE FAILED")
-			finding := strings.Index(text, "DEAD")
-			if gate < 0 || finding < 0 || gate > finding {
-				t.Fatalf("%s output does not lead with the failed gate:\n%s", name, text)
+			headline := strings.Index(text, "1 detection can't fire")
+			finding := strings.Index(text, "Dormant sign-in rule")
+			details := strings.Index(text, "Scanned ")
+			gate := strings.Index(text, "Policy: findings matched the gate · exit 1")
+			if headline < 0 || finding <= headline || details <= finding || gate <= details {
+				t.Fatalf("%s output should show the result, evidence, scope, then policy:\n%s", name, text)
+			}
+			if strings.Count(text, "can't fire") != 1 || strings.Contains(text, "DEAD") || strings.Contains(text, "GATE FAILED") {
+				t.Fatalf("%s output repeats its headline or promotes machine labels:\n%s", name, text)
 			}
 		})
 	}
@@ -101,7 +183,7 @@ func TestUnsafeCandidateAssessmentIsNotCalledAGateFailure(t *testing.T) {
 			var output bytes.Buffer
 			render(&output)
 			text := output.String()
-			if !strings.Contains(text, "SCAN INCOMPLETE") || strings.Contains(text, "GATE FAILED") {
+			if !strings.Contains(text, "Scan incomplete") || !strings.Contains(text, "Exit 2") || strings.Contains(text, "Policy: findings matched") {
 				t.Fatalf("%s output misstates an unsafe candidate assessment:\n%s", name, text)
 			}
 		})
@@ -186,7 +268,8 @@ func TestPrintSummaryUsesPlainLanguageReasons(t *testing.T) {
 	printSummary(&output, r)
 	for _, want := range []string{
 		"Legacy netflow rule — no matching source",
-		"Winlog suspicious logon — all matching sources stale or empty (winlogbeat-2026.07)",
+		"Winlog suspicious logon — all matching sources stale or empty",
+		"winlogbeat-2026.07",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("human report missing %q:\n%s", want, output.String())
@@ -313,7 +396,7 @@ func TestTerminalNamesEverySourceOnlyGateCause(t *testing.T) {
 			render(&output)
 			text := output.String()
 			for _, want := range []string{
-				"GATE FAILED", "SOURCE FINDINGS", "auth-stale", "no recent events",
+				"Policy: findings matched the gate · exit 1", "Sources to investigate", "auth-stale", "no recent events",
 				"dns-low", "volume below baseline", "endpoint-schema", "field schema changed",
 			} {
 				if !strings.Contains(text, want) {
@@ -432,13 +515,13 @@ func TestVisualSummaryUsesHierarchyAndHumanLabels(t *testing.T) {
 	printVisualSummary(&output, r)
 	for _, want := range []string{
 		"deadair",
-		"ELASTIC",
-		"1 source  ·  1 detection",
-		"1 healthy",
-		"1 missing input",
-		"DEAD  1",
+		"elastic",
+		"Scanned 1 enabled detection · 1 source",
+		"Sources: 1 ok",
+		"Inputs: 1 missing",
+		"1 detection can't fire",
 		"Candidate NetFlow rule",
-		"HIGH  ·  no matching source  ·  netflow-*",
+		"[high] no matching source · netflow-*",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("visual report missing %q:\n%s", want, output.String())
@@ -467,7 +550,7 @@ func TestSummariesRenderIncompatibleInputsAndSources(t *testing.T) {
 	var plain bytes.Buffer
 	printPlainSummary(&plain, r)
 	for _, want := range []string{
-		"1 resolved, 0 empty, 1 incompatible",
+		"1 resolved, 1 incompatible",
 		"source not usable by this rule: BasicTable",
 	} {
 		if !strings.Contains(plain.String(), want) {
@@ -478,7 +561,7 @@ func TestSummariesRenderIncompatibleInputsAndSources(t *testing.T) {
 	var visual bytes.Buffer
 	printVisualSummary(&visual, r)
 	for _, want := range []string{
-		"1 resolved input", "1 incompatible input", "source not usable by this rule: BasicTable",
+		"1 resolved, 1 incompatible", "source not usable by this rule: BasicTable",
 	} {
 		if !strings.Contains(visual.String(), want) {
 			t.Errorf("visual summary missing %q:\n%s", want, visual.String())

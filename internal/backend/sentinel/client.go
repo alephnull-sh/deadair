@@ -1338,11 +1338,26 @@ func (c *Client) FreshnessEvidenceFor(ctx context.Context, requests []backend.Fr
 		}
 		seen[source.Name] = true
 		if request.Basis == backend.FreshnessMixed {
-			out[source.Name] = backend.FreshnessEvidence{
-				Status: backend.EvidenceIncomplete, Method: "mixed-rule-timing",
-				ObservedAt: time.Now().UTC(), Window: freshnessWindow,
-				Detail: "source is shared by Scheduled and NRT rules; source-level freshness cannot represent both clocks",
+			combined := backend.FreshnessEvidence{Status: backend.EvidenceAssessed,
+				Method: "separate-rule-clocks", ObservedAt: time.Now().UTC(),
+				Clocks: make(map[backend.FreshnessBasis]backend.FreshnessEvidence)}
+			for _, basis := range []backend.FreshnessBasis{backend.FreshnessEventTime, backend.FreshnessIngestionTime} {
+				part := request
+				part.Basis = basis
+				result, err := c.FreshnessEvidenceFor(ctx, []backend.FreshnessRequest{part})
+				if err != nil {
+					return nil, err
+				}
+				item, ok := result[source.Name]
+				if !ok {
+					item = backend.FreshnessEvidence{Status: backend.EvidenceIncomplete, Detail: "clock observation was not returned"}
+				}
+				combined.Clocks[basis] = item
+				if item.Status != backend.EvidenceAssessed {
+					combined.Status = backend.EvidenceIncomplete
+				}
 			}
+			out[source.Name] = combined
 			continue
 		}
 		if !c.claimEvidenceSource(source.Name) {
@@ -1392,9 +1407,9 @@ func (c *Client) FreshnessEvidenceFor(ctx context.Context, requests []backend.Fr
 				if target.queryReference == "" {
 					evidence.Detail = "table name cannot be represented safely in KQL"
 				} else {
-					query := fmt.Sprintf("%s | where TimeGenerated >= ago(%dh) | summarize LastEvent=max(TimeGenerated)", target.queryReference, int(freshnessWindow/time.Hour))
+					query := fmt.Sprintf("%s | where TimeGenerated >= ago(%dh) and TimeGenerated <= now() + %ds | summarize LastEvent=max(TimeGenerated)", target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessClockSkew/time.Second))
 					if request.Basis == backend.FreshnessIngestionTime {
-						query = fmt.Sprintf("%s | extend IngestionTime=ingestion_time() | where IngestionTime >= ago(%dh) | summarize LastEvent=max(IngestionTime)", target.queryReference, int(freshnessWindow/time.Hour))
+						query = fmt.Sprintf("%s | extend IngestionTime=ingestion_time() | where IngestionTime >= ago(%dh) and IngestionTime <= now() + %ds | summarize LastEvent=max(IngestionTime)", target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessClockSkew/time.Second))
 					}
 					result, queryErr := c.queryLogsForSource(ctx, query, target)
 					if queryErr == nil {
@@ -1444,6 +1459,11 @@ func freshnessFromTable(table logsTable, evidence backend.FreshnessEvidence) bac
 	if !ok {
 		evidence.Status = backend.EvidenceIncomplete
 		evidence.Detail = "bounded freshness result contained an invalid LastEvent"
+		return evidence
+	}
+	if !evidence.ObservedAt.IsZero() && lastEvent.After(evidence.ObservedAt.Add(backend.FreshnessClockSkew)) {
+		evidence.Status = backend.EvidenceIncomplete
+		evidence.Detail = "bounded freshness result exceeded the clock-skew limit"
 		return evidence
 	}
 	evidence.LastEvent = lastEvent

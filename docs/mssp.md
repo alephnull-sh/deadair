@@ -65,6 +65,15 @@ Recommended permissions:
 
 ## Fleet config
 
+Instance names must be unique without regard to case. Use 1–64 ASCII letters, digits, dots,
+underscores or hyphens, starting with a letter or digit. Trailing dots and reserved device names
+such as `CON` are rejected. Names become state-file suffixes, so paths and Unicode names are not
+accepted. Fleet files reject unknown fields and extra JSON documents.
+
+Choose one credential source for each secret: an environment variable or a file. Explicit secret
+references must resolve to a nonempty value. OpenSearch accepts either an API key or a complete
+username/password pair; omit both to connect without authentication.
+
 ```json
 {"instances": [
   {
@@ -165,6 +174,15 @@ For each actionable finding, keep enough context for the receiving team to start
 
 The terminal fleet view is a summary. Keep the internal JSON report for exact patterns and sources;
 use the redacted report for authorized cross-team or client trend reporting.
+
+Open one customer's source evidence without rescanning the fleet:
+
+```sh
+deadair inspect --instance acme-prod --source logs-system.auth-default latest-internal.json
+```
+
+Use the pseudonym shown in the report when inspecting a redacted instance. A failed instance has no
+saved source assessment; fix its scan error before drawing conclusions about its telemetry.
 
 ## Continuous monitoring
 
