@@ -20,18 +20,23 @@ func TestInvestigationGuidePoliciesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocks := regexp.MustCompile("(?s)```json\\n(.*?)\\n```").FindAllSubmatch(data, -1)
-	count := 0
-	for _, block := range blocks {
-		body := string(block[1])
-		if !strings.Contains(body, `"version"`) {
-			continue // Downtime files have a separate format.
-		}
-		writePolicy(t, body, time.Now().UTC())
-		count++
-	}
-	if count != 2 {
-		t.Fatalf("checked %d policies, want 2", count)
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	for _, ending := range []string{"\n", "\r\n"} {
+		t.Run(fmt.Sprintf("line ending %q", ending), func(t *testing.T) {
+			blocks := regexp.MustCompile("(?s)```json\\r?\\n(.*?)\\r?\\n```").FindAllStringSubmatch(strings.ReplaceAll(text, "\n", ending), -1)
+			count := 0
+			for _, block := range blocks {
+				body := block[1]
+				if !strings.Contains(body, `"version"`) {
+					continue // Downtime files have a separate format.
+				}
+				writePolicy(t, body, time.Now().UTC())
+				count++
+			}
+			if count != 2 {
+				t.Fatalf("checked %d policies, want 2", count)
+			}
+		})
 	}
 }
 

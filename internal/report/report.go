@@ -1917,6 +1917,8 @@ func redactFindings(redactor *redactpkg.Redactor, findings []Finding) {
 				namespace = "field"
 			} else if finding.Class == FindingPartialInput {
 				namespace = "pat"
+			} else if finding.Class == FindingSummaryPipeline {
+				namespace = "summary-run"
 			}
 			finding.Dependency = redactor.Value(namespace, finding.Dependency)
 		}

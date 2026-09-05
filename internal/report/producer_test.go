@@ -95,3 +95,26 @@ func TestUnavailableSummaryCannotBecomeOverdueFromAFlagAlone(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactedSummaryRecoveryKeepsEvidenceIdentity(t *testing.T) {
+	now := time.Now().UTC()
+	newReport := func() *Report {
+		return &Report{SchemaVersion: ReportSchemaVersion, Backend: "sentinel", Instance: "workspace", TargetID: "target",
+			Scope: ScanScope{Mode: "installed", ConfigurationID: "config"}}
+	}
+	older := newReport()
+	older.Findings = []Finding{{ID: "finding", Class: FindingSummaryPipeline, Source: "NetworkSummary_CL", Dependency: "network-summary#latest-run", LastSeen: now}}
+	newer := newReport()
+	runAt := now.Add(time.Minute)
+	newer.SummaryRuleRuns = []SummaryRuleRun{{ID: "network-summary#latest-run", Output: backend.DependencyRef{Name: "NetworkSummary_CL", Monitorable: true},
+		Status: backend.EvidenceAssessed, HealthStatus: "ok", RunStatus: "Succeeded", RunAt: &runAt, ObservedAt: runAt.Add(time.Minute)}}
+	older.Redact()
+	newer.Redact()
+	if older.Findings[0].Dependency != newer.SummaryRuleRuns[0].ID {
+		t.Fatal("redaction broke the finding-to-execution identity")
+	}
+	diff, err := Diff(older, newer)
+	if err != nil || len(diff.RecoveredFindings) != 1 || diff.RecoveredFindings[0].ID != older.Findings[0].ID {
+		t.Fatalf("redacted summary recovery: %+v, %v", diff, err)
+	}
+}
