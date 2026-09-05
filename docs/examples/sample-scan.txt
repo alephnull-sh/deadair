@@ -1,4 +1,4 @@
-deadair scan — elastic — 2026-09-05T13:35:49Z
+deadair scan — elastic — 2026-09-05T14:17:06Z
 2 detections can't fire
 GATE FAILED · exit 1 — findings matched the gate; the scan completed
 sources:    5 (4 ok, 1 stale, 0 empty, 0 unknown, 0 maintenance)
