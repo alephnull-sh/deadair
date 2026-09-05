@@ -1,6 +1,57 @@
 package report
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/alephnull-sh/deadair/internal/backend"
+)
+
+func TestDiffRejectsUnsafeCandidateEvidence(t *testing.T) {
+	for _, side := range []string{"older", "newer"} {
+		for _, failure := range []string{"resolution", "freshness", "unmapped", "remote"} {
+			t.Run(side+"/"+failure, func(t *testing.T) {
+				older, newer := comparableReport(), comparableReport()
+				older.Scope.Mode, newer.Scope.Mode = "candidate", "candidate"
+				bad := newer
+				if side == "older" {
+					bad = older
+				}
+				switch failure {
+				case "resolution":
+					bad.Assessments = []RuntimeAssessment{{Name: AssessmentSourceResolution, Status: backend.EvidenceIncomplete}}
+				case "freshness":
+					bad.InputResolutions = []backend.InputResolution{{Status: backend.ResolutionResolved, ResolvedSources: []string{"logs-*"}}}
+					bad.Assessments = []RuntimeAssessment{{Name: AssessmentSourceFreshness, Status: backend.EvidenceUnavailable}}
+				case "unmapped":
+					bad.Summary.UnmappedRules = 1
+				case "remote":
+					bad.Summary.RemoteRules = 1
+				}
+				if _, err := Diff(older, newer); err == nil || !strings.Contains(err.Error(), side+" candidate") {
+					t.Fatalf("unsafe %s candidate accepted: %v", side, err)
+				}
+			})
+		}
+	}
+}
+
+func TestDiffPreservesCandidateBacklogAndInstalledGate(t *testing.T) {
+	for _, mode := range []string{"candidate", "installed"} {
+		older, newer := comparableReport(), comparableReport()
+		older.Scope.Mode, newer.Scope.Mode = mode, mode
+		for _, r := range []*Report{older, newer} {
+			r.Summary.DeadDetections = 1
+			r.Findings = []Finding{{ID: "existing", Class: FindingDead, Gates: true}}
+			if mode == "installed" {
+				r.Summary.UnmappedRules = 1
+			}
+		}
+		if d, err := Diff(older, newer); err != nil || d.Regressions() != 0 {
+			t.Fatalf("unchanged %s backlog: diff=%+v error=%v", mode, d, err)
+		}
+	}
+}
 
 func comparableReport() *Report {
 	return &Report{

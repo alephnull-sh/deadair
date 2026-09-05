@@ -123,6 +123,7 @@ func diffUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage: deadair diff [--json] OLD_REPORT NEW_REPORT
 
 Compare two JSON reports. Exit 1 means the newer report contains regressions.
+Exit 2 means the reports cannot be compared, including incomplete candidate scans.
 
   --json  print the diff as JSON
 

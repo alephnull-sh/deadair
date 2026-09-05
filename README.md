@@ -242,8 +242,8 @@ and unused collection.
 
 ## Contributing
 
-Bug reports, sanitized fixtures, correctness cases, docs, and backend proposals are welcome. Start
-with [CONTRIBUTING.md](CONTRIBUTING.md) and use the backend RFC template for adapter work.
+Open an issue for bugs, suggestions, or sanitized reproductions. Maintainers handle code changes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 

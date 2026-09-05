@@ -1521,9 +1521,40 @@ func TestFreshnessEvidenceQueriesOnlyRequestedSources(t *testing.T) {
 	for _, query := range queries {
 		if strings.Contains(query, "UntargetedTable") ||
 			strings.Contains(query, "AuxiliaryTable") || strings.Contains(query, "BasicTable_CL") || strings.Contains(query, "UpdatingTable") ||
-			!strings.Contains(query, "ago(24h)") || !strings.Contains(query, "max(IngestionTime)") {
+			!strings.Contains(query, "ago(24h)") || !strings.Contains(query, "max(IngestionTime)") || !strings.Contains(query, "IngestionTime <= now() + 300s") {
 			t.Errorf("unexpected or unbounded freshness query %q", query)
 		}
+	}
+}
+
+func TestFreshnessRejectsFutureOutliers(t *testing.T) {
+	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		offset time.Duration
+		valid  bool
+	}{
+		{"recent", -time.Minute, true},
+		{"small clock skew", time.Minute, true},
+		{"clock skew boundary", backend.FreshnessClockSkew, true},
+		{"future outlier", 24 * time.Hour, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lastEvent := now.Add(tc.offset)
+			var table logsTable
+			data := fmt.Sprintf(`{"columns":[{"name":"LastEvent","type":"datetime"}],"rows":[[%q]]}`, lastEvent.Format(time.RFC3339))
+			if err := json.Unmarshal([]byte(data), &table); err != nil {
+				t.Fatal(err)
+			}
+			got := freshnessFromTable(table, backend.FreshnessEvidence{ObservedAt: now, Status: backend.EvidenceIncomplete})
+			if tc.valid {
+				if got.Status != backend.EvidenceAssessed || !got.LastEvent.Equal(lastEvent) {
+					t.Fatalf("valid timestamp rejected: %+v", got)
+				}
+			} else if got.Status != backend.EvidenceIncomplete || !got.LastEvent.IsZero() {
+				t.Fatalf("future outlier accepted: %+v", got)
+			}
+		})
 	}
 }
 
@@ -1594,7 +1625,7 @@ func TestRuleAwareFreshnessUsesTheRuleClockAndLeavesSharedSourcesIncomplete(t *t
 		}
 	}
 	if len(queries) != 2 || !strings.Contains(scheduledQuery, "max(TimeGenerated)") || strings.Contains(scheduledQuery, "max(IngestionTime)") ||
-		!strings.Contains(nrtQuery, "max(IngestionTime)") {
+		!strings.Contains(nrtQuery, "max(IngestionTime)") || !strings.Contains(scheduledQuery, "TimeGenerated <= now() + 300s") || !strings.Contains(nrtQuery, "IngestionTime <= now() + 300s") {
 		t.Fatalf("rule-aware freshness queries = %v", queries)
 	}
 }

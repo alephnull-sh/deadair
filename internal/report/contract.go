@@ -158,7 +158,7 @@ func backendMetadata(name, observedVersion string) BackendMetadata {
 			statuses[capability] = CapabilitySupported
 		}
 		statuses[CapabilitySourceResolution] = CapabilityPartial
-		details[CapabilitySourceResolution] = "index selectors, aliases, data streams, data views, and direct ES|QL FROM; dynamic ES|QL and ML inputs are reported unsupported"
+		details[CapabilitySourceResolution] = "index selectors, aliases, data streams, data views, and direct ES|QL FROM pipelines; indicator-match, lookup, enrichment, dynamic ES|QL and ML inputs are reported unsupported"
 		statuses[CapabilityRemote] = CapabilityListedOnly
 		details[CapabilityRemote] = "remote inputs are listed but not evaluated"
 		for _, capability := range []string{CapabilityDependencyResolution, CapabilityCrossWorkspace, CapabilitySourceLineage, CapabilityRuleProvenance} {

@@ -38,6 +38,16 @@ func TestESQLSourcePatterns(t *testing.T) {
 			query: "FROM archive:logs-* | LIMIT 10",
 			want:  []string{"archive:logs-*"},
 		},
+		{
+			name:  "comments and quoted command text",
+			query: "FROM logs-* /* | LOOKUP JOIN hidden ON x */ | EVAL note = \"| ENRICH policy\", `LOOKUP` = 1 | WHERE note != \"\" // | FORK\n| LIMIT 10",
+			want:  []string{"logs-*"},
+		},
+		{
+			name:  "multiline string",
+			query: "FROM logs-* | EVAL note = \"\"\"text | LOOKUP JOIN hidden ON x\nmore text\"\"\" | KEEP note",
+			want:  []string{"logs-*"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -65,6 +75,15 @@ func TestESQLSourcePatternsRejectsUnsafeQueries(t *testing.T) {
 		"FROM logs-*, | LIMIT 10",
 		"FROM `unterminated | LIMIT 10",
 		"// comment only",
+		"FROM logs-* | LOOKUP JOIN indicators ON source.ip",
+		"FROM logs-* | /* comment */ LOOKUP /* comment */ JOIN indicators ON source.ip",
+		"FROM logs-* | ENRICH geoip ON source.ip",
+		"FROM logs-* | FORK (WHERE true) (LOOKUP JOIN indicators ON source.ip)",
+		"FROM logs-* | FUTURE_COMMAND other_source",
+		"FROM logs-* | WHERE user IN ( /* input */ FROM users | KEEP user)",
+		"FROM logs-* | EVAL note = \"unterminated",
+		"FROM logs-* | WHERE true /* unterminated",
+		"FROM logs-* |",
 	}
 	for i, query := range tests {
 		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {

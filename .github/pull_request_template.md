@@ -1,3 +1,6 @@
+<!-- Please open an issue for bug reports or suggestions. Maintainers handle
+implementation PRs; see CONTRIBUTING.md. -->
+
 ## What changed
 
 Describe the operator problem and what this pull request changes.
