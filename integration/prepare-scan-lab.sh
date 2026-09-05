@@ -108,7 +108,7 @@ DEADAIR_API_KEY=$(cat "$out_dir/api-key")
 
 status=0
 (
-	cd "$examples_dir"
+	cd "$examples_dir" || exit 2
 	"$binary" scan \
 		--schema \
 		--state-file "$out_dir/examples-state.json" \
