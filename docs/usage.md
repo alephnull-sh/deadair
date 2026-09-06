@@ -132,7 +132,9 @@ the advisory check only when a
 query starts at one direct local table and immediately applies a closed,
 parser-supported literal filter. Remote, joined, unioned, dynamic, escaped-literal, and
 function-backed sources do not qualify. The result appears in `rule_source_freshness`; it does not
-replace table health or create findings. One scan runs at most 20 of these queries.
+replace table health or create findings. Each rule-filter collection runs at most 20 distinct
+queries. Rules with the same table, filter and freshness clock share one observation in that
+collection; their evidence and policy thresholds remain separate. Later collections query again.
 
 For alerting on a feed, define an explicit producer expectation. A rule's filter may select a rare
 security event, so deadair doesn't assume it should produce regular traffic. The
@@ -452,7 +454,7 @@ steps:
     with:
       persist-credentials: false
   - name: Check candidate coverage
-    uses: alephnull-sh/deadair@v0.7.0
+    uses: alephnull-sh/deadair@v0.8.0
     with:
       backend: elastic
       elasticsearch-url: ${{ secrets.DEADAIR_ES_URL }}
@@ -489,7 +491,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Check Sentinel candidate coverage
-        uses: alephnull-sh/deadair@v0.7.0
+        uses: alephnull-sh/deadair@v0.8.0
         env:
           AZURE_TOKEN_CREDENTIALS: AzureCLICredential
         with:
@@ -506,9 +508,10 @@ Entra federated credential's subject match that environment. `id-token: write` l
 GitHub for an OIDC token; Azure RBAC still decides what the identity can read or write. Give it the
 read-only workspace roles from the [Sentinel credential guide](credentials/sentinel.md), leave
 Azure Login's cleanup enabled, and run only trusted, pinned actions after the login step. An Azure
-CLI login is shared by later steps in the same job. The disposable lab used a certificate-backed
-`EnvironmentCredential`; the hosted OIDC path is covered by Action wrapper tests, not a live Azure
-run.
+CLI login is shared by later steps in the same job. The hosted OIDC path passed a live test against
+two disposable UK South workspaces using branch-scoped trust. That test covered candidate gates,
+read-only access, redacted artifacts and session cleanup; it did not test GitHub Environment
+approval rules. See the [validation record](validation.md#sentinel-live-conformance).
 
 `sentinel-workspace-id` can supply the optional Log Analytics customer-ID override, and
 `sentinel-remotes-file` can point to the explicit JSON mapping used by cross-workspace rules. The

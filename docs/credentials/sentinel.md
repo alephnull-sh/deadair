@@ -131,6 +131,15 @@ does not define Azure credential inputs or choose a credential type. See the
 [Sentinel gate example](../usage.md#gate-detection-changes) and Microsoft's
 [OIDC setup guide](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect).
 
+Match the federated credential to the repository's actual OIDC subject. New GitHub.com repositories
+created after July 15, 2026 include immutable owner and repository IDs, for example
+`repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:refs/heads/main`. Older repositories may still use the name-only
+form. An environment-bound job uses an environment subject instead of a branch subject. Check
+[GitHub's subject formats](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims)
+when setting up the trust. If Azure reports `AADSTS700213`, compare the subject, issuer and audience
+shown by Azure Login with the Entra federated credential; don't broaden workspace permissions to fix
+a trust mismatch.
+
 `DEADAIR_SENTINEL_WORKSPACE` is the ARM resource name. deadair reads its Log Analytics customer ID
 through ARM. `DEADAIR_SENTINEL_WORKSPACE_ID` is an optional override; when present, it still has to
 match the customer ID returned by ARM.

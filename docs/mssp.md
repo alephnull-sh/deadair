@@ -110,6 +110,33 @@ format and the cross-tenant execution boundary.
 Keep `name` stable. It keys metrics, per-instance state files, redacted pseudonyms, and historical
 baselines. Renaming a tenant starts a new baseline unless you deliberately migrate the state file.
 
+## Check a candidate across workspaces
+
+Keep the target workspaces in a Sentinel-only fleet file, then check the same candidate against
+each one before deployment:
+
+```sh
+deadair scan \
+  --fleet /etc/deadair/sentinel-fleet.json \
+  --rule detections/new-rule.yaml \
+  --redact \
+  --json-out candidate-report.json
+```
+
+Each workspace gets its own dependency evidence. Exit `1` means at least one candidate has gated
+findings; exit `2` means a target failed or a candidate could not be safely assessed. Nothing is
+installed. The Azure identity needs read access to every target; use separate processes when
+customers require different identities.
+
+This checks inputs, not complete KQL compatibility. A fresh `WebAccess_CL` table can satisfy the
+dependency check even if a query names `ClientIP` and that workspace only has `ClientIP_s`. Run
+query and parser tests alongside this gate. Schema snapshots and drift do not infer the columns a
+candidate requires.
+
+The [GitHub Action example](usage.md#gate-detection-changes) checks one workspace per invocation.
+Use a job matrix for separate workspace results, with a unique artifact name for each job. Keep
+the target list and gate policy under the same review controls as the deployment workflow.
+
 ## Preflight
 
 Run preflight after onboarding a tenant, rotating a credential, changing network paths, or
