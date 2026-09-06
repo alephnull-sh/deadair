@@ -18,7 +18,7 @@ conformance test is opt-in and does not run on a schedule.
 | OpenSearch backend | live integration tests using the documented read-only role |
 | Sentinel backend | local parser, API-contract, permission-evidence, report, and CLI tests |
 | Sentinel live path | opt-in read-only conformance test against a pre-seeded disposable workspace |
-| Sentinel GitHub Action | local wrapper tests cover input mapping, argument ownership, environment isolation, report production, job-summary content, and gate behavior; the GitHub-hosted OIDC path has not yet had a live conformance run |
+| Sentinel GitHub Action | GitHub-hosted OIDC run against two disposable UK South workspaces: ARM and Logs reads, candidate gates, redacted artifacts, job summaries, read-only boundaries and session cleanup; local wrapper tests cover input mapping and environment isolation |
 | native input resolution | index/alias/data-stream cases plus Sentinel KQL table, closed scalar function, literal watchlist, ASIM, remote workspace, plan, and permission outcomes |
 | Sentinel enrichment | the live lab covers narrow filtered source activity, structural summary lineage, a bounded successful `LASummaryLogs` run, and its matching Basic-to-Analytics output bin; native-template and Content Hub associations also have fixture coverage |
 | Expected producers | live shared-table failure, recovery, maintenance, and exporter checks; local tests cover selector bounds, unavailable evidence, stable findings, and diffs |
@@ -50,6 +50,21 @@ reader also passed all three write-denial checks. A separate live exporter run o
 and cleared both stale gauges after resumed traffic became queryable.
 The full read-only conformance run passed again, including separate Scheduled and NRT clocks and
 a successful summary run whose output matched the exact Basic-table input bin.
+
+On 2026-09-06, a GitHub-hosted OIDC run tested
+[revision `6a2e74a`](https://github.com/alephnull-sh/deadair/commit/6a2e74afa325f3114f6332b577602a4a320b32dd)
+against two disposable UK South workspaces. The identity trusted one repository branch and had a
+custom read-only role scoped to those workspaces. Available, missing and denied table inputs
+returned exits `0`, `1` and `2` respectively. Denied access failed the Action even with
+`fail-on-findings: false`. The run checked redacted artifacts, the rendered job summaries, all three
+write-denial probes, a two-workspace fleet candidate scan, and Azure CLI session cleanup.
+
+The same table names had different schemas in each workspace. A missing `ClientIP` column and a
+text-valued `DestinationPort` both passed deadair's dependency gate but failed native zero-row query
+checks. Fallback columns and a workspace parser compiled successfully in both workspaces. These
+cases confirm the boundary: Sentinel candidate checks assess dependencies, not full query
+compatibility. The run used synthetic data in one subscription; it did not test Azure Lighthouse
+or GitHub Environment approval rules.
 
 The 2026-08-22 live workspace covered:
 
@@ -115,8 +130,8 @@ credential is embedded in the test.
 - Sentinel live conformance is manual. A successful run proves the tested workspace and identity,
   not every Sentinel cloud, region, RBAC layout, or KQL construct.
 - The Sentinel GitHub Action reuses a caller-established Azure CLI login through
-  `DefaultAzureCredential`. Its wrapper and failure paths are locally tested, but a GitHub-hosted
-  OIDC job has not yet proved the complete login, ARM, Logs query, artifact, and cleanup path.
+  `DefaultAzureCredential`. The GitHub-hosted OIDC path was tested with branch-scoped trust in
+  Azure public cloud. Other trust policies, clouds and cross-tenant layouts need their own checks.
 - The Sentinel CLI currently targets Azure public cloud endpoints.
 - Sentinel assesses direct local Analytics tables, saved workspace functions with closed scalar
   arguments, literal watchlists, metadata-backed ASIM functions with complete evidence, native ASIM
@@ -128,8 +143,10 @@ credential is embedded in the test.
   other vendors kept the shared table fresh. It requires one direct local Analytics table
   followed by a closed, parser-supported literal filter. Escaped and verbatim literals fail closed
   because their exact KQL value cannot be reconstructed safely. The bounded result is
-  informational and does not replace table-wide health or create a finding. The per-scan query cap
-  is 20.
+  informational and does not replace table-wide health or create a finding. Each rule-filter
+  collection is capped at 20 distinct queries. Tests verify that identical filters share an
+  observation without merging rule identities, clocks or policy thresholds, and that later
+  collections query again. Producer expectations use a separate collection.
 - Summary-rule lineage remains structural ARM metadata. A separate path reads the
   latest completed `LASummaryLogs` run in a bounded seven-day window for relevant active summary
   rules, capped at 50 rules per scan. Fixtures reject missing or malformed ARM modification times,

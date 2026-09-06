@@ -53,8 +53,8 @@ London edge firewall at least once every 15 minutes:
 
 Use the values recorded in your table, and choose a threshold that matches normal delivery.
 `match` accepts exact, case-sensitive `DeviceVendor`, `DeviceProduct`, and `DeviceName` values.
-All configured fields must match. You can define up to 20 feeds; each uses one bounded query over
-a local Analytics table. The maximum threshold is 24 hours.
+All configured fields must match. You can define up to 20 feeds; each distinct table, selector and
+clock uses one bounded query over a local Analytics table. The maximum threshold is 24 hours.
 
 Use a workspace-specific policy for these expectations. A fleet applies its policy to every
 instance, so keep workspaces with different expected feeds in separate scans.

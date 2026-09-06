@@ -255,12 +255,12 @@ func TestRulePredicateFreshnessEvidenceHasDeterministicTwentyQueryCap(t *testing
 	}))
 	defer server.Close()
 	client := fixtureClient(server.URL, &recordingCredential{})
-	selector := mustPredicateSelector(t, `SecurityEvent | where EventID == 4624`)
 	requests := make([]backend.RulePredicateFreshnessRequest, maxPredicateQueries+2)
 	for i := range requests {
 		requests[i] = backend.RulePredicateFreshnessRequest{
 			RuleID: fmt.Sprintf("rule-%02d", len(requests)-1-i),
-			Source: backend.Source{Name: "SecurityEvent"}, Basis: backend.FreshnessEventTime, Selector: selector,
+			Source: backend.Source{Name: "SecurityEvent"}, Basis: backend.FreshnessEventTime,
+			Selector: mustPredicateSelector(t, fmt.Sprintf("SecurityEvent | where EventID == %d", 4624+i)),
 		}
 	}
 	evidence, err := client.RulePredicateFreshnessEvidenceFor(context.Background(), requests)

@@ -290,6 +290,7 @@ func (c *Client) RulePredicateFreshnessEvidenceFor(ctx context.Context, requests
 	})
 	out := make([]backend.RulePredicateFreshnessEvidence, 0, len(requests))
 	seen := make(map[string]bool, len(requests))
+	observations := make(map[string]backend.FreshnessEvidence)
 	queries := 0
 	for _, request := range requests {
 		if err := ctx.Err(); err != nil {
@@ -302,6 +303,13 @@ func (c *Client) RulePredicateFreshnessEvidenceFor(ctx context.Context, requests
 		seen[key] = true
 		item, query, target := c.preparePredicateFreshness(ctx, catalog, request)
 		if query == "" {
+			out = append(out, item)
+			continue
+		}
+		// The closed query includes the local table, filter and clock. Share
+		// only this observation; each rule keeps its own identity and policy.
+		if freshness, ok := observations[query]; ok {
+			item.Freshness = freshness
 			out = append(out, item)
 			continue
 		}
@@ -320,6 +328,7 @@ func (c *Client) RulePredicateFreshnessEvidenceFor(ctx context.Context, requests
 		} else {
 			item.Freshness = freshnessFromTable(result, item.Freshness)
 		}
+		observations[query] = item.Freshness
 		out = append(out, item)
 	}
 	if err := ctx.Err(); err != nil {
