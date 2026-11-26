@@ -363,27 +363,87 @@ func (c *Client) Rules(ctx context.Context) ([]backend.Rule, error) {
 			break
 		}
 	}
-	for dvID, idxs := range dvPending {
-		patterns, err := c.dataViewPatterns(ctx, dvID)
-		if err != nil {
-			for _, i := range idxs {
-				rules[i].InputStatus = backend.ResolutionUnavailable
-				rules[i].InputDetail = fmt.Sprintf("resolving data view %q: %v", dvID, err)
-			}
-			continue
+	if len(dvPending) > 0 {
+		dvIDs := make([]string, 0, len(dvPending))
+		for dvID := range dvPending {
+			dvIDs = append(dvIDs, dvID)
 		}
-		if len(patterns) == 0 {
-			for _, i := range idxs {
-				rules[i].InputStatus = backend.ResolutionUnsupported
-				rules[i].InputDetail = fmt.Sprintf("data view %q has no index selector", dvID)
+		sort.Strings(dvIDs)
+		dvResults := c.resolveDataViews(ctx, dvIDs)
+		for _, dvID := range dvIDs {
+			res := dvResults[dvID]
+			idxs := dvPending[dvID]
+			if res.err != nil {
+				for _, i := range idxs {
+					rules[i].InputStatus = backend.ResolutionUnavailable
+					rules[i].InputDetail = fmt.Sprintf("resolving data view %q: %v", dvID, res.err)
+				}
+				continue
 			}
-			continue
-		}
-		for _, i := range idxs {
-			rules[i].Patterns = patterns
+			if len(res.patterns) == 0 {
+				for _, i := range idxs {
+					rules[i].InputStatus = backend.ResolutionUnsupported
+					rules[i].InputDetail = fmt.Sprintf("data view %q has no index selector", dvID)
+				}
+				continue
+			}
+			for _, i := range idxs {
+				rules[i].Patterns = res.patterns
+			}
 		}
 	}
 	return rules, nil
+}
+
+type dataViewResult struct {
+	patterns []string
+	err      error
+}
+
+// resolveDataViews deduplicates Kibana data view IDs and resolves them
+// concurrently within the client's bounded concurrency limit.
+func (c *Client) resolveDataViews(ctx context.Context, ids []string) map[string]dataViewResult {
+	if len(ids) == 0 {
+		return nil
+	}
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	out := make(map[string]dataViewResult, len(unique))
+	sem := make(chan struct{}, c.concurrency())
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, id := range unique {
+		id := id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				mu.Lock()
+				out[id] = dataViewResult{err: ctx.Err()}
+				mu.Unlock()
+				return
+			}
+			patterns, err := c.dataViewPatterns(ctx, id)
+			mu.Lock()
+			out[id] = dataViewResult{patterns: patterns, err: err}
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // dataViewPatterns resolves a Kibana data view to its index patterns (the
@@ -460,6 +520,22 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 		expressions = append(expressions, expression)
 		expressionObservedAt = append(expressionObservedAt, observedAt)
 	}
+	var pendingDVIDs []string
+	for _, rule := range rules {
+		if rule.InputStatus == "" && len(rule.Patterns) == 0 && rule.DataViewID != "" {
+			pendingDVIDs = append(pendingDVIDs, rule.DataViewID)
+		}
+	}
+	var dvResults map[string]dataViewResult
+	if len(pendingDVIDs) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		dvResults = c.resolveDataViews(ctx, pendingDVIDs)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	for _, rule := range rules {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -476,12 +552,8 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 			resolutionMethod = "data_view+resolve_index"
 		}
 		if rule.InputStatus == "" && len(patterns) == 0 && rule.DataViewID != "" {
-			var err error
-			patterns, err = c.dataViewPatterns(ctx, rule.DataViewID)
-			if err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return nil, ctxErr
-				}
+			res := dvResults[rule.DataViewID]
+			if res.err != nil {
 				plans = append(plans, plannedResolution{resolution: backend.InputResolution{
 					RuleID:           rule.ID,
 					Selector:         rule.DataViewID,
@@ -489,10 +561,11 @@ func (c *Client) ResolveInputs(ctx context.Context, rules []backend.Rule) ([]bac
 					ResolutionMethod: "data_view_lookup",
 					ObservedAt:       observedAt,
 					Status:           backend.ResolutionUnavailable,
-					Detail:           fmt.Sprintf("resolving data view %q: %v", rule.DataViewID, err),
+					Detail:           fmt.Sprintf("resolving data view %q: %v", rule.DataViewID, res.err),
 				}})
 				continue
 			}
+			patterns = res.patterns
 			if len(patterns) == 0 {
 				plans = append(plans, plannedResolution{resolution: backend.InputResolution{
 					RuleID:           rule.ID,
@@ -789,13 +862,28 @@ var backingRe = regexp.MustCompile(`^\.ds-(.+)-\d{4}\.\d{2}\.\d{2}-\d+$`)
 // Data-stream freshness comes free from _data_stream/_stats; plain indices
 // fall back to a bounded-concurrency size-0 max(@timestamp) aggregation.
 func (c *Client) Sources(ctx context.Context) ([]backend.Source, error) {
-	var ds dsStatsResponse
-	if err := c.do(ctx, http.MethodGet, c.ESURL, "/_data_stream/_stats", nil, &ds); err != nil {
-		return nil, fmt.Errorf("data stream stats: %w", err)
+	var (
+		ds     dsStatsResponse
+		cats   []catIndex
+		dsErr  error
+		catErr error
+		wg     sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		dsErr = c.do(ctx, http.MethodGet, c.ESURL, "/_data_stream/_stats", nil, &ds)
+	}()
+	go func() {
+		defer wg.Done()
+		catErr = c.do(ctx, http.MethodGet, c.ESURL, "/_cat/indices?format=json&h=index,docs.count,store.size&bytes=b", nil, &cats)
+	}()
+	wg.Wait()
+	if dsErr != nil {
+		return nil, fmt.Errorf("data stream stats: %w", dsErr)
 	}
-	var cats []catIndex
-	if err := c.do(ctx, http.MethodGet, c.ESURL, "/_cat/indices?format=json&h=index,docs.count,store.size&bytes=b", nil, &cats); err != nil {
-		return nil, fmt.Errorf("listing indices: %w", err)
+	if catErr != nil {
+		return nil, fmt.Errorf("listing indices: %w", catErr)
 	}
 
 	// Doc counts per data stream, summed from backing indices.

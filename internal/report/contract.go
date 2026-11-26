@@ -90,11 +90,11 @@ type backendVersionPolicy struct {
 var backendVersionPolicies = map[string]backendVersionPolicy{
 	"elastic": {
 		recognizedLines: []string{"8.x", "9.x"},
-		testedVersions:  []string{"8.19.19", "9.4.4"},
+		testedVersions:  []string{"8.19.25", "9.5.6"},
 	},
 	"opensearch": {
 		recognizedLines: []string{"2.x", "3.x"},
-		testedVersions:  []string{"2.19.6", "3.7.0"},
+		testedVersions:  []string{"2.19.7", "3.10.0"},
 	},
 }
 

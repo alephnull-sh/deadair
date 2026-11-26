@@ -10,14 +10,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -185,6 +188,7 @@ type connOpts struct {
 	apiKeyFile             string
 	timeout                time.Duration
 	concurrency            int
+	fleetConcurrency       int
 	maxStale               time.Duration
 	include                patternList
 	exclude                patternList
@@ -195,7 +199,8 @@ type connOpts struct {
 	volumeMinSamples       int
 	volumeZThreshold       float64
 	schemaTrack            bool
-	ruleFile               string // scan-only: proposed-change (candidate rule) mode
+	ruleFile               string      // single candidate path (used by internal callers/tests)
+	ruleFiles              patternList // repeatable --rule file or directory paths
 	caCert                 string
 	insecureTLS            bool
 	kibanaSpace            string
@@ -203,6 +208,23 @@ type connOpts struct {
 	instanceName           string
 	policyFile             string
 	policy                 *report.Policy
+}
+
+func (o connOpts) hasCandidateRules() bool {
+	return o.ruleFile != "" || len(o.ruleFiles) > 0
+}
+
+func (o connOpts) effectiveRulePaths() []string {
+	var paths []string
+	if strings.TrimSpace(o.ruleFile) != "" {
+		paths = append(paths, strings.TrimSpace(o.ruleFile))
+	}
+	for _, p := range o.ruleFiles {
+		if p = strings.TrimSpace(p); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths
 }
 
 func addBackendFlags(fs *flag.FlagSet, o *connOpts) {
@@ -219,7 +241,8 @@ func addBackendFlags(fs *flag.FlagSet, o *connOpts) {
 	fs.StringVar(&o.sentinelRemotesFile, "sentinel-remotes", os.Getenv("DEADAIR_SENTINEL_REMOTES"), "JSON file explicitly mapping literal workspace() targets (env DEADAIR_SENTINEL_REMOTES)")
 	fs.StringVar(&o.apiKeyFile, "api-key-file", "", "file containing the API key (default: env DEADAIR_API_KEY)")
 	fs.DurationVar(&o.timeout, "timeout", 60*time.Second, "overall timeout per scan")
-	fs.IntVar(&o.concurrency, "concurrency", 4, "max parallel source-health and input-resolution queries")
+	fs.IntVar(&o.concurrency, "concurrency", 4, "max parallel source-health and input-resolution queries (Sentinel caps at 2)")
+	fs.IntVar(&o.fleetConcurrency, "fleet-concurrency", 1, "max fleet instances scanned in parallel")
 	fs.StringVar(&o.caCert, "ca-cert", "", "PEM file with the CA that signed the SIEM's TLS certificate")
 	fs.BoolVar(&o.insecureTLS, "insecure-skip-verify", false, "skip TLS certificate verification (testing only)")
 	fs.StringVar(&o.kibanaSpace, "kibana-space", "", "Kibana space holding the detection rules (default: default space)")
@@ -459,7 +482,6 @@ func (o *connOpts) healthCheck() (health.Check, error) {
 type stateAssessments struct {
 	volume map[string]state.VolumeAssessment
 	schema map[string]state.SchemaAssessment
-	fields map[string]map[string]bool // source -> field set, when schemas fetched
 }
 
 func collectRequiredFieldEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source) (map[string]backendpkg.FieldEvidence, report.RuntimeAssessment, error) {
@@ -858,7 +880,7 @@ func runtimeAssessments(o connOpts, g *graph.Graph, scoped []backendpkg.Source, 
 	}
 
 	schema := report.RuntimeAssessment{Name: report.AssessmentSchemaDrift, Status: backendpkg.EvidenceDisabled, Detail: "enable with --schema and --state-file"}
-	if o.ruleFile != "" && o.schemaTrack {
+	if o.hasCandidateRules() && o.schemaTrack {
 		schema.Detail = "candidate scans do not update installed source schema history"
 	} else if o.schemaTrack {
 		if len(scoped) == 0 {
@@ -877,7 +899,7 @@ func runtimeAssessments(o connOpts, g *graph.Graph, scoped []backendpkg.Source, 
 		}
 	}
 	candidate := report.RuntimeAssessment{Name: report.AssessmentCandidateParsing, Status: backendpkg.EvidenceDisabled, Detail: "no candidate rule file was supplied"}
-	if o.ruleFile != "" {
+	if o.hasCandidateRules() {
 		candidate.Status = backendpkg.EvidenceAssessed
 		candidate.Detail = "candidate rule file parsed without installation"
 	}
@@ -908,7 +930,7 @@ func (o *connOpts) stateAssessments(ctx context.Context, c backendpkg.Backend, s
 	// source history belongs to the installed assessment. Updating volume or
 	// schema state here could consume a drift or alter the next installed
 	// baseline even though candidate exit status ignores source findings.
-	if o.ruleFile != "" {
+	if o.hasCandidateRules() {
 		return stateAssessments{}, store, nil
 	}
 	now := time.Now().UTC()
@@ -921,23 +943,14 @@ func (o *connOpts) stateAssessments(ctx context.Context, c backendpkg.Backend, s
 		InDowntime: func(name string) bool { return check.InDowntime(name, now) },
 	})
 	var schema map[string]state.SchemaAssessment
-	var fields map[string]map[string]bool
 	if o.schemaTrack {
 		current, err := c.Schemas(ctx, sources)
 		if err != nil {
 			return stateAssessments{}, nil, err
 		}
 		schema = store.AssessSchemas(sources, current, now)
-		fields = make(map[string]map[string]bool, len(current))
-		for name, sc := range current {
-			set := make(map[string]bool, len(sc.Fields))
-			for _, f := range sc.Fields {
-				set[f.Name] = true
-			}
-			fields[name] = set
-		}
 	}
-	return stateAssessments{volume: volume, schema: schema, fields: fields}, store, nil
+	return stateAssessments{volume: volume, schema: schema}, store, nil
 }
 
 // scanResult carries the report plus the deferred state commit: the state
@@ -949,71 +962,176 @@ type scanResult struct {
 	store             *state.Store
 	path              string
 	findingsOnlyState bool
+	ruleLocations     map[string]string
+}
+
+func loadCandidateRules(ctx context.Context, parser backendpkg.CandidateParser, rawPaths []string) ([]backendpkg.Rule, map[string]string, error) {
+	var files []string
+	seenFiles := make(map[string]struct{})
+	addFile := func(p string) {
+		cleaned := filepath.Clean(p)
+		if _, exists := seenFiles[cleaned]; exists {
+			return
+		}
+		seenFiles[cleaned] = struct{}{}
+		files = append(files, p)
+	}
+	for _, raw := range rawPaths {
+		info, err := os.Stat(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading rule file: %w", err)
+		}
+		if !info.IsDir() {
+			addFile(raw)
+			continue
+		}
+		var dirFiles []string
+		walkErr := filepath.WalkDir(raw, func(p string, d iofs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if p != raw && strings.HasPrefix(d.Name(), ".") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !d.Type().IsRegular() || strings.HasPrefix(d.Name(), ".") {
+				return nil
+			}
+			switch strings.ToLower(filepath.Ext(d.Name())) {
+			case ".json", ".ndjson", ".yaml", ".yml":
+				dirFiles = append(dirFiles, p)
+			}
+			return nil
+		})
+		if walkErr != nil {
+			return nil, nil, fmt.Errorf("reading rule directory %q: %w", raw, walkErr)
+		}
+		sort.Strings(dirFiles)
+		if len(dirFiles) == 0 {
+			return nil, nil, fmt.Errorf("reading rule directory %q: no .json, .ndjson, .yaml, or .yml files found", raw)
+		}
+		for _, f := range dirFiles {
+			addFile(f)
+		}
+	}
+
+	var allRules []backendpkg.Rule
+	locations := make(map[string]string)
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading rule file: %w", err)
+		}
+		parsed, err := parser.ParseCandidates(ctx, data)
+		if err != nil {
+			if len(files) > 1 {
+				return nil, nil, fmt.Errorf("%s: %w", file, err)
+			}
+			return nil, nil, err
+		}
+		for _, rule := range parsed {
+			if rule.ID != "" {
+				locations[rule.ID] = file
+			}
+			if rule.BackendObjectID != "" {
+				locations[rule.BackendObjectID] = file
+			}
+		}
+		allRules = append(allRules, parsed...)
+	}
+	return allRules, locations, nil
 }
 
 func collectReadOnlyEnrichment(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, candidate bool) ([]backendpkg.ProvenanceEvidence, []backendpkg.LineageEvidence, []backendpkg.SummaryRuleRunEvidence, error) {
 	if candidate {
 		return nil, nil, nil, nil
 	}
-	var provenance []backendpkg.ProvenanceEvidence
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	var (
+		provenance  []backendpkg.ProvenanceEvidence
+		lineage     []backendpkg.LineageEvidence
+		summaryRuns []backendpkg.SummaryRuleRunEvidence
+		wg          sync.WaitGroup
+	)
 	if provider, ok := c.(backendpkg.ProvenanceProvider); ok {
-		enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
-		items, err := provider.ProvenanceEvidence(enrichmentCtx, rules)
-		cancel()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, nil, ctx.Err()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
+			items, err := provider.ProvenanceEvidence(enrichmentCtx, rules)
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				observedAt := time.Now().UTC()
+				items = make([]backendpkg.ProvenanceEvidence, 0, len(rules))
+				for _, rule := range rules {
+					items = append(items, backendpkg.ProvenanceEvidence{
+						RuleID: rule.ID, BackendObjectID: rule.BackendObjectID,
+						Provenance: backendpkg.ProvenanceRef{Kind: "backend_rule_provenance"},
+						Status:     backendpkg.EvidenceUnavailable, Method: "backend-provenance",
+						ObservedAt: observedAt, Detail: "rule provenance could not be read",
+					})
+				}
 			}
-			observedAt := time.Now().UTC()
-			items = make([]backendpkg.ProvenanceEvidence, 0, len(rules))
-			for _, rule := range rules {
-				items = append(items, backendpkg.ProvenanceEvidence{
-					RuleID: rule.ID, BackendObjectID: rule.BackendObjectID,
-					Provenance: backendpkg.ProvenanceRef{Kind: "backend_rule_provenance"},
-					Status:     backendpkg.EvidenceUnavailable, Method: "backend-provenance",
-					ObservedAt: observedAt, Detail: "rule provenance could not be read",
-				})
-			}
-		}
-		provenance = items
+			provenance = items
+		}()
 	}
-	var lineage []backendpkg.LineageEvidence
 	if provider, ok := c.(backendpkg.LineageProvider); ok {
-		enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
-		items, err := provider.LineageEvidence(enrichmentCtx, rules)
-		cancel()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, nil, ctx.Err()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
+			items, err := provider.LineageEvidence(enrichmentCtx, rules)
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				items = []backendpkg.LineageEvidence{{
+					Kind:   "backend_lineage_inventory",
+					Input:  backendpkg.DependencyRef{Kind: "unavailable_lineage_input"},
+					Output: backendpkg.DependencyRef{Kind: "unavailable_lineage_output"},
+					Status: backendpkg.EvidenceUnavailable, Method: "backend-lineage",
+					ObservedAt: time.Now().UTC(), Detail: "source lineage could not be read",
+				}}
 			}
-			items = []backendpkg.LineageEvidence{{
-				Kind:   "backend_lineage_inventory",
-				Input:  backendpkg.DependencyRef{Kind: "unavailable_lineage_input"},
-				Output: backendpkg.DependencyRef{Kind: "unavailable_lineage_output"},
-				Status: backendpkg.EvidenceUnavailable, Method: "backend-lineage",
-				ObservedAt: time.Now().UTC(), Detail: "source lineage could not be read",
-			}}
-		}
-		lineage = items
+			lineage = items
+		}()
 	}
-	var summaryRuns []backendpkg.SummaryRuleRunEvidence
 	if provider, ok := c.(backendpkg.SummaryRuleRunProvider); ok {
-		enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
-		items, err := provider.SummaryRuleRunEvidence(enrichmentCtx, rules)
-		cancel()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, nil, ctx.Err()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
+			items, err := provider.SummaryRuleRunEvidence(enrichmentCtx, rules)
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				items = []backendpkg.SummaryRuleRunEvidence{{
+					ID:     "backend-summary-rule-runs",
+					Rule:   backendpkg.DependencyRef{Kind: "unavailable_summary_rule"},
+					Output: backendpkg.DependencyRef{Kind: "unavailable_summary_output"},
+					Status: backendpkg.EvidenceUnavailable, Method: "backend-summary-rule-runs",
+					ObservedAt: time.Now().UTC(), Detail: "summary-rule runtime evidence could not be read",
+				}}
 			}
-			items = []backendpkg.SummaryRuleRunEvidence{{
-				ID:     "backend-summary-rule-runs",
-				Rule:   backendpkg.DependencyRef{Kind: "unavailable_summary_rule"},
-				Output: backendpkg.DependencyRef{Kind: "unavailable_summary_output"},
-				Status: backendpkg.EvidenceUnavailable, Method: "backend-summary-rule-runs",
-				ObservedAt: time.Now().UTC(), Detail: "summary-rule runtime evidence could not be read",
-			}}
-		}
-		summaryRuns = items
+			summaryRuns = items
+		}()
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
 	}
 	return provenance, lineage, summaryRuns, nil
 }
@@ -1045,47 +1163,72 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 	if err != nil {
 		return scanResult{}, err
 	}
-	if o.ruleFile == "" {
+	candidateMode := o.hasCandidateRules()
+	if !candidateMode {
 		if err := validateProducers(c, o.policy); err != nil {
 			return scanResult{}, err
 		}
 	}
-	observedVersion := ""
+	var (
+		observedVersion string
+		rules           []backendpkg.Rule
+		ruleLocations   map[string]string
+		rulesErr        error
+		all             []backendpkg.Source
+		sourcesErr      error
+		sourcesLoaded   bool
+		invWG           sync.WaitGroup
+	)
 	if provider, ok := c.(backendpkg.VersionProvider); ok {
 		// Product version is useful report evidence, but a restricted root API
 		// must not turn an otherwise valid scan into an error.
-		versionCtx, versionCancel := context.WithTimeout(ctx, 5*time.Second)
-		version, verr := provider.Version(versionCtx)
-		versionCancel()
-		if verr == nil {
-			observedVersion = version
-		}
+		invWG.Add(1)
+		go func() {
+			defer invWG.Done()
+			versionCtx, versionCancel := context.WithTimeout(ctx, 5*time.Second)
+			version, verr := provider.Version(versionCtx)
+			versionCancel()
+			if verr == nil {
+				observedVersion = version
+			}
+		}()
 	}
-	var rules []backendpkg.Rule
-	if o.ruleFile != "" {
-		// Candidate mode: evaluate rules from a file against the live
-		// environment instead of the installed inventory.
-		data, rerr := os.ReadFile(o.ruleFile)
-		if rerr != nil {
-			return scanResult{}, fmt.Errorf("reading rule file: %w", rerr)
-		}
+	// Sentinel Sources() inspects remote workspace references discovered during
+	// Rules(), whereas Elastic and OpenSearch source stats are independent of
+	// rule inventory and can run concurrently.
+	parallelSources := !candidateMode && c.Name() != "sentinel"
+	if parallelSources {
+		sourcesLoaded = true
+		invWG.Add(1)
+		go func() {
+			defer invWG.Done()
+			all, sourcesErr = c.Sources(ctx)
+		}()
+	}
+	if candidateMode {
+		// Candidate mode: evaluate rules from files or directories against the
+		// live environment instead of the installed inventory.
 		parser, ok := c.(backendpkg.CandidateParser)
 		if !ok {
+			invWG.Wait()
 			return scanResult{}, fmt.Errorf("candidate-rule parsing is unavailable for backend %q", c.Name())
 		}
-		rules, err = parser.ParseCandidates(ctx, data)
+		rules, ruleLocations, rulesErr = loadCandidateRules(ctx, parser, o.effectiveRulePaths())
 	} else {
-		rules, err = c.Rules(ctx)
+		rules, rulesErr = c.Rules(ctx)
 	}
-	if err != nil {
-		return scanResult{}, err
+	invWG.Wait()
+	if rulesErr != nil {
+		return scanResult{}, rulesErr
 	}
 	if err := backendpkg.ValidateRuleIDs(rules); err != nil {
 		return scanResult{}, fmt.Errorf("invalid rule inventory: %w", err)
 	}
-	all, err := c.Sources(ctx)
-	if err != nil {
-		return scanResult{}, err
+	if !sourcesLoaded {
+		all, sourcesErr = c.Sources(ctx)
+	}
+	if sourcesErr != nil {
+		return scanResult{}, sourcesErr
 	}
 	resolver, ok := c.(backendpkg.Resolver)
 	if !ok {
@@ -1108,10 +1251,9 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 			}
 		}
 	}
-	// Runtime evidence is attached only after native resolution selects the
-	// bounded source set. Rebuild so verdicts see it without narrowing the
-	// full catalog used to prove missing tables.
-	g = graph.BuildResolved(rules, all, resolutions)
+	// Runtime evidence is attached in-place to the full catalog slice referenced
+	// by g.Sources so verdicts see updated freshness without rebuilding edges.
+	g.Sources = all
 
 	// Filters scope what the report lists and which sources get stateful
 	// assessments; verdicts always see the full inventory, so scoping can
@@ -1148,8 +1290,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 			all[i].IngestLag = evidence
 		}
 	}
-	// Attach the measurements to the graph used by report impairment checks.
-	g = graph.BuildResolved(rules, all, resolutions)
+	g.Sources = all
 	predicateFreshnessEvidence, predicateFreshnessAssessment, err := collectPredicateFreshnessEvidence(ctx, c, rules, g, all, o.maxStale, o.policy)
 	if err != nil {
 		return scanResult{}, fmt.Errorf("reading predicate-qualified freshness evidence: %w", err)
@@ -1158,11 +1299,11 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 	if err != nil {
 		return scanResult{}, fmt.Errorf("reading required-field evidence: %w", err)
 	}
-	provenanceEvidence, lineageEvidence, summaryRunEvidence, err := collectReadOnlyEnrichment(ctx, c, rules, o.ruleFile != "")
+	provenanceEvidence, lineageEvidence, summaryRunEvidence, err := collectReadOnlyEnrichment(ctx, c, rules, candidateMode)
 	if err != nil {
 		return scanResult{}, fmt.Errorf("reading backend enrichment evidence: %w", err)
 	}
-	suppressUnused := o.ruleFile != ""
+	suppressUnused := candidateMode
 	var producerEvidence []backendpkg.ProducerEvidence
 	if !suppressUnused {
 		producerEvidence, err = collectProducers(ctx, c, o.policy, rules)
@@ -1195,7 +1336,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 		BackendObservedVersion:           observedVersion,
 		ScanScope: report.ScanScope{
 			Mode: func() string {
-				if o.ruleFile != "" {
+				if candidateMode {
 					return "candidate"
 				}
 				return "installed"
@@ -1203,7 +1344,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 			Include: append([]string(nil), o.include...), Exclude: append([]string(nil), o.exclude...),
 			SchemaTracking: o.schemaTrack, Stateful: o.stateFile != "", ConfigurationID: configurationID,
 			CandidateRuleIDs: func() []string {
-				if o.ruleFile == "" {
+				if !candidateMode {
 					return nil
 				}
 				ids := make([]string, 0, len(rules))
@@ -1218,7 +1359,8 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 	})
 	return scanResult{
 		report: r, store: store, path: o.stateFile,
-		findingsOnlyState: o.ruleFile != "" && store != nil,
+		findingsOnlyState: candidateMode && store != nil,
+		ruleLocations:     ruleLocations,
 	}, nil
 }
 
@@ -1233,9 +1375,10 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	jsonFile := fs.String("json-out", "", "write the JSON report to a file (created 0600 on POSIX)")
 	legacyOutFile := fs.String("out", "", "deprecated alias for --json-out")
 	htmlFile := fs.String("html-out", "", "write a static HTML report to a file (created 0600 on POSIX)")
+	sarifFile := fs.String("sarif-out", "", "write a SARIF v2.1.0 report to a file (created 0600 on POSIX)")
 	redactNames := fs.Bool("redact", false, "replace sensitive names with HMAC pseudonyms")
 	redactKeyFile := fs.String("redact-key-file", os.Getenv("DEADAIR_REDACT_KEY_FILE"), "read the HMAC redaction key from a file")
-	fs.StringVar(&o.ruleFile, "rule", "", "evaluate a backend-native candidate rule or detector file")
+	fs.Var(&o.ruleFiles, "rule", "evaluate a backend-native candidate rule file or directory; repeatable")
 	if parsed, code := parseFlags(fs, args); !parsed {
 		return code
 	}
@@ -1274,7 +1417,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		printProtectedError(stderr, redactionEnabled, "scan target configuration could not be loaded", err)
 		return report.ExitError
 	}
-	if o.ruleFile != "" {
+	if o.hasCandidateRules() {
 		for _, inst := range insts {
 			if _, ok := inst.backend.(backendpkg.CandidateParser); !ok {
 				fmt.Fprintf(stderr, "deadair: --rule is unavailable for backend %q; it has no candidate parser\n", inst.backend.Name())
@@ -1286,9 +1429,12 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	ctx, cancelTimeout := context.WithTimeout(ctx, o.timeout*time.Duration(len(insts)))
 	defer cancelTimeout()
+	var stderrMu sync.Mutex
 	run := func(inst fleetInstance, io connOpts) (scanResult, error) {
 		if !*jsonOut && interactiveOutput(stdout) && interactiveOutput(stderr) {
+			stderrMu.Lock()
 			fmt.Fprintf(stderr, "Scanning %s (read-only)…\n", terminalText(inst.backend.Name()))
+			stderrMu.Unlock()
 		}
 		sctx, cancel := context.WithTimeout(ctx, io.timeout)
 		defer cancel()
@@ -1303,6 +1449,16 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		if outFile != "" {
 			if err := f.Write(outFile); err != nil {
 				printProtectedError(stderr, redactionEnabled, "report output could not be written", err)
+				return report.ExitError
+			}
+		}
+		if *sarifFile != "" {
+			var locs map[string]string
+			if len(commits) > 0 {
+				locs = commits[0].ruleLocations
+			}
+			if err := f.WriteSARIFWithOptions(*sarifFile, report.SARIFOptions{RuleLocations: locs}); err != nil {
+				printProtectedError(stderr, redactionEnabled, "SARIF output could not be written", err)
 				return report.ExitError
 			}
 		}
@@ -1325,7 +1481,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		if !*jsonOut && !redactionEnabled {
 			printSavedReport(stdout, outFile, false)
 		}
-		if o.ruleFile != "" {
+		if o.hasCandidateRules() {
 			return f.CandidateExitCode()
 		}
 		return f.ExitCode()
@@ -1360,6 +1516,12 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 			return report.ExitError
 		}
 	}
+	if *sarifFile != "" {
+		if err := r.WriteSARIFWithOptions(*sarifFile, report.SARIFOptions{RuleLocations: res.ruleLocations}); err != nil {
+			printProtectedError(stderr, redactionEnabled, "SARIF output could not be written", err)
+			return report.ExitError
+		}
+	}
 	if *jsonOut {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
@@ -1377,13 +1539,16 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	if !*jsonOut && !redactionEnabled {
 		printSavedReport(stdout, outFile, len(r.SourceImpacts)+len(r.Producers) > 0)
 	}
-	if o.ruleFile != "" {
+	if o.hasCandidateRules() {
 		return r.CandidateExitCode()
 	}
 	return r.ExitCode()
 }
 
 func validateScanOptions(o connOpts, htmlFile string) error {
+	if o.fleetConcurrency < 1 {
+		return fmt.Errorf("--fleet-concurrency must be at least 1")
+	}
 	if o.schemaTrack && o.stateFile == "" {
 		return fmt.Errorf("--schema requires --state-file")
 	}
@@ -1444,7 +1609,7 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 		}
 	}
 	if len(r.ImpairedDetections) > 0 {
-		if terminalFindingHeadline(r) != countLabel(s.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility") {
+		if !strings.HasSuffix(terminalFindingHeadline(r), "reduced visibility") {
 			visualHeading(w, "33;1", "Reduced visibility", len(r.ImpairedDetections))
 		}
 		for i, d := range r.ImpairedDetections {
@@ -1934,6 +2099,12 @@ func runTune(args []string, stdout, stderr io.Writer) int {
 }
 
 func runServe(args []string, stderr io.Writer) int {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	return runServeWithContext(ctx, args, stderr)
+}
+
+func runServeWithContext(ctx context.Context, args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { serveUsage(stderr) }
@@ -1942,7 +2113,9 @@ func runServe(args []string, stderr io.Writer) int {
 	addAssessmentFlags(fs, &o)
 	bind := fs.String("bind", "127.0.0.1:9317", "exporter listen address; keep loopback unless the scrape path is authenticated")
 	interval := fs.Duration("interval", 5*time.Minute, "time between scans")
-	redactNames := fs.Bool("redact", false, "replace source names in metric labels with HMAC pseudonyms")
+	jsonFile := fs.String("json-out", "", "write the latest JSON report atomically after each scan (created 0600 on POSIX)")
+	htmlFile := fs.String("html-out", "", "write the latest static HTML report atomically after each scan (single-instance only, 0600 on POSIX)")
+	redactNames := fs.Bool("redact", false, "replace source names in metric labels and saved reports with HMAC pseudonyms")
 	redactKeyFile := fs.String("redact-key-file", os.Getenv("DEADAIR_REDACT_KEY_FILE"), "read the HMAC redaction key from a file")
 	if parsed, code := parseFlags(fs, args); !parsed {
 		return code
@@ -1955,7 +2128,7 @@ func runServe(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "deadair: --interval must be greater than zero")
 		return report.ExitError
 	}
-	if err := validateScanOptions(o, ""); err != nil {
+	if err := validateScanOptions(o, *htmlFile); err != nil {
 		fmt.Fprintf(stderr, "deadair: %v\n", err)
 		return report.ExitError
 	}
@@ -1988,11 +2161,21 @@ func runServe(args []string, stderr io.Writer) int {
 		return report.ExitError
 	}
 	defer listener.Close()
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	srv := &exporter.Server{}
+	cycle := 0
 	scan := func(ctx context.Context) {
+		if cycle > 0 {
+			// Re-read secret, CA, and fleet configuration files on each subsequent
+			// tick so rotated credentials take effect without restarting serve.
+			reloaded, rerr := o.resolveInstances(io.Discard)
+			if rerr != nil {
+				printProtectedError(stderr, redactionEnabled, "reloading scan target configuration failed; keeping previous configuration", rerr)
+			} else {
+				insts = reuseSentinelCredentials(insts, reloaded)
+			}
+		}
+		cycle++
 		run := func(inst fleetInstance, io connOpts) (scanResult, error) {
 			sctx, cancel := context.WithTimeout(ctx, io.timeout)
 			defer cancel()
@@ -2009,9 +2192,30 @@ func runServe(args []string, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "deadair: scan failed (%s): %s\n", e.Instance, e.Error)
 		}
 		srv.Update(f)
-		for _, c := range commits {
-			if err := c.commitState(); err != nil {
-				printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
+		persistOK := true
+		if *jsonFile != "" {
+			var werr error
+			if o.fleetFile != "" {
+				werr = f.Write(*jsonFile)
+			} else if len(f.Instances) == 1 {
+				werr = f.Instances[0].Write(*jsonFile)
+			}
+			if werr != nil {
+				persistOK = false
+				printProtectedError(stderr, redactionEnabled, "report output could not be written", werr)
+			}
+		}
+		if *htmlFile != "" && len(f.Instances) == 1 {
+			if werr := f.Instances[0].WriteHTML(*htmlFile); werr != nil {
+				persistOK = false
+				printProtectedError(stderr, redactionEnabled, "HTML output could not be written", werr)
+			}
+		}
+		if persistOK {
+			for _, c := range commits {
+				if err := c.commitState(); err != nil {
+					printProtectedError(stderr, redactionEnabled, "state could not be saved", err)
+				}
 			}
 		}
 	}
@@ -2021,6 +2225,28 @@ func runServe(args []string, stderr io.Writer) int {
 		return report.ExitError
 	}
 	return 0
+}
+
+// reuseSentinelCredentials preserves existing Sentinel client instances (and
+// their cached Entra tokens) across serve hot-reloads when the target identity
+// has not changed, while swapping in freshly loaded HTTP/TLS transports.
+func reuseSentinelCredentials(prev, next []fleetInstance) []fleetInstance {
+	prevByTarget := make(map[string]*sentinel.Client, len(prev))
+	for _, p := range prev {
+		if sc, ok := p.backend.(*sentinel.Client); ok {
+			prevByTarget[p.name+"\x00"+p.targetID] = sc
+		}
+	}
+	for i := range next {
+		if sc, ok := next[i].backend.(*sentinel.Client); ok {
+			if existing, ok := prevByTarget[next[i].name+"\x00"+next[i].targetID]; ok {
+				existing.HTTP = sc.HTTP
+				existing.Concurrency = sc.Concurrency
+				next[i].backend = existing
+			}
+		}
+	}
+	return next
 }
 
 func serveMetrics(parent context.Context, listener net.Listener, interval time.Duration, handler http.Handler, scan func(context.Context)) error {

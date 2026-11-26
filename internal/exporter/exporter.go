@@ -21,13 +21,29 @@ type Server struct {
 }
 
 type metricSnapshot struct {
-	fleet   *report.FleetReport
-	failed  map[string]bool
-	healthy bool
+	fleet    *report.FleetReport
+	failed   map[string]bool
+	healthy  bool
+	rendered []byte
 }
 
-// Update retains a failed instance's last report, but marks its current scan
-// down. Reports and health flags are published together for consistent scrapes.
+var initialMetrics = []byte("# HELP deadair_up Whether the most recent scan cycle succeeded for every instance.\n# TYPE deadair_up gauge\ndeadair_up 0\n")
+
+var findingMetricClasses = []string{
+	report.FindingDead,
+	report.FindingImpaired,
+	report.FindingSourceDegraded,
+	report.FindingVolumeLow,
+	report.FindingSchemaDrift,
+	report.FindingUnused,
+	report.FindingPartialInput,
+	report.FindingProducerStale,
+	report.FindingSummaryPipeline,
+}
+
+// Update retains a failed instance's last report, marks its current scan down,
+// and pre-renders the Prometheus exposition once so /metrics scrapes remain
+// allocation-free.
 func (s *Server) Update(f *report.FleetReport) {
 	previous := s.snapshot.Load()
 	failed := make(map[string]bool)
@@ -39,7 +55,9 @@ func (s *Server) Update(f *report.FleetReport) {
 			for _, e := range previous.fleet.Errors {
 				failed[e.Instance] = true
 			}
-			s.snapshot.Store(&metricSnapshot{fleet: previous.fleet, failed: failed})
+			next := &metricSnapshot{fleet: previous.fleet, failed: failed}
+			next.rendered = renderSnapshot(next)
+			s.snapshot.Store(next)
 		}
 		return
 	}
@@ -61,7 +79,9 @@ func (s *Server) Update(f *report.FleetReport) {
 		}
 	}
 	sort.Slice(copyFleet.Instances, func(i, j int) bool { return copyFleet.Instances[i].Instance < copyFleet.Instances[j].Instance })
-	s.snapshot.Store(&metricSnapshot{fleet: &copyFleet, failed: failed, healthy: len(f.Errors) == 0 && len(f.Instances) > 0})
+	next := &metricSnapshot{fleet: &copyFleet, failed: failed, healthy: len(f.Errors) == 0 && len(f.Instances) > 0}
+	next.rendered = renderSnapshot(next)
+	s.snapshot.Store(next)
 }
 
 // Handler returns the /metrics handler.
@@ -73,10 +93,49 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	snap := s.snapshot.Load()
+	if snap == nil {
+		_, _ = w.Write(initialMetrics)
+		return
+	}
+	_, _ = w.Write(snap.rendered)
+}
+
+func gatedFindingCounts(r *report.Report) map[string]int {
+	counts := make(map[string]int, len(findingMetricClasses))
+	if r.Policy != nil {
+		for _, finding := range r.Findings {
+			if finding.Gates {
+				counts[finding.Class]++
+			}
+		}
+		return counts
+	}
+	if len(r.Findings) > 0 {
+		for _, finding := range r.Findings {
+			if finding.Suppressed {
+				continue
+			}
+			switch finding.Class {
+			case report.FindingDead, report.FindingImpaired, report.FindingSourceDegraded, report.FindingVolumeLow, report.FindingSchemaDrift:
+				counts[finding.Class]++
+			}
+		}
+		return counts
+	}
+	counts[report.FindingDead] = r.Summary.DeadDetections
+	counts[report.FindingImpaired] = r.Summary.ImpairedDetections
+	counts[report.FindingSourceDegraded] = r.Summary.DegradedSources
+	counts[report.FindingVolumeLow] = r.Summary.VolumeLowSources
+	counts[report.FindingSchemaDrift] = r.Summary.SchemaDriftSources
+	return counts
+}
+
+func renderSnapshot(snap *metricSnapshot) []byte {
 	var b strings.Builder
+	b.Grow(4096)
 
 	up := 0
-	snap := s.snapshot.Load()
 	if snap != nil && snap.healthy {
 		up = 1
 	}
@@ -138,6 +197,14 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 			return 0
 		})
 
+		fmt.Fprintf(&b, "# HELP deadair_findings_gated Active findings that fail the configured or default gate by finding class.\n# TYPE deadair_findings_gated gauge\n")
+		for _, r := range f.Instances {
+			gated := gatedFindingCounts(r)
+			for _, class := range findingMetricClasses {
+				fmt.Fprintf(&b, "deadair_findings_gated{instance=%s,class=%q} %d\n", label(r.Instance), class, gated[class])
+			}
+		}
+
 		fmt.Fprintf(&b, "# HELP deadair_input_resolutions Backend-native rule input resolution evidence by outcome.\n# TYPE deadair_input_resolutions gauge\n")
 		for _, r := range f.Instances {
 			counts := r.Summary.InputResolution
@@ -169,6 +236,13 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 				if src.Status == "ok" || src.Status == "stale" || src.Status == "maintenance" {
 					fmt.Fprintf(&b, "deadair_source_freshness_seconds{instance=%s,source=%s} %g\n", label(r.Instance), label(src.Name), src.AgeSeconds)
 				}
+			}
+		}
+		fmt.Fprintf(&b, "# HELP deadair_source_suppressed Whether source alerts are suppressed by an expected downtime window.\n# TYPE deadair_source_suppressed gauge\n")
+		for _, r := range f.Instances {
+			for _, src := range r.Sources {
+				suppressed := src.ExpectedDowntime || src.Status == "maintenance"
+				fmt.Fprintf(&b, "deadair_source_suppressed{instance=%s,source=%s} %d\n", label(r.Instance), label(src.Name), boolNumber(suppressed))
 			}
 		}
 		fmt.Fprintf(&b, "# HELP deadair_source_consumers Enabled detections positively resolved to the source; a lower bound when unused telemetry is unassessed.\n# TYPE deadair_source_consumers gauge\n")
@@ -211,12 +285,9 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 				fmt.Fprintf(&b, "deadair_source_schema_drift{instance=%s,source=%s} %d\n", label(r.Instance), label(src.Name), drift)
 			}
 		}
-	}
-
-	if snap != nil {
 		writeMonitoring(&b, snap.fleet.Instances)
 	}
-	_, _ = w.Write([]byte(b.String()))
+	return []byte(b.String())
 }
 
 // label renders a Prometheus label value with required escaping.

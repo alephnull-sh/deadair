@@ -5,7 +5,7 @@ title: Detections that run but can't see
 author: Nikhil Satyakrishna
 description: A read-only look at enabled detections that run on schedule, report success, and quietly stop seeing their data, plus what native SIEM health views already cover.
 date: 2026-07-16
-updated: 2026-09-05
+updated: 2026-11-25
 hero_image: /assets/coverage-hero.png
 ---
 
@@ -54,14 +54,14 @@ the SOC has chosen to collect it. The report includes the rule, configured patte
 and source state so the operator can distinguish accepted scope from a regression.
 
 This disposable Elastic lab has missing, stale, late, and schema-incompatible inputs. The recording
-starts with a live scan, then opens two sources to show their evidence and affected detections.
+starts with a live scan, then inspects one impaired rule and one delayed source from the saved report.
 
 <figure class="bordered" id="elastic-demo">
   <video controls playsinline preload="none" poster="{{ '/assets/scan-lab.png' | relative_url }}?v={{ site.github.build_revision | default: 'local' }}" aria-label="Investigating missing fields and delayed events in an Elastic lab">
     <source src="{{ '/assets/scan-lab.mp4' | relative_url }}" type="video/mp4">
     <a href="{{ '/assets/scan-lab.gif' | relative_url }}">Watch the Elastic recording</a>
   </video>
-  <figcaption>Live Elastic 9.4.4 scan, followed by two source investigations from the saved report. Pause at any point to read the output.</figcaption>
+  <figcaption>Live Elastic 9.5.6 scan, followed by a rule investigation and a source investigation from the saved report. Pause at any point to read the output.</figcaption>
 </figure>
 
 ## Resolving sources and affected rules

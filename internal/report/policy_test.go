@@ -218,3 +218,31 @@ func TestPolicyRejectsMalformedInput(t *testing.T) {
 		t.Fatal("unknown finding class was accepted")
 	}
 }
+
+func TestPolicySourceAnnotationsWithoutMaxStale(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	p := writePolicy(t, `{
+  "version": 1,
+  "gate_classes": ["dead-detection"],
+  "sources": [{
+    "pattern": "logs-*",
+    "owner": "Linux platform",
+    "runbook": "https://wiki.example.net/runbooks/linux"
+  }]
+}`, now)
+	if got := p.MaxStaleFor("logs-prod", 30*time.Minute); got != 30*time.Minute {
+		t.Fatalf("MaxStaleFor = %s, want fallback 30m", got)
+	}
+	r := policyFixture(now, nil, p)
+	if len(r.SourceImpacts) != 1 || r.SourceImpacts[0].Owner != "Linux platform" || r.SourceImpacts[0].Runbook != "https://wiki.example.net/runbooks/linux" {
+		t.Fatalf("SourceImpacts = %+v", r.SourceImpacts)
+	}
+
+	emptyPath := filepath.Join(t.TempDir(), "empty-source.json")
+	if err := os.WriteFile(emptyPath, []byte(`{"version":1,"gate_classes":["dead-detection"],"sources":[{"pattern":"logs-*"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicy(emptyPath, now); err == nil {
+		t.Fatal("expected empty source policy without max_stale/owner/runbook to fail")
+	}
+}

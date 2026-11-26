@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/alephnull-sh/deadair/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/alephnull-sh/deadair/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/alephnull-sh/deadair/releases"><img alt="Release" src="https://img.shields.io/github/v/release/alephnull-sh/deadair"></a>
-  <img alt="Go 1.26" src="https://img.shields.io/badge/go-1.26-00ADD8">
+  <img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-00ADD8">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
 
@@ -79,14 +79,15 @@ deadair scan    # assess live rules and telemetry
 
 Exit codes are stable: `0` passes the configured gate, `1` means gated findings, and `2` means the scan failed.
 
-To investigate a source and its consuming detections:
+To check a source, an expected producer, or a single rule in a saved report:
 
 ```sh
 deadair scan --json-out report.json --html-out report.html
 deadair inspect --source CommonSecurityLog report.json
+deadair inspect --rule "PowerShell from legacy endpoints" report.json
 ```
 
-Use a source name from your report. The [investigation guide](docs/investigate.md) also covers
+Use a source or rule name from your report. The [investigation guide](docs/investigate.md) also covers
 individual Sentinel feeds, maintenance, and recovery tracking.
 
 ## How it works
@@ -96,7 +97,7 @@ individual Sentinel feeds, maintenance, and recovery tracking.
 | Inventory | reads enabled detections and the inputs they declare |
 | Resolve | uses native index resolution on Elastic and OpenSearch; on Sentinel, combines KQL analysis with table, watchlist, saved-function, ASIM, and mapped cross-workspace evidence |
 | Measure | checks source freshness and timing, plus schema and storage where the backend supports them |
-| Report | emits terminal, JSON, HTML, fleet rollups, and Prometheus metrics with the evidence behind each verdict |
+| Report | emits terminal, JSON, HTML, SARIF, fleet rollups, and Prometheus metrics with the evidence behind each verdict |
 
 Sentinel follows the same rule-to-source model and adds literal watchlists, saved functions, ASIM
 parsers, mapped workspaces, and summary-table lineage. It also shows when a filtered slice of a
@@ -193,27 +194,29 @@ Use the documented read-only roles for
 ## CI, fleets, and monitoring
 
 ```sh
-# Gate a candidate rule against live source availability.
-deadair scan --rule new-rule.json
+# Check candidate rules or a rule directory against live sources.
+deadair scan --rule detections/windows/ --rule detections/new-rule.json --sarif-out deadair.sarif
 
 # Fail only on new regressions between reports.
 deadair diff yesterday.json today.json
 
 # Scan multiple SIEM instances from one process.
-deadair scan --fleet fleet.json
+deadair scan --fleet fleet.json --fleet-concurrency 4
 
-# Export cached scan results as Prometheus metrics.
-deadair serve --interval 5m
+# Serve Prometheus metrics and keep the latest report on disk.
+deadair serve --interval 5m --json-out latest.json
 ```
 
-`scan --rule` isolates a backend-native candidate rule or detector from unrelated backlog. `diff`
-works with redacted reports created with the same caller-held key. Fleet configuration references
-secrets through environment variables rather than storing secret values.
+`scan --rule` checks candidate rules against live telemetry without counting existing backlog. `diff`
+works with redacted reports created with the same caller-held key. Fleet files point to environment
+variables or restricted secret files rather than storing secrets inline, and `serve` re-reads secret
+and certificate files on each scan.
 
 The [official GitHub Action](docs/usage.md#gate-detection-changes) wraps single-instance candidate
-gates for Elastic, OpenSearch, and Sentinel. It writes a job summary, uploads a redacted JSON
-report, and can apply a deadair policy without installing a rule. Sentinel workflows authenticate
-the runner to Azure first; the Action defines no Azure credential inputs.
+gates for Elastic, OpenSearch, and Sentinel. It summarizes any findings on the job page, uploads a
+redacted JSON report, and can write a SARIF file or apply a policy without installing a rule.
+Sentinel workflows authenticate the runner to Azure first; the Action defines no Azure credential
+inputs.
 
 See [CI gate behavior](docs/usage.md#gate-detection-changes),
 [fleet and MSSP deployment](docs/mssp.md), and the [Prometheus examples](contrib/) for configurations
@@ -223,8 +226,8 @@ to test in your own environment.
 
 | Backend | Live validation |
 |---|---|
-| Elastic Security | trusted CI on 8.19.19 and 9.4.4 |
-| OpenSearch Security Analytics | trusted CI on 2.19.6 and 3.7.0 |
+| Elastic Security | trusted CI on 8.19.25 and 9.5.6 |
+| OpenSearch Security Analytics | trusted CI on 2.19.7 and 3.10.0 |
 | Microsoft Sentinel | recorded opt-in conformance in disposable UK South workspaces; see [validation status](docs/validation.md#sentinel-live-conformance) |
 
 The Sentinel conformance run is manual, not scheduled CI.
@@ -233,7 +236,7 @@ The Sentinel conformance run is manual, not scheduled CI.
 
 - All adapter calls are read-only. Trusted Elastic and OpenSearch tests plus separate Sentinel lab
   probes verify that the documented scan identities cannot perform representative writes.
-- Reports, HTML, state files, and fleet output are written `0600` on POSIX systems.
+- Reports, HTML, SARIF, state files, and fleet output are written `0600` on POSIX systems.
 - Credentials can come from environment variables or files, avoiding secrets in process arguments.
 - `--redact` replaces tenant, rule, source, pattern, field, dependency, lineage, provenance,
   workspace, watchlist, template, and package identifiers with keyed HMAC pseudonyms. Validated

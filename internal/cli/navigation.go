@@ -37,7 +37,7 @@ func nativeBase(raw string) string {
 }
 
 func (o connOpts) ruleURL(rule backend.Rule) string {
-	if o.ruleFile != "" || o.backendName != "elastic" || rule.BackendObjectID == "" {
+	if o.hasCandidateRules() || o.backendName != "elastic" || rule.BackendObjectID == "" {
 		return ""
 	}
 	base := nativeBase(o.kibanaURL)

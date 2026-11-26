@@ -100,9 +100,9 @@ func TestSavedReportHintUsesTheActualFile(t *testing.T) {
 		want    string
 	}{
 		{"", true, ""},
-		{"scan.json", true, "Inspect: deadair inspect -- scan.json\n"},
+		{"scan.json", true, "Inspect: deadair inspect scan.json\n"},
 		{"-scan.json", true, "Inspect: deadair inspect -- -scan.json\n"},
-		{"reports/site scan.json", true, "Inspect: deadair inspect -- \"reports/site scan.json\"\n"},
+		{"reports/site scan.json", true, "Inspect: deadair inspect \"reports/site scan.json\"\n"},
 		{"fleet.json", false, "Saved JSON: fleet.json\n"},
 		{"scan$(whoami).json", true, "Saved JSON: scan$(whoami).json\n"},
 		{"scan`whoami`.json", true, "Saved JSON: scan`whoami`.json\n"},
@@ -207,5 +207,98 @@ func TestNativeLinksDropCredentialsAndEscapeIdentities(t *testing.T) {
 	o.ruleFile = "candidate.ndjson"
 	if o.ruleURL(backend.Rule{BackendObjectID: "id"}) != "" {
 		t.Fatal("candidate linked to an installed rule")
+	}
+}
+
+func TestInspectRuleViewAndMutualExclusion(t *testing.T) {
+	r := report.Report{
+		SchemaVersion: report.ReportSchemaVersion,
+		Backend:       "sentinel",
+		ImpairedDetections: []report.ImpairedDetection{{
+			ID: "obj-1", RuleID: "rule-ps-legacy", Name: "PowerShell from legacy endpoints",
+			Severity: "high", Reasons: []string{report.ReasonMissingFields, report.ReasonLagBlindWindow},
+			MissingFields: []string{"CommandLine"}, LagSources: []string{"SecurityEvent"},
+			P95LagSeconds: 420, MaxLagSeconds: 540, LookbackSeconds: 300,
+		}},
+		InputResolutions: []backend.InputResolution{{
+			RuleID: "rule-ps-legacy", Selector: "SecurityEvent", ResolutionMethod: "kql-table-catalog",
+			Status: backend.ResolutionResolved, ResolvedSources: []string{"SecurityEvent"},
+		}},
+		RequiredFieldEvidence: []report.RequiredFieldAssessment{{
+			RuleID: "rule-ps-legacy", RuleName: "PowerShell from legacy endpoints",
+			Sources: []report.RequiredFieldSourceEvidence{{Source: "SecurityEvent", Status: backend.EvidenceAssessed, Missing: []string{"CommandLine"}}},
+		}},
+		DependencyEvidence: []report.DependencyEvidence{{
+			RuleID: "rule-ps-legacy", Dependency: backend.DependencyRef{Name: "VIPUsers", Kind: "sentinel_watchlist"},
+			Status: backend.ResolutionResolved, Detail: "watchlist exists",
+		}},
+		RuleProvenance: []report.RuleProvenance{{
+			RuleID: "rule-ps-legacy", Provenance: backend.ProvenanceRef{Kind: "sentinel_content_package", Name: "Windows Security Events"},
+			Status: backend.EvidenceAssessed,
+		}},
+		SourceImpacts: []report.SourceImpact{{
+			Source: "SecurityEvent", Status: "ok",
+			Detections: []report.SourceConsumer{{
+				RuleID: "rule-ps-legacy", Name: "PowerShell from legacy endpoints",
+				Severity: "high", Status: "impaired", URL: "https://portal.azure.com/#rule-ps-legacy",
+			}},
+		}},
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "report.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"inspect", "--rule", "rule-ps-legacy", "--links", path},
+		{"inspect", "--rule", "PowerShell from legacy endpoints", "--links", path},
+		{"inspect", path, "--rule", "powershell from legacy endpoints", "--links"},
+	} {
+		var out, errs bytes.Buffer
+		if code := Run(args, &out, &errs); code != 0 {
+			t.Fatalf("args %v exit=%d stderr=%s", args, code, errs.String())
+		}
+		text := out.String()
+		for _, want := range []string{
+			"PowerShell from legacy endpoints — reduced visibility",
+			"[high] Rule ID: rule-ps-legacy",
+			"Missing declared fields: CommandLine",
+			"Ingest lag: p95 7m (max 9m) exceeds lookback 5m on SecurityEvent",
+			"Source: SecurityEvent (ok)",
+			"Watchlist VIPUsers: resolved — watchlist exists",
+			"Content package: Windows Security Events",
+			"Rule: https://portal.azure.com/#rule-ps-legacy",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("args %v missing %q in:\n%s", args, want, text)
+			}
+		}
+		for _, line := range strings.Split(text, "\n") {
+			if !strings.Contains(line, "https://") && utf8.RuneCountInString(line) > 80 {
+				t.Errorf("rule inspection line exceeds 80 columns: %s", line)
+			}
+		}
+	}
+
+	// Substring near-miss prints matching names on stderr without polluting stdout.
+	var nearOut, nearErrs bytes.Buffer
+	if code := Run([]string{"inspect", "--rule", "PowerShell", path}, &nearOut, &nearErrs); code != 2 || nearOut.Len() != 0 || !strings.Contains(nearErrs.String(), "Matching names: PowerShell from legacy endpoints") {
+		t.Fatalf("near-miss: code=%d stdout=%q stderr=%q", code, nearOut.String(), nearErrs.String())
+	}
+
+	// Mutually exclusive filter combinations must exit 2.
+	for _, args := range [][]string{
+		{"inspect", "--rule", "rule-ps-legacy", "--source", "SecurityEvent", path},
+		{"inspect", "--rule", "rule-ps-legacy", "--producer", "edge-fw", path},
+		{"inspect", "--rule", "nonexistent-rule", path},
+	} {
+		var out, errs bytes.Buffer
+		if code := Run(args, &out, &errs); code != 2 {
+			t.Fatalf("args %v exit=%d, want 2", args, code)
+		}
 	}
 }

@@ -28,7 +28,7 @@ Sleep 8s
 
 Hide
 Ctrl+L
-Type "deadair inspect --source endpoint-process-events-legacy report.json"
+Type 'deadair inspect --rule "PowerShell from legacy endpoints" report.json'
 Enter
 Wait+Screen /transform/
 Type "deadair inspect --source cloudflare-firewall-prod report.json"

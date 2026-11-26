@@ -21,7 +21,7 @@ import (
 // touches: one healthy data stream, one unused data stream, one stale plain
 // index, and five rules covering every classification path.
 func fixtureServer(t *testing.T) *httptest.Server {
-	return fixtureServerOptions(t, "9.4.4", 0)
+	return fixtureServerOptions(t, "9.5.6", 0)
 }
 
 func fixtureServerOptions(t *testing.T, version string, resolveStatus int) *httptest.Server {
@@ -134,7 +134,7 @@ func TestScanEndToEnd(t *testing.T) {
 		s.UnusedTelemetryAssessment != report.UnusedAssessmentUnavailable {
 		t.Errorf("summary = %+v", s)
 	}
-	if r.SchemaVersion != report.ReportSchemaVersion || r.Producer.Name != "deadair" || r.BackendMetadata.ObservedVersion != "9.4.4" {
+	if r.SchemaVersion != report.ReportSchemaVersion || r.Producer.Name != "deadair" || r.BackendMetadata.ObservedVersion != "9.5.6" {
 		t.Errorf("report contract metadata = schema %q producer %+v backend %+v", r.SchemaVersion, r.Producer, r.BackendMetadata)
 	}
 	if len(r.InputResolutions) != 5 || s.InputResolution.Resolved != 3 || s.InputResolution.Empty != 1 || s.InputResolution.Unsupported != 1 {
@@ -670,7 +670,7 @@ func opensearchFixtureServer(t *testing.T) *httptest.Server {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprint(w, `{"version":{"number":"3.7.0"}}`)
+		fmt.Fprint(w, `{"version":{"number":"3.10.0"}}`)
 	})
 	return httptest.NewServer(mux)
 }
@@ -695,7 +695,7 @@ func TestScanOpenSearchEndToEnd(t *testing.T) {
 	if r.Backend != "opensearch" {
 		t.Errorf("backend = %q, want opensearch", r.Backend)
 	}
-	if r.BackendMetadata.ObservedVersion != "3.7.0" {
+	if r.BackendMetadata.ObservedVersion != "3.10.0" {
 		t.Errorf("observed OpenSearch version = %q", r.BackendMetadata.ObservedVersion)
 	}
 	s := r.Summary
@@ -1165,7 +1165,7 @@ func TestCheck(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("check exit = %d; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
 	}
-	for _, want := range []string{"READY", "backend version 9.4.4", "detection rules readable (5 rules)", "source inventory readable (3 sources)", "source schemas readable", "native input resolution readable (missing sources can be proved)", "next: deadair scan"} {
+	for _, want := range []string{"READY", "backend version 9.5.6", "detection rules readable (5 rules)", "source inventory readable (3 sources)", "source schemas readable", "native input resolution readable (missing sources can be proved)", "next: deadair scan"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("check output missing %q:\n%s", want, stdout.String())
 		}
@@ -1193,7 +1193,7 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("unsupported version check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 
-	denied := fixtureServerOptions(t, "9.4.4", http.StatusForbidden)
+	denied := fixtureServerOptions(t, "9.5.6", http.StatusForbidden)
 	defer denied.Close()
 	stdout.Reset()
 	stderr.Reset()
@@ -1203,7 +1203,7 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("resolution capability check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 
-	dataViewDenied := fixtureServerCapabilities(t, "9.4.4", 0, http.StatusForbidden)
+	dataViewDenied := fixtureServerCapabilities(t, "9.5.6", 0, http.StatusForbidden)
 	defer dataViewDenied.Close()
 	stdout.Reset()
 	stderr.Reset()
@@ -1250,5 +1250,63 @@ func TestCheckFleet(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("check --fleet output missing %q:\n%s", want, stdout.String())
 		}
+	}
+}
+
+func TestScanMultiRuleDirectoryAndSARIF(t *testing.T) {
+	srv := fixtureServer(t)
+	defer srv.Close()
+	t.Setenv("DEADAIR_API_KEY", "testkey")
+
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	healthyRule := filepath.Join(rulesDir, "01-healthy.json")
+	if err := os.WriteFile(healthyRule, []byte(`{"id":"cand-ok","rule_id":"cand-ok","name":"Healthy Endpoint Rule","enabled":true,"severity":"medium","index":["logs-endpoint.events.*"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadRule := filepath.Join(dir, "02-dead.json")
+	if err := os.WriteFile(deadRule, []byte(`{"id":"cand-dead","rule_id":"cand-dead","name":"Missing Index Rule","enabled":true,"severity":"high","index":["logs-missing-*"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	jsonOut := filepath.Join(dir, "report.json")
+	sarifOut := filepath.Join(dir, "report.sarif")
+	var stdout, stderr bytes.Buffer
+	code := cli.Run([]string{
+		"scan",
+		"--es-url", srv.URL,
+		"--kibana-url", srv.URL,
+		"--rule", rulesDir,
+		"--rule", deadRule,
+		"--json-out", jsonOut,
+		"--sarif-out", sarifOut,
+	}, &stdout, &stderr)
+	if code != report.ExitFindings {
+		t.Fatalf("multi-rule candidate scan exit = %d, want %d\nstderr: %s", code, report.ExitFindings, stderr.String())
+	}
+
+	rawJSON, err := os.ReadFile(jsonOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotReport report.Report
+	if err := json.Unmarshal(rawJSON, &gotReport); err != nil {
+		t.Fatal(err)
+	}
+	if gotReport.Summary.EnabledRules != 2 || gotReport.Summary.DeadDetections != 1 {
+		t.Fatalf("candidate summary = %+v, want 2 enabled / 1 dead", gotReport.Summary)
+	}
+
+	rawSARIF, err := os.ReadFile(sarifOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(rawSARIF, []byte(`"deadair/dead-detection/disconnected"`)) ||
+		!bytes.Contains(rawSARIF, []byte(`"Missing Index Rule"`)) ||
+		!bytes.Contains(rawSARIF, []byte(`02-dead.json`)) {
+		t.Fatalf("unexpected SARIF content:\n%s", string(rawSARIF))
 	}
 }

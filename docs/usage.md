@@ -412,13 +412,14 @@ policy that gates those classes can produce a different exit result.
 
 ## Gate detection changes
 
-Use `scan --rule` in detection-as-code pull requests:
+Use `scan --rule` in detection-as-code pull requests. Pass a file or a directory, or repeat `--rule`
+to check several paths in one pass:
 
 ```sh
-deadair scan --rule candidate-rule.json
+deadair scan --rule detections/windows/ --rule candidate-rule.json --sarif-out deadair.sarif
 ```
 
-For Elastic, the candidate can be one rule object, an array, or an ndjson rule export. For
+For Elastic, each candidate file can be one rule object, an array, or an ndjson rule export. For
 OpenSearch, pass a Security Analytics detector create/update object, get response, search hit, or an
 array of those objects. Sentinel accepts a direct Scheduled or NRT ARM JSON body, one Azure-Sentinel
 analytic-rule YAML document, or an ARM deployment template containing alert-rule resources whose
@@ -440,9 +441,9 @@ Elastic indicator-match rules and ES|QL pipelines with lookup, enrichment, or su
 currently exit `2` in candidate mode. Their event source alone is not enough to assess the rule.
 
 The official GitHub Action wraps single-instance candidate gates for Elastic, OpenSearch, and
-Sentinel. It keeps the JSON evidence as a workflow artifact and writes the useful counts to the job
-summary. For Elastic or OpenSearch, pass the connection details through repository or environment
-secrets:
+Sentinel. It saves the JSON report as an artifact and writes the counts and any findings to the job
+summary. `candidate-rule` accepts a file, a directory, or one path per line. For Elastic or
+OpenSearch, pass the connection details through repository or environment secrets:
 
 ```yaml
 permissions:
@@ -454,7 +455,7 @@ steps:
     with:
       persist-credentials: false
   - name: Check candidate coverage
-    uses: alephnull-sh/deadair@v0.8.0
+    uses: alephnull-sh/deadair@v0.9.0
     with:
       backend: elastic
       elasticsearch-url: ${{ secrets.DEADAIR_ES_URL }}
@@ -491,7 +492,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Check Sentinel candidate coverage
-        uses: alephnull-sh/deadair@v0.8.0
+        uses: alephnull-sh/deadair@v0.9.0
         env:
           AZURE_TOKEN_CREDENTIALS: AzureCLICredential
         with:
@@ -528,8 +529,8 @@ The Action always fails on a scan error. Findings also fail the step unless
 `fail-on-findings: "false"` is set, which is useful while establishing a baseline. Reports are
 redacted before upload by default. Set `redact-key-file` to a secret file when redacted names must
 remain stable across runs; setting `redact-report: "false"` can expose sensitive blind-spot evidence
-in the job log and artifact. Redaction covers terminal and JSON output, not a `--state-file`; state
-files remain raw and sensitive.
+in the job log and artifact. Redaction covers terminal, JSON, and SARIF output, not a `--state-file`;
+state files remain raw and sensitive.
 
 If the Action runs more than once in a job or across a matrix, give each upload a unique
 `artifact-name`, such as `deadair-report-${{ strategy.job-index }}`.
@@ -538,9 +539,10 @@ The policy is part of the gate. Do not let a pull request weaken the policy that
 the policy from a protected base branch or restricted runner path, or require CODEOWNERS review for
 policy changes.
 
-The Action does not emit SARIF because live operational findings do not map to source-file
-locations. It accepts one SIEM instance and rejects `--fleet`; use the CLI directly for fleet
-files.
+Use `--sarif-out FILE`, or `sarif-out` in the Action, to write SARIF 2.1.0 for GitHub Code
+Scanning. Unredacted candidate scans attach findings to the rule file that produced them; redacted
+SARIF leaves local paths out. The Action checks one SIEM instance and rejects `--fleet`; use the CLI
+directly for fleet files.
 
 A local policy can set source-specific freshness, choose which finding classes gate, and accept a
 known finding until a fixed expiry:
@@ -676,13 +678,16 @@ Use `--fleet` for multiple SIEM instances:
 
 ```sh
 deadair check --fleet fleet.json
-deadair scan --fleet fleet.json
-deadair serve --fleet fleet.json
+deadair scan --fleet fleet.json --fleet-concurrency 4
+deadair serve --fleet fleet.json --fleet-concurrency 4
 ```
 
-Fleet scans are sequential. One failed tenant is recorded as an instance error and the command
-exits `2`; successful tenants still appear in the same report. With `--state-file`, deadair writes
-one state file per instance. The fleet summary carries `unused_telemetry_assessment`; it is
+Fleet scans run one tenant at a time by default. Pass `--fleet-concurrency N` to scan independent
+tenants in parallel; the report keeps the order from the fleet file. An instance can also set
+`policy_file` and `downtime_file` when its thresholds, maintenance windows, or expected Sentinel
+feeds differ from the rest of the fleet. One failed tenant is recorded as an instance error and the
+command exits `2`; successful tenants still appear in the same report. With `--state-file`, deadair
+writes one state file per instance. The fleet summary carries `unused_telemetry_assessment`; it is
 `unavailable` if any instance failed or could not establish complete local consumer coverage, so a
 partial `unused_bytes` total is not presented as a fleet-wide measurement.
 
@@ -694,11 +699,14 @@ operations, see [mssp.md](mssp.md).
 ## Run the exporter
 
 ```sh
-deadair serve --interval 5m --state-file deadair-state.json
+deadair serve --interval 5m --state-file deadair-state.json --json-out latest.json
 ```
 
 Metrics are exposed on `127.0.0.1:9317` by default. Prometheus scrapes the cached last scan; a
-scrape does not trigger a SIEM API call. Grafana and Alertmanager examples are in the
+scrape does not trigger a SIEM API call. Add `--json-out`, or `--html-out` for a single instance, to
+keep the latest report on disk without running a second `scan` job against the same `--state-file`.
+`serve` re-reads key, password, certificate, and fleet files on each scan, so rotated credentials
+take effect without a restart. Grafana and Alertmanager examples are in the
 [repository's `contrib` directory](https://github.com/alephnull-sh/deadair/tree/main/contrib).
 
 For fleets, route failed scans by `deadair_instance_up`. No-match findings usually go to detection

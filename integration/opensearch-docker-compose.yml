@@ -2,11 +2,14 @@ name: deadair-opensearch-integration
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:${OPENSEARCH_VERSION:-3.7.0}
+    image: opensearchproject/opensearch:${OPENSEARCH_VERSION:-3.10.0}
     environment:
       discovery.type: single-node
       OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${DEADAIR_IT_OPENSEARCH_ADMIN_PASSWORD:-DeadairAdmin123!}
       plugins.security.ssl.http.enabled: "false"
+      # Plain HTTP disables mTLS superadmin certs (admin_dn), so allow the
+      # admin user to seed .opensearch-sap-detectors-config fixtures on 3.8+.
+      plugins.security.system_indices.enabled: "false"
       cluster.routing.allocation.disk.threshold_enabled: "false"
       OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
     ports:

@@ -108,7 +108,9 @@ type Client struct {
 	watchlistsErr              error
 	dependencyProbeMu          sync.Mutex
 	watchlistProbes            map[string]dependencyProbeResult
+	watchlistProbeFlights      map[string]*dependencyProbeFlight
 	asimProbes                 map[string]dependencyProbeResult
+	asimProbeFlights           map[string]*dependencyProbeFlight
 	remoteMu                   sync.Mutex
 	remoteStates               map[string]*remoteWorkspaceState
 	remoteReferencesMu         sync.Mutex
@@ -118,6 +120,7 @@ type Client struct {
 	summaryLogsMu              sync.Mutex
 	summaryLogs                []summaryLogJSON
 	summaryLogsCached          bool
+	summaryLogsFlight          *summaryLogsFlight
 	budgetMu                   sync.Mutex
 	budgetSources              map[string]struct{}
 	budgetQueries              int
@@ -130,6 +133,17 @@ type Client struct {
 type accessTokenFlight struct {
 	done  chan struct{}
 	token azcore.AccessToken
+	err   error
+}
+
+type dependencyProbeFlight struct {
+	done   chan struct{}
+	result dependencyProbeResult
+}
+
+type summaryLogsFlight struct {
+	done  chan struct{}
+	rules []summaryLogJSON
 	err   error
 }
 
@@ -201,7 +215,9 @@ func (c *Client) RefreshForScan(ctx context.Context) error {
 	c.watchlistsMu.Unlock()
 	c.dependencyProbeMu.Lock()
 	c.watchlistProbes = nil
+	c.watchlistProbeFlights = nil
 	c.asimProbes = nil
+	c.asimProbeFlights = nil
 	c.dependencyProbeMu.Unlock()
 	c.resetRemoteState()
 	c.setRemoteReferences(nil)
@@ -209,6 +225,7 @@ func (c *Client) RefreshForScan(ctx context.Context) error {
 	c.summaryLogsMu.Lock()
 	c.summaryLogs = nil
 	c.summaryLogsCached = false
+	c.summaryLogsFlight = nil
 	c.summaryLogsMu.Unlock()
 	c.budgetMu.Lock()
 	c.budgetSources = nil
@@ -538,14 +555,34 @@ type alertRuleJSON struct {
 // a false coverage view.
 func (c *Client) Rules(ctx context.Context) ([]backend.Rule, error) {
 	c.setRemoteReferences(nil)
-	functions, functionsAvailable := c.workspaceFunctions(ctx)
-	ga, err := c.listAlertRules(ctx, alertRulesAPIVersion)
-	if err != nil {
-		return nil, err
+	var (
+		functions          map[string]WorkspaceFunction
+		functionsAvailable bool
+		ga                 []alertRuleJSON
+		preview            []alertRuleJSON
+		gaErr              error
+		previewErr         error
+		wg                 sync.WaitGroup
+	)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		functions, functionsAvailable = c.workspaceFunctions(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		ga, gaErr = c.listAlertRules(ctx, alertRulesAPIVersion)
+	}()
+	go func() {
+		defer wg.Done()
+		preview, previewErr = c.listAlertRules(ctx, alertRulesPreviewAPIVersion)
+	}()
+	wg.Wait()
+	if gaErr != nil {
+		return nil, gaErr
 	}
-	preview, err := c.listAlertRules(ctx, alertRulesPreviewAPIVersion)
-	if err != nil {
-		return nil, err
+	if previewErr != nil {
+		return nil, previewErr
 	}
 	seen := make(map[string]bool)
 	var rules []backend.Rule
@@ -1325,56 +1362,77 @@ func (c *Client) FreshnessEvidenceFor(ctx context.Context, requests []backend.Fr
 	if err != nil {
 		return nil, err
 	}
+	type clockWork struct {
+		sourceName string
+		source     backend.Source
+		basis      backend.FreshnessBasis
+		mixed      bool
+	}
 	out := make(map[string]backend.FreshnessEvidence, len(requests))
 	sem := make(chan struct{}, c.concurrency())
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	seen := make(map[string]bool, len(requests))
-	tasks := make([]backend.FreshnessRequest, 0, len(requests))
+	works := make([]clockWork, 0, len(requests))
+	mixedSources := make([]string, 0)
+	mixedClocks := make(map[string]map[backend.FreshnessBasis]backend.FreshnessEvidence)
 	for _, request := range requests {
 		source := request.Source
 		if seen[source.Name] {
 			continue
 		}
 		seen[source.Name] = true
-		if request.Basis == backend.FreshnessMixed {
-			combined := backend.FreshnessEvidence{Status: backend.EvidenceAssessed,
-				Method: "separate-rule-clocks", ObservedAt: time.Now().UTC(),
-				Clocks: make(map[backend.FreshnessBasis]backend.FreshnessEvidence)}
-			for _, basis := range []backend.FreshnessBasis{backend.FreshnessEventTime, backend.FreshnessIngestionTime} {
-				part := request
-				part.Basis = basis
-				result, err := c.FreshnessEvidenceFor(ctx, []backend.FreshnessRequest{part})
-				if err != nil {
-					return nil, err
-				}
-				item, ok := result[source.Name]
-				if !ok {
-					item = backend.FreshnessEvidence{Status: backend.EvidenceIncomplete, Detail: "clock observation was not returned"}
-				}
-				combined.Clocks[basis] = item
-				if item.Status != backend.EvidenceAssessed {
-					combined.Status = backend.EvidenceIncomplete
-				}
-			}
-			out[source.Name] = combined
-			continue
-		}
 		if !c.claimEvidenceSource(source.Name) {
-			method := freshnessMethod(request.Basis)
-			out[source.Name] = backend.FreshnessEvidence{
-				Status:     backend.EvidenceIncomplete,
-				Method:     method,
-				ObservedAt: time.Now().UTC(),
-				Window:     freshnessWindow,
-				Detail:     "per-scan source evidence budget was exhausted",
+			now := time.Now().UTC()
+			if request.Basis == backend.FreshnessMixed {
+				clocks := make(map[backend.FreshnessBasis]backend.FreshnessEvidence, 2)
+				for _, basis := range []backend.FreshnessBasis{backend.FreshnessEventTime, backend.FreshnessIngestionTime} {
+					clocks[basis] = backend.FreshnessEvidence{
+						Status:     backend.EvidenceIncomplete,
+						Method:     freshnessMethod(basis),
+						ObservedAt: now,
+						Window:     freshnessWindow,
+						Detail:     "per-scan source evidence budget was exhausted",
+					}
+				}
+				out[source.Name] = backend.FreshnessEvidence{
+					Status:     backend.EvidenceIncomplete,
+					Method:     "separate-rule-clocks",
+					ObservedAt: now,
+					Clocks:     clocks,
+				}
+			} else {
+				out[source.Name] = backend.FreshnessEvidence{
+					Status:     backend.EvidenceIncomplete,
+					Method:     freshnessMethod(request.Basis),
+					ObservedAt: now,
+					Window:     freshnessWindow,
+					Detail:     "per-scan source evidence budget was exhausted",
+				}
 			}
 			continue
 		}
-		tasks = append(tasks, request)
+		if request.Basis == backend.FreshnessMixed {
+			mixedSources = append(mixedSources, source.Name)
+			mixedClocks[source.Name] = make(map[backend.FreshnessBasis]backend.FreshnessEvidence, 2)
+			for _, basis := range []backend.FreshnessBasis{backend.FreshnessEventTime, backend.FreshnessIngestionTime} {
+				works = append(works, clockWork{
+					sourceName: source.Name,
+					source:     source,
+					basis:      basis,
+					mixed:      true,
+				})
+			}
+			continue
+		}
+		works = append(works, clockWork{
+			sourceName: source.Name,
+			source:     source,
+			basis:      request.Basis,
+		})
 	}
-	for _, request := range tasks {
-		request := request
+	for _, work := range works {
+		work := work
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1384,43 +1442,13 @@ func (c *Client) FreshnessEvidenceFor(ctx context.Context, requests []backend.Fr
 			case <-ctx.Done():
 				return
 			}
-			source := request.Source
-			evidence := backend.FreshnessEvidence{
-				Status:     backend.EvidenceIncomplete,
-				Method:     freshnessMethod(request.Basis),
-				ObservedAt: time.Now().UTC(),
-				Window:     freshnessWindow,
-				Detail:     "bounded freshness query could not be read",
-			}
-			target, targetErr := c.sourceTarget(ctx, source.Name, catalog)
-			if targetErr != nil {
-				evidence.Status, evidence.Detail = evidenceFailure(targetErr)
-			} else if !target.found {
-				evidence.Detail = "source is absent from the workspace table inventory"
-			} else if status, detail, limited := tableRuntimeLimitation(target.info); limited {
-				evidence.Status = status
-				evidence.Detail = detail
-			} else if request.Basis == backend.FreshnessEventTime && !catalogHasField(target.info, "TimeGenerated") {
-				evidence.Status = backend.EvidenceUnavailable
-				evidence.Detail = "table schema does not expose TimeGenerated"
-			} else {
-				if target.queryReference == "" {
-					evidence.Detail = "table name cannot be represented safely in KQL"
-				} else {
-					query := fmt.Sprintf("%s | where TimeGenerated >= ago(%dh) and TimeGenerated <= now() + %ds | summarize LastEvent=max(TimeGenerated)", target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessClockSkew/time.Second))
-					if request.Basis == backend.FreshnessIngestionTime {
-						query = fmt.Sprintf("%s | extend IngestionTime=ingestion_time() | where IngestionTime >= ago(%dh) and IngestionTime <= now() + %ds | summarize LastEvent=max(IngestionTime)", target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessClockSkew/time.Second))
-					}
-					result, queryErr := c.queryLogsForSource(ctx, query, target)
-					if queryErr == nil {
-						evidence = freshnessFromTable(result, evidence)
-					} else {
-						evidence.Status, evidence.Detail = evidenceFailure(queryErr)
-					}
-				}
-			}
+			evidence := c.observeFreshnessClock(ctx, work.source, work.basis, catalog)
 			mu.Lock()
-			out[source.Name] = evidence
+			if work.mixed {
+				mixedClocks[work.sourceName][work.basis] = evidence
+			} else {
+				out[work.sourceName] = evidence
+			}
 			mu.Unlock()
 		}()
 	}
@@ -1428,7 +1456,63 @@ func (c *Client) FreshnessEvidenceFor(ctx context.Context, requests []backend.Fr
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	for _, sourceName := range mixedSources {
+		clocks := mixedClocks[sourceName]
+		combined := backend.FreshnessEvidence{
+			Status:     backend.EvidenceAssessed,
+			Method:     "separate-rule-clocks",
+			ObservedAt: time.Now().UTC(),
+			Clocks:     make(map[backend.FreshnessBasis]backend.FreshnessEvidence, 2),
+		}
+		for _, basis := range []backend.FreshnessBasis{backend.FreshnessEventTime, backend.FreshnessIngestionTime} {
+			item, ok := clocks[basis]
+			if !ok {
+				item = backend.FreshnessEvidence{Status: backend.EvidenceIncomplete, Detail: "clock observation was not returned"}
+			}
+			combined.Clocks[basis] = item
+			if item.Status != backend.EvidenceAssessed {
+				combined.Status = backend.EvidenceIncomplete
+			}
+		}
+		out[sourceName] = combined
+	}
 	return out, nil
+}
+
+func (c *Client) observeFreshnessClock(ctx context.Context, source backend.Source, basis backend.FreshnessBasis, catalog map[string]tableInfo) backend.FreshnessEvidence {
+	evidence := backend.FreshnessEvidence{
+		Status:     backend.EvidenceIncomplete,
+		Method:     freshnessMethod(basis),
+		ObservedAt: time.Now().UTC(),
+		Window:     freshnessWindow,
+		Detail:     "bounded freshness query could not be read",
+	}
+	target, targetErr := c.sourceTarget(ctx, source.Name, catalog)
+	if targetErr != nil {
+		evidence.Status, evidence.Detail = evidenceFailure(targetErr)
+	} else if !target.found {
+		evidence.Detail = "source is absent from the workspace table inventory"
+	} else if status, detail, limited := tableRuntimeLimitation(target.info); limited {
+		evidence.Status = status
+		evidence.Detail = detail
+	} else if basis == backend.FreshnessEventTime && !catalogHasField(target.info, "TimeGenerated") {
+		evidence.Status = backend.EvidenceUnavailable
+		evidence.Detail = "table schema does not expose TimeGenerated"
+	} else if target.queryReference == "" {
+		evidence.Detail = "table name cannot be represented safely in KQL"
+	} else {
+		query := fmt.Sprintf("%s | where TimeGenerated >= ago(%dh) and TimeGenerated <= now() + %ds | summarize LastEvent=max(TimeGenerated)", target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessClockSkew/time.Second))
+		if basis == backend.FreshnessIngestionTime {
+			query = fmt.Sprintf("%s | extend IngestionTime=ingestion_time() | where IngestionTime >= ago(%dh) and IngestionTime <= now() + %ds | summarize LastEvent=max(IngestionTime)", target.queryReference, int(freshnessWindow/time.Hour), int(backend.FreshnessClockSkew/time.Second))
+		}
+		result, queryErr := c.queryLogsForSource(ctx, query, target)
+		if queryErr == nil {
+			evidence = freshnessFromTable(result, evidence)
+		} else {
+			evidence.Status, evidence.Detail = evidenceFailure(queryErr)
+		}
+	}
+	return evidence
 }
 
 func freshnessMethod(basis backend.FreshnessBasis) string {
@@ -1575,20 +1659,48 @@ type dependencyProbeResult struct {
 	inventoryAssessed bool
 }
 
+func cloneDependencyProbeResult(in dependencyProbeResult) dependencyProbeResult {
+	in.sources = append([]string(nil), in.sources...)
+	return in
+}
+
 func (c *Client) probeWatchlistDependency(ctx context.Context, dependency backend.DependencyRef) dependencyProbeResult {
 	key := strings.ToLower(strings.TrimSpace(dependency.Name))
 	c.dependencyProbeMu.Lock()
-	defer c.dependencyProbeMu.Unlock()
 	if cached, ok := c.watchlistProbes[key]; ok {
-		cached.sources = append([]string(nil), cached.sources...)
-		return cached
+		c.dependencyProbeMu.Unlock()
+		return cloneDependencyProbeResult(cached)
 	}
+	if flight := c.watchlistProbeFlights[key]; flight != nil {
+		c.dependencyProbeMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return dependencyProbeResult{status: backend.ResolutionUnavailable, detail: dependencyQueryFailureDetail(ctx.Err(), "watchlist"), attempted: true}
+		case <-flight.done:
+			return cloneDependencyProbeResult(flight.result)
+		}
+	}
+	if c.watchlistProbeFlights == nil {
+		c.watchlistProbeFlights = make(map[string]*dependencyProbeFlight)
+	}
+	flight := &dependencyProbeFlight{done: make(chan struct{})}
+	c.watchlistProbeFlights[key] = flight
+	c.dependencyProbeMu.Unlock()
+
 	result := c.probeWatchlistDependencyUncached(ctx, dependency)
-	if c.watchlistProbes == nil {
-		c.watchlistProbes = make(map[string]dependencyProbeResult)
+
+	c.dependencyProbeMu.Lock()
+	flight.result = cloneDependencyProbeResult(result)
+	if ctx.Err() == nil {
+		if c.watchlistProbes == nil {
+			c.watchlistProbes = make(map[string]dependencyProbeResult)
+		}
+		c.watchlistProbes[key] = cloneDependencyProbeResult(result)
 	}
-	c.watchlistProbes[key] = result
-	return result
+	delete(c.watchlistProbeFlights, key)
+	close(flight.done)
+	c.dependencyProbeMu.Unlock()
+	return cloneDependencyProbeResult(result)
 }
 
 func (c *Client) probeWatchlistDependencyUncached(ctx context.Context, dependency backend.DependencyRef) dependencyProbeResult {
@@ -1647,18 +1759,40 @@ func (c *Client) probeWatchlistDependencyUncached(ctx context.Context, dependenc
 func (c *Client) probeASIMDependency(ctx context.Context, dependency backend.DependencyRef, catalog map[string]tableInfo) dependencyProbeResult {
 	key := asimDependencyProbeKey(dependency)
 	c.dependencyProbeMu.Lock()
-	defer c.dependencyProbeMu.Unlock()
 	if cached, ok := c.asimProbes[key]; ok {
-		cached.sources = append([]string(nil), cached.sources...)
-		return cached
+		c.dependencyProbeMu.Unlock()
+		return cloneDependencyProbeResult(cached)
 	}
+	if flight := c.asimProbeFlights[key]; flight != nil {
+		c.dependencyProbeMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return dependencyProbeResult{status: backend.ResolutionUnavailable, detail: dependencyQueryFailureDetail(ctx.Err(), "ASIM parser"), attempted: true}
+		case <-flight.done:
+			return cloneDependencyProbeResult(flight.result)
+		}
+	}
+	if c.asimProbeFlights == nil {
+		c.asimProbeFlights = make(map[string]*dependencyProbeFlight)
+	}
+	flight := &dependencyProbeFlight{done: make(chan struct{})}
+	c.asimProbeFlights[key] = flight
+	c.dependencyProbeMu.Unlock()
+
 	result := c.probeASIMDependencyUncached(ctx, dependency, catalog)
-	if c.asimProbes == nil {
-		c.asimProbes = make(map[string]dependencyProbeResult)
+
+	c.dependencyProbeMu.Lock()
+	flight.result = cloneDependencyProbeResult(result)
+	if ctx.Err() == nil {
+		if c.asimProbes == nil {
+			c.asimProbes = make(map[string]dependencyProbeResult)
+		}
+		c.asimProbes[key] = cloneDependencyProbeResult(result)
 	}
-	c.asimProbes[key] = result
-	result.sources = append([]string(nil), result.sources...)
-	return result
+	delete(c.asimProbeFlights, key)
+	close(flight.done)
+	c.dependencyProbeMu.Unlock()
+	return cloneDependencyProbeResult(result)
 }
 
 func asimDependencyProbeKey(dependency backend.DependencyRef) string {

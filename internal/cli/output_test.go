@@ -603,3 +603,56 @@ func TestVisualSummaryFitsEightyColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestCandidateTerminalReportIgnoresUnrelatedEnvironmentBacklog(t *testing.T) {
+	r := &report.Report{
+		Backend: "elastic",
+		Scope:   report.ScanScope{Mode: "candidate"},
+		Summary: report.Summary{
+			Sources:         2,
+			Rules:           1,
+			EnabledRules:    1,
+			DegradedSources: 1,
+			InputResolution: report.InputResolutionSummary{Resolved: 1},
+		},
+		Sources: []report.SourceHealth{
+			{Name: "logs-aws.cloudtrail-default", Status: "ok"},
+			{Name: "okta-system-events-prod", Status: "stale"},
+		},
+		InputResolutions: []backend.InputResolution{{
+			RuleID:          "candidate-aws",
+			Selector:        "logs-aws.cloudtrail-*",
+			Status:          backend.ResolutionResolved,
+			ResolvedSources: []string{"logs-aws.cloudtrail-default"},
+		}},
+		SourceImpacts: []report.SourceImpact{
+			{Source: "logs-aws.cloudtrail-default", Status: "ok"},
+			{Source: "okta-system-events-prod", Status: "stale", FirstCheck: "Check the sender and its collector for recent delivery errors."},
+		},
+	}
+
+	for name, render := range map[string]func(*bytes.Buffer){
+		"plain":  func(out *bytes.Buffer) { printPlainSummary(out, r) },
+		"visual": func(out *bytes.Buffer) { printVisualSummary(out, r) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			render(&out)
+			text := out.String()
+			for _, want := range []string{
+				"Candidate passed",
+				"Scanned 1 candidate detection · 2 sources",
+				"Policy: no findings matched the gate · exit 0",
+			} {
+				if !strings.Contains(text, want) {
+					t.Errorf("%s candidate output missing %q:\n%s", name, want, text)
+				}
+			}
+			for _, unwanted := range []string{"source needs attention", "Sources to investigate", "okta-system-events-prod"} {
+				if strings.Contains(text, unwanted) {
+					t.Errorf("%s candidate output leaked unrelated backlog %q:\n%s", name, unwanted, text)
+				}
+			}
+		})
+	}
+}

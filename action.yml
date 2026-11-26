@@ -49,10 +49,13 @@ inputs:
     description: Path to a JSON file mapping literal workspace() targets for cross-workspace rules
     required: false
   candidate-rule:
-    description: Elastic rule JSON/NDJSON, OpenSearch detector JSON, or Sentinel Scheduled/NRT JSON, YAML, or ARM template to assess without installing
+    description: Candidate rule file or directory to check without installing; put multiple paths on separate lines
     required: false
   policy-file:
     description: Path to a deadair policy file that controls which findings gate the scan
+    required: false
+  sarif-out:
+    description: Write a SARIF 2.1.0 report to this path for GitHub Code Scanning
     required: false
   scan-args:
     description: Extra space-separated assessment, TLS, and namespace flags; use dedicated inputs for backend, endpoint, credential, Sentinel topology, output, redaction, policy, and candidate options
@@ -167,6 +170,7 @@ runs:
         DEADAIR_ACTION_OPENSEARCH_PASSWORD_FILE: ${{ inputs.opensearch-password-file }}
         DEADAIR_ACTION_CANDIDATE_RULE: ${{ inputs.candidate-rule }}
         DEADAIR_ACTION_POLICY_FILE: ${{ inputs.policy-file }}
+        DEADAIR_ACTION_SARIF_OUT: ${{ inputs.sarif-out }}
         DEADAIR_ACTION_SCAN_ARGS: ${{ inputs.scan-args }}
         DEADAIR_ACTION_REDACT_REPORT: ${{ inputs.redact-report }}
         DEADAIR_ACTION_REDACT_KEY_FILE: ${{ inputs.redact-key-file }}
@@ -206,7 +210,7 @@ runs:
 
     - name: Upload JSON evidence
       if: steps.scan.outputs.report-created == 'true'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       env:
         DEADAIR_BACKEND: ""
         DEADAIR_ES_URL: ""

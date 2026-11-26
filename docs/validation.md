@@ -7,8 +7,8 @@ in CI, what was checked manually, and what remains unproven. For finding termino
 
 ## Test coverage
 
-The live CI matrix covers Elastic Security 8.19.19 and 9.4.4, plus OpenSearch Security Analytics
-2.19.6 and 3.7.0. Sentinel unit and contract tests run with the normal Go suite. The live Sentinel
+The live CI matrix covers Elastic Security 8.19.25 and 9.5.6, plus OpenSearch Security Analytics
+2.19.7 and 3.10.0. Sentinel unit and contract tests run with the normal Go suite. The live Sentinel
 conformance test is opt-in and does not run on a schedule.
 
 | Area | Evidence |
@@ -24,9 +24,9 @@ conformance test is opt-in and does not run on a schedule.
 | Expected producers | live shared-table failure, recovery, maintenance, and exporter checks; local tests cover selector bounds, unavailable evidence, stable findings, and diffs |
 | Sentinel execution identity | fixture tests require an exact successful `SentinelHealth` event after the latest rule change and no older than the rule cadence plus the documented scheduling delay; other execution-identity cases remain unassessed |
 | write safety | live Elastic and OpenSearch tests require representative writes to be rejected; separate Sentinel lab probes confirmed its scan identity could not delete rules or tables or retrieve shared keys |
-| candidate-rule checks | backend-native `scan --rule` parser and gate tests; Sentinel covers direct ARM JSON, one Azure-Sentinel analytic-rule YAML document, and deployment templates whose rule values resolve from literals, defaults, or simple variables |
-| fleet behavior | mixed-backend integration tests and a five-instance MSSP lab |
-| reports | terminal, JSON, HTML, redacted JSON, and Prometheus output |
+| candidate-rule checks | repeatable file and directory `scan --rule` parser and gate tests; Sentinel covers direct ARM JSON, one Azure-Sentinel analytic-rule YAML document, and deployment templates whose rule values resolve from literals, defaults, or simple variables |
+| fleet behavior | mixed-backend integration tests with parallel fleet execution, per-instance policy/downtime overrides, and a five-instance MSSP lab |
+| reports | terminal, JSON, HTML, SARIF, redacted JSON and SARIF, and Prometheus output |
 
 The MSSP lab includes healthy, failed, and unreachable tenants. It exercises partial failures,
 per-instance state, schema drift, downtime suppression, redaction, and exporter labels.

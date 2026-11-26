@@ -18,8 +18,8 @@ make integration-test
 make integration-down
 ```
 
-The compose default is Elasticsearch and Kibana 9.4.4 with security enabled. Trusted CI runs this
-same suite against 8.19.19 and 9.4.4. The suite provisions role `deadair_monitor`, creates API key
+The compose default is Elasticsearch and Kibana 9.5.6 with security enabled. Trusted CI runs this
+same suite against 8.19.25 and 9.5.6. The suite provisions role `deadair_monitor`, creates API key
 `deadair-it`, seeds live/stale/empty sources and test rules, scans with the deadair key, asserts
 rejected writes, then cleans up.
 
@@ -31,8 +31,8 @@ make opensearch-integration-test
 make opensearch-integration-down
 ```
 
-The compose default is OpenSearch 3.7.0 with the security plugin. Trusted CI runs the suite against
-2.19.6 and 3.7.0. The suite provisions user `deadair`, maps it to
+The compose default is OpenSearch 3.10.0 with the security plugin. Trusted CI runs the suite against
+2.19.7 and 3.10.0. The suite provisions user `deadair`, maps it to
 `security_analytics_read_access` and `deadair_index_monitor`, seeds detector documents as admin,
 scans as the least-privilege user, and asserts rejected writes.
 
@@ -312,7 +312,7 @@ make integration
 ```
 
 This runs the Elastic, OpenSearch, and mixed-backend fleet tests in sequence using the Compose
-defaults. Trusted CI runs the fleet test with Elastic 9.4.4 and OpenSearch 3.7.0. The
+defaults. Trusted CI runs the fleet test with Elastic 9.5.6 and OpenSearch 3.10.0. The
 [trusted integration workflow](../.github/workflows/integration.yml) is the source of truth for
 the exact versions tested.
 

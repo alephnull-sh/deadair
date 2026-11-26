@@ -2,7 +2,7 @@ BIN     := deadair
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/alephnull-sh/deadair/internal/cli.Version=$(VERSION)
 DIST    := dist
-GOVULNCHECK_VERSION := v1.7.0
+GOVULNCHECK_VERSION := v1.10.0
 
 DARWIN_ARM64 := $(DIST)/$(BIN)_$(VERSION)_darwin-arm64
 LINUX_AMD64  := $(DIST)/$(BIN)_$(VERSION)_linux-amd64
