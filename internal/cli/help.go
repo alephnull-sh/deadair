@@ -69,6 +69,7 @@ Scope:
 
 Fleet:
   --fleet FILE                scan instances listed in a fleet JSON file
+  --fleet-concurrency N       max fleet instances scanned in parallel (default: 1)
   --instance-name NAME        label a single instance in reports
 
 Stateful checks:
@@ -192,6 +193,7 @@ Connection and scan:
   --timeout DURATION          timeout per instance (default: 1m)
   --concurrency N             parallel backend reads (default: 4; Sentinel caps at 2)
   --fleet FILE                scan instances listed in a fleet JSON file
+  --fleet-concurrency N       max fleet instances scanned in parallel (default: 1)
   --include PATTERN           include matching sources; repeatable
   --exclude PATTERN           exclude matching sources; repeatable
   --max-stale DURATION        source freshness window (default: 30m)

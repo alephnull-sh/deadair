@@ -1065,3 +1065,41 @@ func TestSchemas(t *testing.T) {
 		t.Fatalf("multi-type field = %+v", fields[1])
 	}
 }
+
+func TestResolveInputsDeduplicatesDataViewsConcurrently(t *testing.T) {
+	var dvAlphaCalls, dvBetaCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/data_views/data_view/dv-alpha", func(w http.ResponseWriter, r *http.Request) {
+		dvAlphaCalls.Add(1)
+		fmt.Fprint(w, `{"data_view":{"title":"logs-alpha-*"}}`)
+	})
+	mux.HandleFunc("/api/data_views/data_view/dv-beta", func(w http.ResponseWriter, r *http.Request) {
+		dvBetaCalls.Add(1)
+		fmt.Fprint(w, `{"data_view":{"title":"logs-beta-*"}}`)
+	})
+	mux.HandleFunc("/_resolve/index/logs-alpha-*", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data_streams":[{"name":"logs-alpha-default"}]}`)
+	})
+	mux.HandleFunc("/_resolve/index/logs-beta-*", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data_streams":[{"name":"logs-beta-default"}]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := &Client{ESURL: srv.URL, KibanaURL: srv.URL, Concurrency: 2}
+	resolutions, err := c.ResolveInputs(context.Background(), []backend.Rule{
+		{ID: "r1", Enabled: true, DataViewID: "dv-alpha"},
+		{ID: "r2", Enabled: true, DataViewID: "dv-alpha"},
+		{ID: "r3", Enabled: true, DataViewID: "dv-beta"},
+		{ID: "r4", Enabled: true, DataViewID: "dv-alpha"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dvAlphaCalls.Load() != 1 || dvBetaCalls.Load() != 1 {
+		t.Fatalf("data view calls = alpha:%d beta:%d, want 1/1", dvAlphaCalls.Load(), dvBetaCalls.Load())
+	}
+	if len(resolutions) != 4 || resolutions[0].ResolvedSources[0] != "logs-alpha-default" || resolutions[2].ResolvedSources[0] != "logs-beta-default" {
+		t.Fatalf("resolutions = %+v", resolutions)
+	}
+}

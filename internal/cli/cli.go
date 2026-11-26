@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -185,6 +186,7 @@ type connOpts struct {
 	apiKeyFile             string
 	timeout                time.Duration
 	concurrency            int
+	fleetConcurrency       int
 	maxStale               time.Duration
 	include                patternList
 	exclude                patternList
@@ -220,6 +222,7 @@ func addBackendFlags(fs *flag.FlagSet, o *connOpts) {
 	fs.StringVar(&o.apiKeyFile, "api-key-file", "", "file containing the API key (default: env DEADAIR_API_KEY)")
 	fs.DurationVar(&o.timeout, "timeout", 60*time.Second, "overall timeout per scan")
 	fs.IntVar(&o.concurrency, "concurrency", 4, "max parallel source-health and input-resolution queries (Sentinel caps at 2)")
+	fs.IntVar(&o.fleetConcurrency, "fleet-concurrency", 1, "max fleet instances scanned in parallel")
 	fs.StringVar(&o.caCert, "ca-cert", "", "PEM file with the CA that signed the SIEM's TLS certificate")
 	fs.BoolVar(&o.insecureTLS, "insecure-skip-verify", false, "skip TLS certificate verification (testing only)")
 	fs.StringVar(&o.kibanaSpace, "kibana-space", "", "Kibana space holding the detection rules (default: default space)")
@@ -459,7 +462,6 @@ func (o *connOpts) healthCheck() (health.Check, error) {
 type stateAssessments struct {
 	volume map[string]state.VolumeAssessment
 	schema map[string]state.SchemaAssessment
-	fields map[string]map[string]bool // source -> field set, when schemas fetched
 }
 
 func collectRequiredFieldEvidence(ctx context.Context, c backendpkg.Backend, rules []backendpkg.Rule, g *graph.Graph, inventory []backendpkg.Source) (map[string]backendpkg.FieldEvidence, report.RuntimeAssessment, error) {
@@ -921,23 +923,14 @@ func (o *connOpts) stateAssessments(ctx context.Context, c backendpkg.Backend, s
 		InDowntime: func(name string) bool { return check.InDowntime(name, now) },
 	})
 	var schema map[string]state.SchemaAssessment
-	var fields map[string]map[string]bool
 	if o.schemaTrack {
 		current, err := c.Schemas(ctx, sources)
 		if err != nil {
 			return stateAssessments{}, nil, err
 		}
 		schema = store.AssessSchemas(sources, current, now)
-		fields = make(map[string]map[string]bool, len(current))
-		for name, sc := range current {
-			set := make(map[string]bool, len(sc.Fields))
-			for _, f := range sc.Fields {
-				set[f.Name] = true
-			}
-			fields[name] = set
-		}
 	}
-	return stateAssessments{volume: volume, schema: schema, fields: fields}, store, nil
+	return stateAssessments{volume: volume, schema: schema}, store, nil
 }
 
 // scanResult carries the report plus the deferred state commit: the state
@@ -955,65 +948,87 @@ func collectReadOnlyEnrichment(ctx context.Context, c backendpkg.Backend, rules 
 	if candidate {
 		return nil, nil, nil, nil
 	}
-	var provenance []backendpkg.ProvenanceEvidence
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
+	}
+	var (
+		provenance  []backendpkg.ProvenanceEvidence
+		lineage     []backendpkg.LineageEvidence
+		summaryRuns []backendpkg.SummaryRuleRunEvidence
+		wg          sync.WaitGroup
+	)
 	if provider, ok := c.(backendpkg.ProvenanceProvider); ok {
-		enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
-		items, err := provider.ProvenanceEvidence(enrichmentCtx, rules)
-		cancel()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, nil, ctx.Err()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
+			items, err := provider.ProvenanceEvidence(enrichmentCtx, rules)
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				observedAt := time.Now().UTC()
+				items = make([]backendpkg.ProvenanceEvidence, 0, len(rules))
+				for _, rule := range rules {
+					items = append(items, backendpkg.ProvenanceEvidence{
+						RuleID: rule.ID, BackendObjectID: rule.BackendObjectID,
+						Provenance: backendpkg.ProvenanceRef{Kind: "backend_rule_provenance"},
+						Status:     backendpkg.EvidenceUnavailable, Method: "backend-provenance",
+						ObservedAt: observedAt, Detail: "rule provenance could not be read",
+					})
+				}
 			}
-			observedAt := time.Now().UTC()
-			items = make([]backendpkg.ProvenanceEvidence, 0, len(rules))
-			for _, rule := range rules {
-				items = append(items, backendpkg.ProvenanceEvidence{
-					RuleID: rule.ID, BackendObjectID: rule.BackendObjectID,
-					Provenance: backendpkg.ProvenanceRef{Kind: "backend_rule_provenance"},
-					Status:     backendpkg.EvidenceUnavailable, Method: "backend-provenance",
-					ObservedAt: observedAt, Detail: "rule provenance could not be read",
-				})
-			}
-		}
-		provenance = items
+			provenance = items
+		}()
 	}
-	var lineage []backendpkg.LineageEvidence
 	if provider, ok := c.(backendpkg.LineageProvider); ok {
-		enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
-		items, err := provider.LineageEvidence(enrichmentCtx, rules)
-		cancel()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, nil, ctx.Err()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
+			items, err := provider.LineageEvidence(enrichmentCtx, rules)
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				items = []backendpkg.LineageEvidence{{
+					Kind:   "backend_lineage_inventory",
+					Input:  backendpkg.DependencyRef{Kind: "unavailable_lineage_input"},
+					Output: backendpkg.DependencyRef{Kind: "unavailable_lineage_output"},
+					Status: backendpkg.EvidenceUnavailable, Method: "backend-lineage",
+					ObservedAt: time.Now().UTC(), Detail: "source lineage could not be read",
+				}}
 			}
-			items = []backendpkg.LineageEvidence{{
-				Kind:   "backend_lineage_inventory",
-				Input:  backendpkg.DependencyRef{Kind: "unavailable_lineage_input"},
-				Output: backendpkg.DependencyRef{Kind: "unavailable_lineage_output"},
-				Status: backendpkg.EvidenceUnavailable, Method: "backend-lineage",
-				ObservedAt: time.Now().UTC(), Detail: "source lineage could not be read",
-			}}
-		}
-		lineage = items
+			lineage = items
+		}()
 	}
-	var summaryRuns []backendpkg.SummaryRuleRunEvidence
 	if provider, ok := c.(backendpkg.SummaryRuleRunProvider); ok {
-		enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
-		items, err := provider.SummaryRuleRunEvidence(enrichmentCtx, rules)
-		cancel()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, nil, ctx.Err()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			enrichmentCtx, cancel := context.WithTimeout(ctx, readOnlyEnrichmentTimeout)
+			items, err := provider.SummaryRuleRunEvidence(enrichmentCtx, rules)
+			cancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				items = []backendpkg.SummaryRuleRunEvidence{{
+					ID:     "backend-summary-rule-runs",
+					Rule:   backendpkg.DependencyRef{Kind: "unavailable_summary_rule"},
+					Output: backendpkg.DependencyRef{Kind: "unavailable_summary_output"},
+					Status: backendpkg.EvidenceUnavailable, Method: "backend-summary-rule-runs",
+					ObservedAt: time.Now().UTC(), Detail: "summary-rule runtime evidence could not be read",
+				}}
 			}
-			items = []backendpkg.SummaryRuleRunEvidence{{
-				ID:     "backend-summary-rule-runs",
-				Rule:   backendpkg.DependencyRef{Kind: "unavailable_summary_rule"},
-				Output: backendpkg.DependencyRef{Kind: "unavailable_summary_output"},
-				Status: backendpkg.EvidenceUnavailable, Method: "backend-summary-rule-runs",
-				ObservedAt: time.Now().UTC(), Detail: "summary-rule runtime evidence could not be read",
-			}}
-		}
-		summaryRuns = items
+			summaryRuns = items
+		}()
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, err
 	}
 	return provenance, lineage, summaryRuns, nil
 }
@@ -1050,42 +1065,70 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 			return scanResult{}, err
 		}
 	}
-	observedVersion := ""
+	var (
+		observedVersion string
+		rules           []backendpkg.Rule
+		rulesErr        error
+		all             []backendpkg.Source
+		sourcesErr      error
+		sourcesLoaded   bool
+		invWG           sync.WaitGroup
+	)
 	if provider, ok := c.(backendpkg.VersionProvider); ok {
 		// Product version is useful report evidence, but a restricted root API
 		// must not turn an otherwise valid scan into an error.
-		versionCtx, versionCancel := context.WithTimeout(ctx, 5*time.Second)
-		version, verr := provider.Version(versionCtx)
-		versionCancel()
-		if verr == nil {
-			observedVersion = version
-		}
+		invWG.Add(1)
+		go func() {
+			defer invWG.Done()
+			versionCtx, versionCancel := context.WithTimeout(ctx, 5*time.Second)
+			version, verr := provider.Version(versionCtx)
+			versionCancel()
+			if verr == nil {
+				observedVersion = version
+			}
+		}()
 	}
-	var rules []backendpkg.Rule
+	// Sentinel Sources() inspects remote workspace references discovered during
+	// Rules(), whereas Elastic and OpenSearch source stats are independent of
+	// rule inventory and can run concurrently.
+	parallelSources := o.ruleFile == "" && c.Name() != "sentinel"
+	if parallelSources {
+		sourcesLoaded = true
+		invWG.Add(1)
+		go func() {
+			defer invWG.Done()
+			all, sourcesErr = c.Sources(ctx)
+		}()
+	}
 	if o.ruleFile != "" {
 		// Candidate mode: evaluate rules from a file against the live
 		// environment instead of the installed inventory.
 		data, rerr := os.ReadFile(o.ruleFile)
 		if rerr != nil {
+			invWG.Wait()
 			return scanResult{}, fmt.Errorf("reading rule file: %w", rerr)
 		}
 		parser, ok := c.(backendpkg.CandidateParser)
 		if !ok {
+			invWG.Wait()
 			return scanResult{}, fmt.Errorf("candidate-rule parsing is unavailable for backend %q", c.Name())
 		}
-		rules, err = parser.ParseCandidates(ctx, data)
+		rules, rulesErr = parser.ParseCandidates(ctx, data)
 	} else {
-		rules, err = c.Rules(ctx)
+		rules, rulesErr = c.Rules(ctx)
 	}
-	if err != nil {
-		return scanResult{}, err
+	invWG.Wait()
+	if rulesErr != nil {
+		return scanResult{}, rulesErr
 	}
 	if err := backendpkg.ValidateRuleIDs(rules); err != nil {
 		return scanResult{}, fmt.Errorf("invalid rule inventory: %w", err)
 	}
-	all, err := c.Sources(ctx)
-	if err != nil {
-		return scanResult{}, err
+	if !sourcesLoaded {
+		all, sourcesErr = c.Sources(ctx)
+	}
+	if sourcesErr != nil {
+		return scanResult{}, sourcesErr
 	}
 	resolver, ok := c.(backendpkg.Resolver)
 	if !ok {
@@ -1108,10 +1151,9 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 			}
 		}
 	}
-	// Runtime evidence is attached only after native resolution selects the
-	// bounded source set. Rebuild so verdicts see it without narrowing the
-	// full catalog used to prove missing tables.
-	g = graph.BuildResolved(rules, all, resolutions)
+	// Runtime evidence is attached in-place to the full catalog slice referenced
+	// by g.Sources so verdicts see updated freshness without rebuilding edges.
+	g.Sources = all
 
 	// Filters scope what the report lists and which sources get stateful
 	// assessments; verdicts always see the full inventory, so scoping can
@@ -1148,8 +1190,7 @@ func scanOnce(ctx context.Context, c backendpkg.Backend, o connOpts, instance, t
 			all[i].IngestLag = evidence
 		}
 	}
-	// Attach the measurements to the graph used by report impairment checks.
-	g = graph.BuildResolved(rules, all, resolutions)
+	g.Sources = all
 	predicateFreshnessEvidence, predicateFreshnessAssessment, err := collectPredicateFreshnessEvidence(ctx, c, rules, g, all, o.maxStale, o.policy)
 	if err != nil {
 		return scanResult{}, fmt.Errorf("reading predicate-qualified freshness evidence: %w", err)
@@ -1286,9 +1327,12 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	ctx, cancelTimeout := context.WithTimeout(ctx, o.timeout*time.Duration(len(insts)))
 	defer cancelTimeout()
+	var stderrMu sync.Mutex
 	run := func(inst fleetInstance, io connOpts) (scanResult, error) {
 		if !*jsonOut && interactiveOutput(stdout) && interactiveOutput(stderr) {
+			stderrMu.Lock()
 			fmt.Fprintf(stderr, "Scanning %s (read-only)…\n", terminalText(inst.backend.Name()))
+			stderrMu.Unlock()
 		}
 		sctx, cancel := context.WithTimeout(ctx, io.timeout)
 		defer cancel()
@@ -1384,6 +1428,9 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 }
 
 func validateScanOptions(o connOpts, htmlFile string) error {
+	if o.fleetConcurrency < 1 {
+		return fmt.Errorf("--fleet-concurrency must be at least 1")
+	}
 	if o.schemaTrack && o.stateFile == "" {
 		return fmt.Errorf("--schema requires --state-file")
 	}

@@ -741,13 +741,28 @@ func backingStream(index string) (string, bool) {
 // Data-stream freshness comes from _data_stream/_stats when available; plain
 // indices fall back to a bounded-concurrency size-0 max(@timestamp) aggregation.
 func (c *Client) Sources(ctx context.Context) ([]backend.Source, error) {
-	var ds dsStatsResponse
-	if err := c.do(ctx, http.MethodGet, "/_data_stream/_stats", nil, &ds); err != nil && !isStatus(err, http.StatusNotFound) {
-		return nil, fmt.Errorf("data stream stats: %w", err)
+	var (
+		ds     dsStatsResponse
+		cats   []catIndex
+		dsErr  error
+		catErr error
+		wg     sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		dsErr = c.do(ctx, http.MethodGet, "/_data_stream/_stats", nil, &ds)
+	}()
+	go func() {
+		defer wg.Done()
+		catErr = c.do(ctx, http.MethodGet, "/_cat/indices?format=json&h=index,docs.count,store.size&bytes=b", nil, &cats)
+	}()
+	wg.Wait()
+	if dsErr != nil && !isStatus(dsErr, http.StatusNotFound) {
+		return nil, fmt.Errorf("data stream stats: %w", dsErr)
 	}
-	var cats []catIndex
-	if err := c.do(ctx, http.MethodGet, "/_cat/indices?format=json&h=index,docs.count,store.size&bytes=b", nil, &cats); err != nil {
-		return nil, fmt.Errorf("listing indices: %w", err)
+	if catErr != nil {
+		return nil, fmt.Errorf("listing indices: %w", catErr)
 	}
 
 	streamDocs := make(map[string]int64)

@@ -2,11 +2,16 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/alephnull-sh/deadair/internal/report"
 )
 
 func TestFleetNamesAndStatePaths(t *testing.T) {
@@ -121,5 +126,57 @@ func TestSingleOpenSearchCredentials(t *testing.T) {
 				t.Fatalf("valid=%v error=%v", tc.valid, err)
 			}
 		})
+	}
+}
+
+func TestScanFleetConcurrencyPreservesDeterministicOrderAndIsolatesFailures(t *testing.T) {
+	instances := []fleetInstance{
+		{name: "tenant-alpha"},
+		{name: "tenant-beta"},
+		{name: "tenant-gamma"},
+		{name: "tenant-delta"},
+	}
+	var active, maxActive atomic.Int32
+	stateBase := filepath.Join(t.TempDir(), "state.json")
+	fleetReport, commits := scanFleet(instances, connOpts{fleetConcurrency: 3, stateFile: stateBase}, func(inst fleetInstance, io connOpts) (scanResult, error) {
+		cur := active.Add(1)
+		for {
+			prev := maxActive.Load()
+			if cur <= prev || maxActive.CompareAndSwap(prev, cur) {
+				break
+			}
+		}
+		defer active.Add(-1)
+		// Deliberately make earlier instances finish slower than later ones.
+		if inst.name == "tenant-alpha" {
+			time.Sleep(25 * time.Millisecond)
+		} else {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if inst.name == "tenant-beta" {
+			return scanResult{}, errors.New("connection refused")
+		}
+		return scanResult{
+			report: &report.Report{Backend: "elastic"},
+			path:   io.stateFile,
+		}, nil
+	})
+	if maxActive.Load() < 2 || maxActive.Load() > 3 {
+		t.Fatalf("max concurrent fleet workers = %d, want 2..3", maxActive.Load())
+	}
+	if len(fleetReport.Instances) != 3 ||
+		fleetReport.Instances[0].Instance != "tenant-alpha" ||
+		fleetReport.Instances[1].Instance != "tenant-gamma" ||
+		fleetReport.Instances[2].Instance != "tenant-delta" {
+		t.Fatalf("fleet instance order = %+v", fleetReport.Instances)
+	}
+	if len(fleetReport.Errors) != 1 || fleetReport.Errors[0].Instance != "tenant-beta" {
+		t.Fatalf("fleet errors = %+v", fleetReport.Errors)
+	}
+	if len(commits) != 3 ||
+		filepath.Base(commits[0].path) != "state.json.tenant-alpha" ||
+		filepath.Base(commits[1].path) != "state.json.tenant-gamma" ||
+		filepath.Base(commits[2].path) != "state.json.tenant-delta" {
+		t.Fatalf("commits order = %+v", commits)
 	}
 }

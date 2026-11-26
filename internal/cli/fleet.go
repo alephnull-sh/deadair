@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	backendpkg "github.com/alephnull-sh/deadair/internal/backend"
 	"github.com/alephnull-sh/deadair/internal/backend/elastic"
@@ -302,32 +303,69 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 	return out, nil
 }
 
-// scanFleet scans every instance sequentially (SIEM-safe: one tenant at a
-// time) and tolerates per-instance failures: one dead tenant connection must
-// not hide the other eleven. State files are per-instance to keep tenants'
-// baselines apart.
+// scanFleet scans every instance (sequentially by default, or up to
+// o.fleetConcurrency in parallel) and tolerates per-instance failures: one
+// dead tenant connection must not hide the other eleven. Results are always
+// assembled in deterministic input order, and state files stay per-instance.
 func scanFleet(instances []fleetInstance, o connOpts, run func(fleetInstance, connOpts) (scanResult, error)) (*report.FleetReport, []scanResult) {
-	var reports []*report.Report
-	var errs []report.InstanceError
-	var commits []scanResult
-	for _, inst := range instances {
+	type instanceOutcome struct {
+		result scanResult
+		err    *report.InstanceError
+	}
+	outcomes := make([]instanceOutcome, len(instances))
+	evalInstance := func(idx int, inst fleetInstance) {
 		io := o
 		if o.stateFile != "" && len(instances) > 1 {
 			var err error
 			io.stateFile, err = fleetStatePath(o.stateFile, inst.name)
 			if err != nil {
-				errs = append(errs, report.InstanceError{Instance: inst.name, Error: err.Error()})
-				continue
+				outcomes[idx] = instanceOutcome{err: &report.InstanceError{Instance: inst.name, Error: err.Error()}}
+				return
 			}
 		}
 		res, err := run(inst, io)
 		if err != nil {
-			errs = append(errs, report.InstanceError{Instance: inst.name, Error: err.Error()})
-			continue
+			outcomes[idx] = instanceOutcome{err: &report.InstanceError{Instance: inst.name, Error: err.Error()}}
+			return
 		}
 		res.report.Instance = inst.name
-		reports = append(reports, res.report)
-		commits = append(commits, res)
+		outcomes[idx] = instanceOutcome{result: res}
+	}
+
+	if o.fleetConcurrency > 1 && len(instances) > 1 {
+		workers := o.fleetConcurrency
+		if workers > len(instances) {
+			workers = len(instances)
+		}
+		sem := make(chan struct{}, workers)
+		var wg sync.WaitGroup
+		for i, inst := range instances {
+			i, inst := i, inst
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				evalInstance(i, inst)
+			}()
+		}
+		wg.Wait()
+	} else {
+		for i, inst := range instances {
+			evalInstance(i, inst)
+		}
+	}
+
+	var reports []*report.Report
+	var errs []report.InstanceError
+	var commits []scanResult
+	for _, out := range outcomes {
+		if out.err != nil {
+			errs = append(errs, *out.err)
+			continue
+		}
+		reports = append(reports, out.result.report)
+		commits = append(commits, out.result)
 	}
 	return report.BuildFleetWithVersion(reports, errs, Version), commits
 }

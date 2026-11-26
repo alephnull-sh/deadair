@@ -581,14 +581,50 @@ func (c *Client) listSummaryLogs(ctx context.Context) ([]summaryLogJSON, error) 
 		return nil, err
 	}
 	c.summaryLogsMu.Lock()
-	defer c.summaryLogsMu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if c.summaryLogsCached {
+		rules := cloneSummaryLogs(c.summaryLogs)
+		c.summaryLogsMu.Unlock()
+		return rules, nil
+	}
+	if flight := c.summaryLogsFlight; flight != nil {
+		c.summaryLogsMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-flight.done:
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if flight.err != nil {
+				return nil, flight.err
+			}
+			return cloneSummaryLogs(flight.rules), nil
+		}
+	}
+	flight := &summaryLogsFlight{done: make(chan struct{})}
+	c.summaryLogsFlight = flight
+	c.summaryLogsMu.Unlock()
+
+	rules, err := c.fetchSummaryLogs(ctx)
+
+	c.summaryLogsMu.Lock()
+	flight.rules = cloneSummaryLogs(rules)
+	flight.err = err
+	if err == nil {
+		c.summaryLogs = cloneSummaryLogs(rules)
+		c.summaryLogsCached = true
+	}
+	c.summaryLogsFlight = nil
+	close(flight.done)
+	c.summaryLogsMu.Unlock()
+
+	if err != nil {
 		return nil, err
 	}
-	if c.summaryLogsCached {
-		return cloneSummaryLogs(c.summaryLogs), nil
-	}
+	return cloneSummaryLogs(rules), nil
+}
 
+func (c *Client) fetchSummaryLogs(ctx context.Context) ([]summaryLogJSON, error) {
 	target := c.armEndpoint() + c.workspaceResourcePath() +
 		"/summaryLogs?api-version=" + url.QueryEscape(summaryLogsAPIVersion)
 	seen := make(map[string]bool)
@@ -607,9 +643,7 @@ func (c *Client) listSummaryLogs(ctx context.Context) ([]summaryLogJSON, error) 
 		}
 		rules = append(rules, response.Value...)
 		if strings.TrimSpace(response.NextLink) == "" {
-			c.summaryLogs = cloneSummaryLogs(rules)
-			c.summaryLogsCached = true
-			return cloneSummaryLogs(c.summaryLogs), nil
+			return rules, nil
 		}
 		next, err := c.nextARMPage(target, response.NextLink)
 		if err != nil {
