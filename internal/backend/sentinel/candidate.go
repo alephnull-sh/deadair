@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/alephnull-sh/deadair/internal/backend"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 var armReferenceRE = regexp.MustCompile(`(?i)^\[\s*(parameters|variables)\(\s*'([^']+)'\s*\)\s*\]$`)

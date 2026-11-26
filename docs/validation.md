@@ -7,8 +7,8 @@ in CI, what was checked manually, and what remains unproven. For finding termino
 
 ## Test coverage
 
-The live CI matrix covers Elastic Security 8.19.19 and 9.4.4, plus OpenSearch Security Analytics
-2.19.6 and 3.7.0. Sentinel unit and contract tests run with the normal Go suite. The live Sentinel
+The live CI matrix covers Elastic Security 8.19.25 and 9.5.6, plus OpenSearch Security Analytics
+2.19.7 and 3.10.0. Sentinel unit and contract tests run with the normal Go suite. The live Sentinel
 conformance test is opt-in and does not run on a schedule.
 
 | Area | Evidence |

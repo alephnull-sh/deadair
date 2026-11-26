@@ -193,8 +193,8 @@ Fleet behavior:
 
 | Backend | Live validation |
 |---|---|
-| Elastic Security | trusted CI on 8.19.19 and 9.4.4 |
-| OpenSearch Security Analytics | trusted CI on 2.19.6 and 3.7.0 |
+| Elastic Security | trusted CI on 8.19.25 and 9.5.6 |
+| OpenSearch Security Analytics | trusted CI on 2.19.7 and 3.10.0 |
 | Microsoft Sentinel | recorded opt-in conformance in disposable UK South workspaces |
 
 Sentinel conformance is manual. See [validation status](validation.md) for the live cases and the

@@ -21,7 +21,7 @@ import (
 // touches: one healthy data stream, one unused data stream, one stale plain
 // index, and five rules covering every classification path.
 func fixtureServer(t *testing.T) *httptest.Server {
-	return fixtureServerOptions(t, "9.4.4", 0)
+	return fixtureServerOptions(t, "9.5.6", 0)
 }
 
 func fixtureServerOptions(t *testing.T, version string, resolveStatus int) *httptest.Server {
@@ -134,7 +134,7 @@ func TestScanEndToEnd(t *testing.T) {
 		s.UnusedTelemetryAssessment != report.UnusedAssessmentUnavailable {
 		t.Errorf("summary = %+v", s)
 	}
-	if r.SchemaVersion != report.ReportSchemaVersion || r.Producer.Name != "deadair" || r.BackendMetadata.ObservedVersion != "9.4.4" {
+	if r.SchemaVersion != report.ReportSchemaVersion || r.Producer.Name != "deadair" || r.BackendMetadata.ObservedVersion != "9.5.6" {
 		t.Errorf("report contract metadata = schema %q producer %+v backend %+v", r.SchemaVersion, r.Producer, r.BackendMetadata)
 	}
 	if len(r.InputResolutions) != 5 || s.InputResolution.Resolved != 3 || s.InputResolution.Empty != 1 || s.InputResolution.Unsupported != 1 {
@@ -670,7 +670,7 @@ func opensearchFixtureServer(t *testing.T) *httptest.Server {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprint(w, `{"version":{"number":"3.7.0"}}`)
+		fmt.Fprint(w, `{"version":{"number":"3.10.0"}}`)
 	})
 	return httptest.NewServer(mux)
 }
@@ -695,7 +695,7 @@ func TestScanOpenSearchEndToEnd(t *testing.T) {
 	if r.Backend != "opensearch" {
 		t.Errorf("backend = %q, want opensearch", r.Backend)
 	}
-	if r.BackendMetadata.ObservedVersion != "3.7.0" {
+	if r.BackendMetadata.ObservedVersion != "3.10.0" {
 		t.Errorf("observed OpenSearch version = %q", r.BackendMetadata.ObservedVersion)
 	}
 	s := r.Summary
@@ -1165,7 +1165,7 @@ func TestCheck(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("check exit = %d; stderr: %s\nstdout: %s", code, stderr.String(), stdout.String())
 	}
-	for _, want := range []string{"READY", "backend version 9.4.4", "detection rules readable (5 rules)", "source inventory readable (3 sources)", "source schemas readable", "native input resolution readable (missing sources can be proved)", "next: deadair scan"} {
+	for _, want := range []string{"READY", "backend version 9.5.6", "detection rules readable (5 rules)", "source inventory readable (3 sources)", "source schemas readable", "native input resolution readable (missing sources can be proved)", "next: deadair scan"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("check output missing %q:\n%s", want, stdout.String())
 		}
@@ -1193,7 +1193,7 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("unsupported version check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 
-	denied := fixtureServerOptions(t, "9.4.4", http.StatusForbidden)
+	denied := fixtureServerOptions(t, "9.5.6", http.StatusForbidden)
 	defer denied.Close()
 	stdout.Reset()
 	stderr.Reset()
@@ -1203,7 +1203,7 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("resolution capability check exit = %d\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
 	}
 
-	dataViewDenied := fixtureServerCapabilities(t, "9.4.4", 0, http.StatusForbidden)
+	dataViewDenied := fixtureServerCapabilities(t, "9.5.6", 0, http.StatusForbidden)
 	defer dataViewDenied.Close()
 	stdout.Reset()
 	stderr.Reset()

@@ -10,7 +10,7 @@ deadair needs read access to three things:
 It does not need document writes, rule writes, index management, cluster admin, or Kibana write
 privileges.
 
-Live integration tests cover Elastic 8.19.19 and 9.4.4. Each version is scanned with only this role.
+Live integration tests cover Elastic 8.19.25 and 9.5.6. Each version is scanned with only this role.
 The tests exercise native input resolution and require representative write attempts to return
 `403`.
 

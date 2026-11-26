@@ -8,7 +8,7 @@ deadair needs read access to two things:
 
 It does not need detector writes, document writes, index management, or user/role management.
 
-Live integration tests cover OpenSearch 2.19.6 and 3.7.0. Each version is scanned with only the
+Live integration tests cover OpenSearch 2.19.7 and 3.10.0. Each version is scanned with only the
 roles below. The tests exercise native input resolution and require representative write attempts
 to be rejected.
 

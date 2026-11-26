@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/alephnull-sh/deadair/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/alephnull-sh/deadair/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/alephnull-sh/deadair/releases"><img alt="Release" src="https://img.shields.io/github/v/release/alephnull-sh/deadair"></a>
-  <img alt="Go 1.26" src="https://img.shields.io/badge/go-1.26-00ADD8">
+  <img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-00ADD8">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
 
@@ -223,8 +223,8 @@ to test in your own environment.
 
 | Backend | Live validation |
 |---|---|
-| Elastic Security | trusted CI on 8.19.19 and 9.4.4 |
-| OpenSearch Security Analytics | trusted CI on 2.19.6 and 3.7.0 |
+| Elastic Security | trusted CI on 8.19.25 and 9.5.6 |
+| OpenSearch Security Analytics | trusted CI on 2.19.7 and 3.10.0 |
 | Microsoft Sentinel | recorded opt-in conformance in disposable UK South workspaces; see [validation status](docs/validation.md#sentinel-live-conformance) |
 
 The Sentinel conformance run is manual, not scheduled CI.

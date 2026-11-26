@@ -156,12 +156,12 @@ func TestAssessBackendVersion(t *testing.T) {
 		version string
 		want    BackendVersionStatus
 	}{
-		{"elastic", "9.4.4", BackendVersionTested},
-		{"elastic", "8.19.19", BackendVersionTested},
+		{"elastic", "9.5.6", BackendVersionTested},
+		{"elastic", "8.19.25", BackendVersionTested},
 		{"elastic", "8.19.99", BackendVersionBestEffort},
 		{"elastic", "7.17.0", BackendVersionUnsupported},
-		{"opensearch", "3.7.0", BackendVersionTested},
-		{"opensearch", "2.19.6", BackendVersionTested},
+		{"opensearch", "3.10.0", BackendVersionTested},
+		{"opensearch", "2.19.7", BackendVersionTested},
 		{"opensearch", "2.20.0", BackendVersionBestEffort},
 		{"opensearch", "future", BackendVersionUnsupported},
 		{"unknown", "1.0.0", BackendVersionUnsupported},
