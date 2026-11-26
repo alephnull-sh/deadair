@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	_ "time/tzdata"
 
 	"github.com/alephnull-sh/deadair/internal/cli"
 )

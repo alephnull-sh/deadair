@@ -173,11 +173,18 @@ func (p *Policy) validate(now time.Time) error {
 			return fmt.Errorf("sources contains duplicate pattern %q", source.Pattern)
 		}
 		seenPatterns[source.Pattern] = true
-		d, err := time.ParseDuration(source.MaxStale)
-		if err != nil || d <= 0 {
-			return fmt.Errorf("sources[%d].max_stale must be a positive duration", i)
+		source.MaxStale = strings.TrimSpace(source.MaxStale)
+		source.Owner = strings.TrimSpace(source.Owner)
+		source.Runbook = strings.TrimSpace(source.Runbook)
+		if source.MaxStale != "" {
+			d, err := time.ParseDuration(source.MaxStale)
+			if err != nil || d <= 0 {
+				return fmt.Errorf("sources[%d].max_stale must be a positive duration", i)
+			}
+			source.duration = d
+		} else if source.Owner == "" && source.Runbook == "" {
+			return fmt.Errorf("sources[%d] requires max_stale, owner, or runbook", i)
 		}
-		source.duration = d
 		if !safePolicyText(source.Owner) || !validRunbook(source.Runbook) {
 			return fmt.Errorf("sources[%d] requires a printable owner and an HTTP(S) runbook URL without credentials", i)
 		}
@@ -249,7 +256,7 @@ func (p *Policy) maxStale(source string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	for _, configured := range p.Sources {
-		if graph.Match(configured.Pattern, source) {
+		if configured.duration > 0 && graph.Match(configured.Pattern, source) {
 			return configured.duration
 		}
 	}

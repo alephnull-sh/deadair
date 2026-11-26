@@ -219,7 +219,7 @@ func addBackendFlags(fs *flag.FlagSet, o *connOpts) {
 	fs.StringVar(&o.sentinelRemotesFile, "sentinel-remotes", os.Getenv("DEADAIR_SENTINEL_REMOTES"), "JSON file explicitly mapping literal workspace() targets (env DEADAIR_SENTINEL_REMOTES)")
 	fs.StringVar(&o.apiKeyFile, "api-key-file", "", "file containing the API key (default: env DEADAIR_API_KEY)")
 	fs.DurationVar(&o.timeout, "timeout", 60*time.Second, "overall timeout per scan")
-	fs.IntVar(&o.concurrency, "concurrency", 4, "max parallel source-health and input-resolution queries")
+	fs.IntVar(&o.concurrency, "concurrency", 4, "max parallel source-health and input-resolution queries (Sentinel caps at 2)")
 	fs.StringVar(&o.caCert, "ca-cert", "", "PEM file with the CA that signed the SIEM's TLS certificate")
 	fs.BoolVar(&o.insecureTLS, "insecure-skip-verify", false, "skip TLS certificate verification (testing only)")
 	fs.StringVar(&o.kibanaSpace, "kibana-space", "", "Kibana space holding the detection rules (default: default space)")

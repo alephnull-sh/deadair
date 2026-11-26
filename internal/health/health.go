@@ -5,13 +5,16 @@
 package health
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/alephnull-sh/deadair/internal/backend"
+	"github.com/alephnull-sh/deadair/internal/graph"
 )
 
 // Status is the health verdict for a source.
@@ -136,7 +139,7 @@ func (c Check) InDowntime(source string, t time.Time) bool {
 
 // Matches reports whether source is inside this expected downtime window.
 func (w DowntimeWindow) Matches(source string, t time.Time) bool {
-	if len(w.Patterns) == 0 || !matchAny(w.Patterns, source) {
+	if len(w.Patterns) == 0 || !graph.MatchAny(w.Patterns, source) {
 		return false
 	}
 	loc := w.Location
@@ -175,14 +178,24 @@ type downtimeWindow struct {
 	Timezone string   `json:"timezone,omitempty"`
 }
 
-// LoadDowntimeFile reads expected downtime windows from JSON.
+// LoadDowntimeFile reads expected downtime windows from JSON. Unknown fields
+// and trailing documents are rejected so a misspelled key (for example "tz"
+// instead of "timezone") cannot silently fall back to UTC.
 func LoadDowntimeFile(path string) ([]DowntimeWindow, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading downtime file: %w", err)
 	}
 	var in downtimeFile
-	if err := json.Unmarshal(data, &in); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		return nil, fmt.Errorf("parsing downtime file: %w", err)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			err = fmt.Errorf("multiple JSON values")
+		}
 		return nil, fmt.Errorf("parsing downtime file: %w", err)
 	}
 	out := make([]DowntimeWindow, 0, len(in.Windows))
@@ -263,37 +276,4 @@ func parseWeekday(value string) (time.Weekday, error) {
 	default:
 		return 0, fmt.Errorf("unknown day %q", value)
 	}
-}
-
-func matchAny(patterns []string, name string) bool {
-	for _, p := range patterns {
-		if match(p, name) {
-			return true
-		}
-	}
-	return false
-}
-
-func match(pattern, name string) bool {
-	px, nx := 0, 0
-	star, mark := -1, 0
-	for nx < len(name) {
-		switch {
-		case px < len(pattern) && pattern[px] == '*':
-			star, mark = px, nx
-			px++
-		case px < len(pattern) && pattern[px] == name[nx]:
-			px++
-			nx++
-		case star >= 0:
-			mark++
-			px, nx = star+1, mark
-		default:
-			return false
-		}
-	}
-	for px < len(pattern) && pattern[px] == '*' {
-		px++
-	}
-	return px == len(pattern)
 }

@@ -49,7 +49,7 @@ Connection:
   --insecure-skip-verify      disable TLS verification (lab use only)
   --kibana-space NAME         Kibana space containing the rules
   --timeout DURATION          overall timeout per instance (default: 1m)
-  --concurrency N             parallel backend reads (default: 4)
+  --concurrency N             parallel backend reads (default: 4; Sentinel caps at 2)
 
 Output:
   --json                      print JSON instead of the terminal report
@@ -112,7 +112,7 @@ Connection:
   --insecure-skip-verify      disable TLS verification (lab use only)
   --kibana-space NAME         Kibana space containing the rules
   --timeout DURATION          timeout per instance (default: 1m)
-  --concurrency N             parallel backend reads (default: 4)
+  --concurrency N             parallel backend reads (default: 4; Sentinel caps at 2)
   --fleet FILE                check instances listed in a fleet JSON file
   --instance-name NAME        label a single instance
 
@@ -190,7 +190,7 @@ Connection and scan:
   --ca-cert FILE              trust the PEM certificate authority in FILE
   --kibana-space NAME         Kibana space containing the rules
   --timeout DURATION          timeout per instance (default: 1m)
-  --concurrency N             parallel backend reads (default: 4)
+  --concurrency N             parallel backend reads (default: 4; Sentinel caps at 2)
   --fleet FILE                scan instances listed in a fleet JSON file
   --include PATTERN           include matching sources; repeatable
   --exclude PATTERN           exclude matching sources; repeatable

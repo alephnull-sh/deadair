@@ -1,6 +1,8 @@
 package health
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -175,5 +177,32 @@ func TestDegraded(t *testing.T) {
 	}
 	if StatusUnknown.Degraded() || StatusOK.Degraded() {
 		t.Error("ok and unknown must not be findings")
+	}
+}
+
+func TestLoadDowntimeFileStrictness(t *testing.T) {
+	dir := t.TempDir()
+	valid := filepath.Join(dir, "valid.json")
+	if err := os.WriteFile(valid, []byte(`{"windows":[{"name":"uk-patch","sources":["logs-*"],"days":["sat"],"start":"22:00","end":"23:00","timezone":"Europe/London"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	windows, err := LoadDowntimeFile(valid)
+	if err != nil || len(windows) != 1 || windows[0].Location.String() != "Europe/London" {
+		t.Fatalf("LoadDowntimeFile(valid) = %+v, %v", windows, err)
+	}
+
+	for name, body := range map[string]string{
+		"unknown-field": `{"windows":[{"name":"typo","sources":["logs-*"],"start":"22:00","end":"23:00","tz":"Europe/London"}]}`,
+		"trailing-doc":  `{"windows":[]}{"extra":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(dir, name+".json")
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadDowntimeFile(p); err == nil {
+				t.Fatalf("expected error for %s, got nil", name)
+			}
+		})
 	}
 }

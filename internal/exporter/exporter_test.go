@@ -164,13 +164,34 @@ func TestMetricsMaintenanceFreshnessEmitted(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
-	r := &report.Report{GeneratedAt: time.Unix(1000, 0), Instance: "elastic"}
-	r.Sources = []report.SourceHealth{{Name: "maint-src", Status: "maintenance", AgeSeconds: 4200}}
+	r := &report.Report{
+		GeneratedAt: time.Unix(1000, 0),
+		Instance:    "elastic",
+		Policy:      &report.PolicySummary{Version: 1, GateClasses: []string{report.FindingDead}, AcceptedActive: 1},
+		Findings: []report.Finding{
+			{ID: "f-accepted", Class: report.FindingDead, Gates: false},
+			{ID: "f-gated", Class: report.FindingImpaired, Gates: true},
+		},
+	}
+	r.Summary.DeadDetections = 1
+	r.Summary.ImpairedDetections = 1
+	r.Sources = []report.SourceHealth{
+		{Name: "maint-src", Status: "maintenance", ExpectedDowntime: true, AgeSeconds: 4200},
+		{Name: "live-src", Status: "ok", AgeSeconds: 10},
+	}
 	s.Update(fleetOf(r))
 
 	body := get(t, ts.URL+"/metrics")
-	if !strings.Contains(body, `deadair_source_freshness_seconds{instance="elastic",source="maint-src"} 4200`) {
-		t.Errorf("maintenance source must stay in the freshness series:\n%s", body)
+	for _, want := range []string{
+		`deadair_source_freshness_seconds{instance="elastic",source="maint-src"} 4200`,
+		`deadair_source_suppressed{instance="elastic",source="maint-src"} 1`,
+		`deadair_source_suppressed{instance="elastic",source="live-src"} 0`,
+		`deadair_findings_gated{instance="elastic",class="dead-detection"} 0`,
+		`deadair_findings_gated{instance="elastic",class="impaired-detection"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
 	}
 }
 
