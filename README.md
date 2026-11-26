@@ -79,7 +79,7 @@ deadair scan    # assess live rules and telemetry
 
 Exit codes are stable: `0` passes the configured gate, `1` means gated findings, and `2` means the scan failed.
 
-To investigate a source, expected producer, or individual detection from a saved report:
+To check a source, an expected producer, or a single rule in a saved report:
 
 ```sh
 deadair scan --json-out report.json --html-out report.html
@@ -97,7 +97,7 @@ individual Sentinel feeds, maintenance, and recovery tracking.
 | Inventory | reads enabled detections and the inputs they declare |
 | Resolve | uses native index resolution on Elastic and OpenSearch; on Sentinel, combines KQL analysis with table, watchlist, saved-function, ASIM, and mapped cross-workspace evidence |
 | Measure | checks source freshness and timing, plus schema and storage where the backend supports them |
-| Report | emits terminal, JSON, HTML, SARIF v2.1.0, fleet rollups, and Prometheus metrics with the evidence behind each verdict |
+| Report | emits terminal, JSON, HTML, SARIF, fleet rollups, and Prometheus metrics with the evidence behind each verdict |
 
 Sentinel follows the same rule-to-source model and adds literal watchlists, saved functions, ASIM
 parsers, mapped workspaces, and summary-table lineage. It also shows when a filtered slice of a
@@ -194,7 +194,7 @@ Use the documented read-only roles for
 ## CI, fleets, and monitoring
 
 ```sh
-# Gate candidate rule files or directories against live source availability, with SARIF output.
+# Check candidate rules or a rule directory against live sources.
 deadair scan --rule detections/windows/ --rule detections/new-rule.json --sarif-out deadair.sarif
 
 # Fail only on new regressions between reports.
@@ -203,20 +203,20 @@ deadair diff yesterday.json today.json
 # Scan multiple SIEM instances from one process.
 deadair scan --fleet fleet.json --fleet-concurrency 4
 
-# Export cached scan results as Prometheus metrics and keep the latest report on disk.
+# Serve Prometheus metrics and keep the latest report on disk.
 deadair serve --interval 5m --json-out latest.json
 ```
 
-`scan --rule` isolates backend-native candidate rules or directories from unrelated backlog. `diff`
-works with redacted reports created with the same caller-held key. Fleet configuration references
-secrets through environment variables or `0600` secret files (reloaded automatically on each `serve`
-cycle) rather than storing secret values inline.
+`scan --rule` checks candidate rules against live telemetry without counting existing backlog. `diff`
+works with redacted reports created with the same caller-held key. Fleet files point to environment
+variables or restricted secret files rather than storing secrets inline, and `serve` re-reads secret
+and certificate files on each scan.
 
 The [official GitHub Action](docs/usage.md#gate-detection-changes) wraps single-instance candidate
-gates for Elastic, OpenSearch, and Sentinel. It writes a job summary with a finding breakdown,
-uploads a redacted JSON report, optionally writes SARIF v2.1.0, and can apply a deadair policy
-without installing a rule. Sentinel workflows authenticate the runner to Azure first; the Action
-defines no Azure credential inputs.
+gates for Elastic, OpenSearch, and Sentinel. It summarizes any findings on the job page, uploads a
+redacted JSON report, and can write a SARIF file or apply a policy without installing a rule.
+Sentinel workflows authenticate the runner to Azure first; the Action defines no Azure credential
+inputs.
 
 See [CI gate behavior](docs/usage.md#gate-detection-changes),
 [fleet and MSSP deployment](docs/mssp.md), and the [Prometheus examples](contrib/) for configurations

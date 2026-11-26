@@ -16,9 +16,9 @@ deadair inspect --rule "PowerShell from legacy endpoints" report.json
 ```
 
 The source view lists its enabled consumers in severity order, the freshness observation, and a
-first check based on the evidence. The rule view shows the rule's verdict, native selector
-resolutions, required-field and dependency evidence, provenance, and lag margins. The HTML report
-has the same source view. A source that has stopped reporting points you toward the sender and
+first check based on the evidence. The rule view shows why a rule is healthy, impaired, or unable to
+fire, along with its resolved inputs, missing fields, dependencies, and lag. The HTML report shows
+the same source breakdown. A source that has stopped reporting points you toward the sender and
 collector; a missing field points you toward the mapping and ingestion transform.
 
 Add `--links` to include native SIEM and runbook URLs in the terminal. They're always clickable in
@@ -61,8 +61,8 @@ Use the values recorded in your table, and choose a threshold that matches norma
 All configured fields must match. You can define up to 20 feeds; each distinct table, selector and
 clock uses one bounded query over a local Analytics table. The maximum threshold is 24 hours.
 
-Use a workspace-specific policy for these expectations. In a fleet file, set `"policy_file"` on the
-Sentinel instance so its producer expectations do not apply to unrelated workspaces.
+Use a workspace-specific policy for these expectations. In a fleet file, set `policy_file` on that
+workspace's entry so its feed expectations stay scoped to that workspace.
 
 ```sh
 deadair scan --policy policy.json --state-file state.json --json-out report.json
@@ -109,7 +109,7 @@ Add `producer:<id>` to a downtime file to suppress just that feed's alert:
 }]}
 ```
 
-Pass it with `--downtime-file downtime.json` (or `"downtime_file"` on a fleet instance). Using the
+Pass it with `--downtime-file downtime.json`, or set `downtime_file` on the fleet instance. Using the
 table name instead suppresses every configured producer on that table. The stale observation remains
 visible during maintenance; only the alert is suppressed. Maintenance isn't recovery.
 
@@ -149,8 +149,8 @@ owner; route a quiet firewall feed to the team that owns its delivery path.
 
 ## Add an owner and runbook to a source
 
-Source policies accept optional contact fields (`max_stale` may be omitted when you want to keep the
-default freshness window):
+Source policies take optional contact fields. Leave `max_stale` out if the default freshness window
+is fine:
 
 ```json
 {"version": 1, "gate_classes": ["dead-detection", "impaired-detection", "source-degraded", "volume-low", "schema-drift"], "sources": [{

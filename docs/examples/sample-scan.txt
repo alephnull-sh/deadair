@@ -1,4 +1,4 @@
-deadair · elastic · 5 Sep 2026, 16:00 UTC
+deadair · elastic · 26 Nov 2026, 02:10 UTC
 
 2 detections can't fire
   [high] Sysmon registry run-key modification — no matching source ·
@@ -16,12 +16,12 @@ Sources to investigate
   cloudflare-firewall-prod — p95 ingest lag 44m59s
   okta-system-events-prod — stale
 
-unused telemetry: 1 source, 6.9 KiB stored with no enabled detection reading it
-  dns-query-events-prod (6.9 KiB)
+unused telemetry: 1 source, 7.0 KiB stored with no enabled detection reading it
+  dns-query-events-prod (7.0 KiB)
 
 Scanned 5 enabled detections · 5 sources
   Sources: 4 ok, 1 stale
   Inputs: 4 resolved, 1 missing
 
 Policy: findings matched the gate · exit 1
-Inspect: deadair inspect -- sample-report.json
+Inspect: deadair inspect sample-report.json

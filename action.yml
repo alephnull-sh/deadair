@@ -49,13 +49,13 @@ inputs:
     description: Path to a JSON file mapping literal workspace() targets for cross-workspace rules
     required: false
   candidate-rule:
-    description: Candidate rule file(s) or directory(s) to assess without installing (newline-separated for multiple paths)
+    description: Candidate rule file or directory to check without installing; put multiple paths on separate lines
     required: false
   policy-file:
     description: Path to a deadair policy file that controls which findings gate the scan
     required: false
   sarif-out:
-    description: Optional path to write a SARIF v2.1.0 report for GitHub Code Scanning
+    description: Write a SARIF 2.1.0 report to this path for GitHub Code Scanning
     required: false
   scan-args:
     description: Extra space-separated assessment, TLS, and namespace flags; use dedicated inputs for backend, endpoint, credential, Sentinel topology, output, redaction, policy, and candidate options

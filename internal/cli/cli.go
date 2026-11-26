@@ -1609,7 +1609,7 @@ func printPlainSummary(w io.Writer, r *report.Report) {
 		}
 	}
 	if len(r.ImpairedDetections) > 0 {
-		if terminalFindingHeadline(r) != countLabel(s.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility") {
+		if !strings.HasSuffix(terminalFindingHeadline(r), "reduced visibility") {
 			visualHeading(w, "33;1", "Reduced visibility", len(r.ImpairedDetections))
 		}
 		for i, d := range r.ImpairedDetections {

@@ -15,9 +15,47 @@ type sourceAttention struct {
 	reasons []string
 }
 
+func candidateSources(r *report.Report) map[string]bool {
+	if r == nil || r.Scope.Mode != "candidate" {
+		return nil
+	}
+	allowed := make(map[string]bool)
+	add := func(names ...string) {
+		for _, n := range names {
+			if n != "" {
+				allowed[n] = true
+			}
+		}
+	}
+	for _, res := range r.InputResolutions {
+		add(res.ResolvedSources...)
+	}
+	for _, d := range r.DeadDetections {
+		add(d.Sources...)
+	}
+	for _, d := range r.ImpairedDetections {
+		add(d.Sources...)
+		add(d.LagSources...)
+		add(d.IncompatibleSources...)
+	}
+	for _, fe := range r.RequiredFieldEvidence {
+		for _, s := range fe.Sources {
+			add(s.Source)
+		}
+	}
+	for _, slice := range r.RuleSourceFreshness {
+		add(slice.Source)
+	}
+	return allowed
+}
+
 func sourceAttentionItems(r *report.Report) []sourceAttention {
+	allowed := candidateSources(r)
 	items := make([]sourceAttention, 0, r.Summary.DegradedSources+r.Summary.VolumeLowSources+r.Summary.SchemaDriftSources)
 	for _, source := range r.Sources {
+		if allowed != nil && !allowed[source.Name] {
+			continue
+		}
 		var reasons []string
 		switch source.Status {
 		case "stale":
@@ -70,7 +108,7 @@ func printVisualSummary(w io.Writer, r *report.Report) {
 	}
 
 	if len(r.ImpairedDetections) > 0 {
-		if terminalFindingHeadline(r) != countLabel(s.ImpairedDetections, "detection has reduced visibility", "detections have reduced visibility") {
+		if !strings.HasSuffix(terminalFindingHeadline(r), "reduced visibility") {
 			visualHeading(w, "33;1", "Reduced visibility", len(r.ImpairedDetections))
 		}
 		for i, d := range r.ImpairedDetections {
@@ -173,20 +211,27 @@ func printScanHeading(w io.Writer, r *report.Report) {
 	}
 	context = append(context, r.GeneratedAt.UTC().Format("2 Jan 2006, 15:04 UTC"))
 	fmt.Fprintln(w, strings.Join(context, " · "))
+	headline := terminalFindingHeadline(r)
 	code := "1"
 	if terminalGateExitCode(r) == report.ExitError {
 		code = "33;1"
 	} else if r.Summary.DeadDetections > 0 {
 		code = "31;1"
-	} else if terminalFindingHeadline(r) != "Scan complete" {
+	} else if headline == "Candidate passed" {
+		code = "32;1"
+	} else if headline != "Scan complete" {
 		code = "33;1"
 	}
-	fmt.Fprintf(w, "\n%s\n", color(w, code, terminalFindingHeadline(r)))
+	fmt.Fprintf(w, "\n%s\n", color(w, code, headline))
 }
 
 func printScanDetails(w io.Writer, r *report.Report) {
 	s := r.Summary
-	fmt.Fprintf(w, "\nScanned %s · %s\n", countLabel(s.EnabledRules, "enabled detection", "enabled detections"), countLabel(s.Sources, "source", "sources"))
+	ruleLabel := countLabel(s.EnabledRules, "enabled detection", "enabled detections")
+	if r.Scope.Mode == "candidate" {
+		ruleLabel = countLabel(s.EnabledRules, "candidate detection", "candidate detections")
+	}
+	fmt.Fprintf(w, "\nScanned %s · %s\n", ruleLabel, countLabel(s.Sources, "source", "sources"))
 	counts := map[string]int{}
 	for _, src := range r.Sources {
 		counts[src.Status]++
@@ -391,6 +436,18 @@ func sentinelSignalNote(r *report.Report) string {
 func terminalFindingHeadline(r *report.Report) string {
 	if terminalGateExitCode(r) == report.ExitError {
 		return "Scan incomplete"
+	}
+	if r.Scope.Mode == "candidate" {
+		switch {
+		case r.Summary.DeadDetections > 0:
+			return countLabel(r.Summary.DeadDetections, "candidate detection can't fire", "candidate detections can't fire")
+		case r.Summary.ImpairedDetections > 0:
+			return countLabel(r.Summary.ImpairedDetections, "candidate detection has reduced visibility", "candidate detections have reduced visibility")
+		case terminalGateExitCode(r) == report.ExitFindings:
+			return "Candidate failed the gate"
+		default:
+			return "Candidate passed"
+		}
 	}
 	if r.Summary.DeadDetections > 0 {
 		return countLabel(r.Summary.DeadDetections, "detection can't fire", "detections can't fire")

@@ -412,8 +412,8 @@ policy that gates those classes can produce a different exit result.
 
 ## Gate detection changes
 
-Use `scan --rule` in detection-as-code pull requests (pass individual files, directories of `.json`,
-`.ndjson`, `.yaml`, or `.yml` rules, or repeat `--rule`):
+Use `scan --rule` in detection-as-code pull requests. Pass a file or a directory, or repeat `--rule`
+to check several paths in one pass:
 
 ```sh
 deadair scan --rule detections/windows/ --rule candidate-rule.json --sarif-out deadair.sarif
@@ -441,10 +441,9 @@ Elastic indicator-match rules and ES|QL pipelines with lookup, enrichment, or su
 currently exit `2` in candidate mode. Their event source alone is not enough to assess the rule.
 
 The official GitHub Action wraps single-instance candidate gates for Elastic, OpenSearch, and
-Sentinel. It keeps the JSON evidence as a workflow artifact, writes aggregate counts plus a finding
-breakdown to the job summary, and accepts newline-separated rule files or directories in
-`candidate-rule`. For Elastic or OpenSearch, pass the connection details through repository or
-environment secrets:
+Sentinel. It saves the JSON report as an artifact and writes the counts and any findings to the job
+summary. `candidate-rule` accepts a file, a directory, or one path per line. For Elastic or
+OpenSearch, pass the connection details through repository or environment secrets:
 
 ```yaml
 permissions:
@@ -456,7 +455,7 @@ steps:
     with:
       persist-credentials: false
   - name: Check candidate coverage
-    uses: alephnull-sh/deadair@v0.8.0
+    uses: alephnull-sh/deadair@v0.9.0
     with:
       backend: elastic
       elasticsearch-url: ${{ secrets.DEADAIR_ES_URL }}
@@ -493,7 +492,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Check Sentinel candidate coverage
-        uses: alephnull-sh/deadair@v0.8.0
+        uses: alephnull-sh/deadair@v0.9.0
         env:
           AZURE_TOKEN_CREDENTIALS: AzureCLICredential
         with:
@@ -540,10 +539,10 @@ The policy is part of the gate. Do not let a pull request weaken the policy that
 the policy from a protected base branch or restricted runner path, or require CODEOWNERS review for
 policy changes.
 
-Pass `--sarif-out FILE` (or `sarif-out` in the Action) to emit SARIF v2.1.0 for GitHub Code
-Scanning. Unredacted candidate scans point SARIF result locations at the matching candidate rule
-file; redacted SARIF omits local file paths. The Action accepts one SIEM instance and rejects
-`--fleet`; use the CLI directly for fleet files.
+Use `--sarif-out FILE`, or `sarif-out` in the Action, to write SARIF 2.1.0 for GitHub Code
+Scanning. Unredacted candidate scans attach findings to the rule file that produced them; redacted
+SARIF leaves local paths out. The Action checks one SIEM instance and rejects `--fleet`; use the CLI
+directly for fleet files.
 
 A local policy can set source-specific freshness, choose which finding classes gate, and accept a
 known finding until a fixed expiry:
@@ -683,14 +682,14 @@ deadair scan --fleet fleet.json --fleet-concurrency 4
 deadair serve --fleet fleet.json --fleet-concurrency 4
 ```
 
-Fleet scans run one tenant at a time by default, or up to `--fleet-concurrency N` in parallel while
-assembling output in deterministic input order. Each fleet instance may also set `"policy_file"` and
-`"downtime_file"` for tenant-specific SLAs, maintenance windows, or Sentinel expected producers. One
-failed tenant is recorded as an instance error and the command exits `2`; successful tenants still
-appear in the same report. With `--state-file`, deadair writes one state file per instance. The
-fleet summary carries `unused_telemetry_assessment`; it is `unavailable` if any instance failed or
-could not establish complete local consumer coverage, so a partial `unused_bytes` total is not
-presented as a fleet-wide measurement.
+Fleet scans run one tenant at a time by default. Pass `--fleet-concurrency N` to scan independent
+tenants in parallel; the report keeps the order from the fleet file. An instance can also set
+`policy_file` and `downtime_file` when its thresholds, maintenance windows, or expected Sentinel
+feeds differ from the rest of the fleet. One failed tenant is recorded as an instance error and the
+command exits `2`; successful tenants still appear in the same report. With `--state-file`, deadair
+writes one state file per instance. The fleet summary carries `unused_telemetry_assessment`; it is
+`unavailable` if any instance failed or could not establish complete local consumer coverage, so a
+partial `unused_bytes` total is not presented as a fleet-wide measurement.
 
 Use `check --fleet` after onboarding a tenant or rotating a tenant secret.
 
@@ -704,12 +703,11 @@ deadair serve --interval 5m --state-file deadair-state.json --json-out latest.js
 ```
 
 Metrics are exposed on `127.0.0.1:9317` by default. Prometheus scrapes the cached last scan; a
-scrape does not trigger a SIEM API call. Add `--json-out` (and `--html-out` for single-instance
-deployments) to persist the latest report atomically from the same scan loop without running a
-second process that competes for `--state-file`. File-based secrets (`--api-key-file`,
-`--opensearch-password-file`, `--ca-cert`, and `fleet.json` file references) are reloaded on each
-scan cycle so credential rotation does not require a daemon restart. Grafana and Alertmanager
-examples are in the [repository's `contrib` directory](https://github.com/alephnull-sh/deadair/tree/main/contrib).
+scrape does not trigger a SIEM API call. Add `--json-out`, or `--html-out` for a single instance, to
+keep the latest report on disk without running a second `scan` job against the same `--state-file`.
+`serve` re-reads key, password, certificate, and fleet files on each scan, so rotated credentials
+take effect without a restart. Grafana and Alertmanager examples are in the
+[repository's `contrib` directory](https://github.com/alephnull-sh/deadair/tree/main/contrib).
 
 For fleets, route failed scans by `deadair_instance_up`. No-match findings usually go to detection
 engineering or onboarding after credential scope is checked. Findings where all matched sources are

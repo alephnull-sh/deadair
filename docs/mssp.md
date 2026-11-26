@@ -103,9 +103,9 @@ username/password pair; omit both to connect without authentication.
 ]}
 ```
 
-Each instance may optionally set `policy_file` and `downtime_file` to override the process-level
-`--policy` and `--downtime-file` flags for tenant-specific SLAs, accepted exceptions, maintenance
-windows, or Sentinel expected producers.
+An instance can set `policy_file` and `downtime_file` to override `--policy` and `--downtime-file`
+when a customer has its own freshness window, accepted findings, maintenance schedule, or expected
+Sentinel feeds.
 
 Sentinel fleet entries use the process's `DefaultAzureCredential`; they do not carry credentials in
 the fleet file. If customers require different Azure identities, run those fleet entries in
@@ -234,9 +234,9 @@ deadair serve \
 ```
 
 Default bind address is `127.0.0.1:9317`. Put it behind authenticated scraping if Prometheus is
-not local to the host. `serve` reloads `fleet.json`, `api_key_file`, `password_file`, and `ca_cert`
-files on each scan cycle so rotated secrets take effect without restarting the daemon, and writes
-`--json-out` atomically before committing state.
+not local to the host. `serve` re-reads `fleet.json`, key files, password files, and CA certificates
+on each scan, so secret rotation doesn't need a restart. With `--json-out`, it writes the latest
+fleet report before updating state.
 
 Prometheus scrapes the cached last scan. Scrape volume does not hit customer SIEM APIs.
 
@@ -302,9 +302,8 @@ and noisy findings have been fixed or suppressed correctly.
 
 ## Schedule fleet scans
 
-Fleet scans run one tenant at a time by default (`--fleet-concurrency 1`), or across up to `N`
-independent tenants in parallel with `--fleet-concurrency N` while preserving deterministic report
-ordering:
+Fleet scans run one tenant at a time by default. Use `--fleet-concurrency N` to scan up to `N`
+tenants at once; report order still follows `fleet.json`:
 
 ```text
 fleet scan time ~= sum(per-tenant scan time) / fleet_concurrency + network/auth overhead
@@ -316,10 +315,10 @@ Measure your own p95:
 time deadair scan --fleet /etc/deadair/fleet.json --fleet-concurrency 4 --json --json-out /tmp/deadair.json
 ```
 
-Keep `serve --interval` comfortably above observed fleet scan time. If a fleet grows too large,
-increase `--fleet-concurrency` across independent customer SIEMs or split by customer segment,
-region, or backend. Raise per-instance `--concurrency` only after checking SIEM API behavior in your
-environment (Sentinel caps per-workspace Logs concurrency at 2).
+Keep `serve --interval` comfortably above observed fleet scan time. If a fleet outgrows its window,
+raise `--fleet-concurrency` across independent customer SIEMs, or split the file by segment or
+region. Raise `--concurrency` within an instance only after checking how that SIEM handles parallel
+reads; Sentinel caps Logs queries at two at a time.
 
 Back up state files if baseline continuity matters. Losing state does not affect the backend, but
 it restarts warmup and schema history.

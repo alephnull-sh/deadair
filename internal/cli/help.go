@@ -140,8 +140,8 @@ This command does not contact the SIEM. Omit the filters to show source and prod
 
 Options:
   --source NAME      exact source name to investigate
-  --producer ID      expected producer to investigate; mutually exclusive with --source/--rule
-  --rule ID_OR_NAME  rule ID or exact rule name to investigate; mutually exclusive with --source/--producer
+  --producer ID      expected producer to investigate; cannot combine with --source or --rule
+  --rule ID_OR_NAME  rule ID or exact rule name to investigate; cannot combine with --source or --producer
   --instance NAME    select an instance in a fleet report
   --links            include native SIEM and runbook links
 
@@ -170,8 +170,7 @@ Guide: `+usageGuideURL+`#add-history-based-checks`)
 func serveUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage: deadair serve [options]
 
-Run periodic live scans, expose Prometheus metrics, and optionally persist the
-latest report atomically after each scan cycle.
+Run periodic live scans and expose the latest result as Prometheus metrics.
 
 Exporter and output:
   --bind ADDRESS              listen address (default: 127.0.0.1:9317)
@@ -193,8 +192,8 @@ Connection and scan:
   --sentinel-remotes FILE     JSON mappings for literal workspace() targets
                               (DEADAIR_SENTINEL_REMOTES)
                               Sentinel authentication uses DefaultAzureCredential
-  --api-key-file FILE         read an API key from FILE (reloaded each cycle)
-  --ca-cert FILE              trust the PEM certificate authority in FILE (reloaded each cycle)
+  --api-key-file FILE         read an API key from FILE (re-read each scan)
+  --ca-cert FILE              trust the PEM certificate authority in FILE (re-read each scan)
   --kibana-space NAME         Kibana space containing the rules
   --timeout DURATION          timeout per instance (default: 1m)
   --concurrency N             parallel backend reads (default: 4; Sentinel caps at 2)

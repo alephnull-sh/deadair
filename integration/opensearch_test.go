@@ -301,6 +301,7 @@ func TestOpenSearchReadOnlyScan(t *testing.T) {
 			{"delete a data stream", http.MethodDelete, openSearchURL + "/_data_stream/" + openSearchLiveStream, ""},
 			{"create a detector", http.MethodPost, openSearchURL + "/_plugins/_security_analytics/detectors",
 				`{"name":"deadair forbidden detector","detector_type":"windows","enabled":true,"schedule":{"period":{"interval":1,"unit":"MINUTES"}},"inputs":[{"detector_input":{"description":"forbidden","indices":["deadair-os-stale*"],"custom_rules":[],"pre_packaged_rules":[{"id":"06724a9a-52fc-11ed-bdc3-0242ac120002"}]}}],"triggers":[{"name":"forbidden trigger","severity":"1","ids":["06724a9a-52fc-11ed-bdc3-0242ac120002"],"types":["rules"],"sev_levels":["critical"],"actions":[]}]}`},
+			{"write detector config index", http.MethodPut, openSearchURL + "/" + openSearchDetectorIdx + "/_doc/deadair-forbidden", `{"detector":{"name":"forbidden"}}`},
 			{"update a security role", http.MethodPut, openSearchURL + "/_plugins/_security/api/roles/deadair_escalation",
 				`{"cluster_permissions":["*"],"index_permissions":[],"tenant_permissions":[]}`},
 		}

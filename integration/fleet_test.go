@@ -41,7 +41,7 @@ func TestFleetCrossBackend(t *testing.T) {
 	]}`, esURL, kbURL, keyFile, openSearchURL, openSearchReadUser)), 0o600)
 
 	var stdout, stderr bytes.Buffer
-	code := cli.Run([]string{"scan", "--fleet", cfg, "--json", "--max-stale", "1h"}, &stdout, &stderr)
+	code := cli.Run([]string{"scan", "--fleet", cfg, "--fleet-concurrency", "2", "--json", "--max-stale", "1h"}, &stdout, &stderr)
 	if code != report.ExitFindings {
 		t.Fatalf("fleet exit = %d, want 1; stderr: %s", code, stderr.String())
 	}

@@ -155,11 +155,11 @@ scan.
 |---|---|
 | `setup` | print least-privilege credential setup for a backend |
 | `check` | verify connectivity, required privileges, and optional capabilities |
-| `scan` | produce a terminal, JSON, or HTML report |
-| `inspect` | read source or producer evidence from a saved JSON report without contacting the SIEM |
-| `scan --rule` | evaluate a backend-native candidate rule file without installing it |
+| `scan` | produce a terminal, JSON, HTML, or SARIF report |
+| `inspect` | read source, producer, or rule evidence from a saved JSON report without contacting the SIEM |
+| `scan --rule` | evaluate candidate rule files or directories without installing them |
 | `diff` | compare two reports and fail on regressions |
-| `serve` | run periodic scans and expose cached Prometheus metrics |
+| `serve` | run periodic scans, expose cached Prometheus metrics, and optionally persist the latest report |
 | `tune` | suggest baseline settings from accumulated state |
 
 Exit codes are part of the compatibility contract: `0` passed the configured gate, `1` gated findings, `2` error.
@@ -182,9 +182,9 @@ deployment.
 
 Fleet behavior:
 
-- instances scan sequentially
+- instances scan sequentially by default, or in parallel with `--fleet-concurrency` while preserving fleet-file order
 - every metric carries an `instance` label
-- state files are separated per instance
+- state files are separated per instance, and instances can override `--policy` and `--downtime-file`
 - failed instances are reported without hiding successful ones
 - cross-tenant rollups key on rule name because rule IDs can differ by tenant
 - `--redact` treats instance names as sensitive
@@ -207,7 +207,7 @@ matrix.
 - Disposable Elastic and OpenSearch integration tests provision the documented scoped read-only
   roles and assert representative writes are rejected. The Sentinel conformance lab uses its own
   workspace-scoped reader and separate write-denial probes.
-- Reports, HTML output, and state files atomically replace their destination with a `0600` file on
+- JSON, HTML, SARIF, and state files atomically replace their destination with a `0600` file on
   POSIX systems.
 - `--redact` replaces tenant, source, rule, pattern, field, dependency, lineage, provenance,
   workspace, watchlist, template, and package identifiers with HMAC-SHA256 pseudonyms. Validated

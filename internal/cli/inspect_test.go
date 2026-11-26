@@ -100,9 +100,9 @@ func TestSavedReportHintUsesTheActualFile(t *testing.T) {
 		want    string
 	}{
 		{"", true, ""},
-		{"scan.json", true, "Inspect: deadair inspect -- scan.json\n"},
+		{"scan.json", true, "Inspect: deadair inspect scan.json\n"},
 		{"-scan.json", true, "Inspect: deadair inspect -- -scan.json\n"},
-		{"reports/site scan.json", true, "Inspect: deadair inspect -- \"reports/site scan.json\"\n"},
+		{"reports/site scan.json", true, "Inspect: deadair inspect \"reports/site scan.json\"\n"},
 		{"fleet.json", false, "Saved JSON: fleet.json\n"},
 		{"scan$(whoami).json", true, "Saved JSON: scan$(whoami).json\n"},
 		{"scan`whoami`.json", true, "Saved JSON: scan`whoami`.json\n"},
@@ -253,27 +253,41 @@ func TestInspectRuleViewAndMutualExclusion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, query := range []string{"rule-ps-legacy", "PowerShell from legacy endpoints"} {
+	for _, args := range [][]string{
+		{"inspect", "--rule", "rule-ps-legacy", "--links", path},
+		{"inspect", "--rule", "PowerShell from legacy endpoints", "--links", path},
+		{"inspect", path, "--rule", "powershell from legacy endpoints", "--links"},
+	} {
 		var out, errs bytes.Buffer
-		if code := Run([]string{"inspect", "--rule", query, "--links", path}, &out, &errs); code != 0 {
-			t.Fatalf("inspect --rule %q exit=%d stderr=%s", query, code, errs.String())
+		if code := Run(args, &out, &errs); code != 0 {
+			t.Fatalf("args %v exit=%d stderr=%s", args, code, errs.String())
 		}
 		text := out.String()
 		for _, want := range []string{
 			"PowerShell from legacy endpoints — reduced visibility",
-			"Rule ID: rule-ps-legacy · Severity: high",
-			"Missing fields: CommandLine",
-			"Lag sources: SecurityEvent",
-			"Resolution SecurityEvent (kql-table-catalog): resolved -> SecurityEvent",
-			"Required fields on SecurityEvent: assessed (missing: CommandLine)",
-			"Dependency VIPUsers (sentinel_watchlist): resolved",
-			"Provenance (sentinel_content_package): Windows Security Events",
+			"[high] Rule ID: rule-ps-legacy",
+			"Missing declared fields: CommandLine",
+			"Ingest lag: p95 7m (max 9m) exceeds lookback 5m on SecurityEvent",
+			"Source: SecurityEvent (ok)",
+			"Watchlist VIPUsers: resolved — watchlist exists",
+			"Content package: Windows Security Events",
 			"Rule: https://portal.azure.com/#rule-ps-legacy",
 		} {
 			if !strings.Contains(text, want) {
-				t.Fatalf("inspect --rule %q missing %q in:\n%s", query, want, text)
+				t.Fatalf("args %v missing %q in:\n%s", args, want, text)
 			}
 		}
+		for _, line := range strings.Split(text, "\n") {
+			if !strings.Contains(line, "https://") && utf8.RuneCountInString(line) > 80 {
+				t.Errorf("rule inspection line exceeds 80 columns: %s", line)
+			}
+		}
+	}
+
+	// Substring near-miss prints matching names on stderr without polluting stdout.
+	var nearOut, nearErrs bytes.Buffer
+	if code := Run([]string{"inspect", "--rule", "PowerShell", path}, &nearOut, &nearErrs); code != 2 || nearOut.Len() != 0 || !strings.Contains(nearErrs.String(), "Matching names: PowerShell from legacy endpoints") {
+		t.Fatalf("near-miss: code=%d stdout=%q stderr=%q", code, nearOut.String(), nearErrs.String())
 	}
 
 	// Mutually exclusive filter combinations must exit 2.
