@@ -48,6 +48,11 @@ func TestESQLSourcePatterns(t *testing.T) {
 			query: "FROM logs-* | EVAL note = \"\"\"text | LOOKUP JOIN hidden ON x\nmore text\"\"\" | KEEP note",
 			want:  []string{"logs-*"},
 		},
+		{
+			name:  "modern 9.x pipeline stages",
+			query: "FROM logs-endpoint.events.* | INSIST host.name, process.executable | INLINE /* host rollup */ STATS count = COUNT(*) BY host.name | TOP 10 count DESC",
+			want:  []string{"logs-endpoint.events.*"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -79,6 +84,8 @@ func TestESQLSourcePatternsRejectsUnsafeQueries(t *testing.T) {
 		"FROM logs-* | /* comment */ LOOKUP /* comment */ JOIN indicators ON source.ip",
 		"FROM logs-* | ENRICH geoip ON source.ip",
 		"FROM logs-* | FORK (WHERE true) (LOOKUP JOIN indicators ON source.ip)",
+		"FROM logs-* | INLINE",
+		"FROM logs-* | INLINE JOIN indicators ON source.ip",
 		"FROM logs-* | FUTURE_COMMAND other_source",
 		"FROM logs-* | WHERE user IN ( /* input */ FROM users | KEEP user)",
 		"FROM logs-* | EVAL note = \"unterminated",

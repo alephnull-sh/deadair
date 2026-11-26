@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	backendpkg "github.com/alephnull-sh/deadair/internal/backend"
 	"github.com/alephnull-sh/deadair/internal/backend/elastic"
 	"github.com/alephnull-sh/deadair/internal/backend/opensearch"
 	"github.com/alephnull-sh/deadair/internal/backend/sentinel"
+	"github.com/alephnull-sh/deadair/internal/health"
 	"github.com/alephnull-sh/deadair/internal/report"
 )
 
@@ -44,13 +46,17 @@ type instanceSpec struct {
 	Space            string                     `json:"space"`
 	CACert           string                     `json:"ca_cert"`
 	Insecure         bool                       `json:"insecure_skip_verify"`
+	PolicyFile       string                     `json:"policy_file,omitempty"`
+	DowntimeFile     string                     `json:"downtime_file,omitempty"`
 }
 
 // fleetInstance is one resolved scan target.
 type fleetInstance struct {
-	name     string
-	targetID string
-	backend  backendpkg.Backend
+	name         string
+	targetID     string
+	backend      backendpkg.Backend
+	policyFile   string
+	downtimeFile string
 }
 
 func backendTargetID(backendName string, parts ...string) string {
@@ -163,6 +169,16 @@ func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
 	if err := validateInstanceName(s.Name); err != nil {
 		return fleetInstance{}, err
 	}
+	if s.PolicyFile != "" {
+		if _, err := report.LoadPolicy(s.PolicyFile, time.Now().UTC()); err != nil {
+			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
+		}
+	}
+	if s.DowntimeFile != "" {
+		if _, err := health.LoadDowntimeFile(s.DowntimeFile); err != nil {
+			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
+		}
+	}
 	io := *o
 	io.caCert, io.insecureTLS = s.CACert, s.Insecure
 	hc, err := io.httpClient(os.Stderr)
@@ -178,10 +194,14 @@ func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
 		if err != nil {
 			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
 		}
-		return fleetInstance{name: s.Name, targetID: backendTargetID("elastic", s.ESURL, s.KibanaURL, s.Space), backend: &elastic.Client{
-			ESURL: s.ESURL, KibanaURL: s.KibanaURL, APIKey: key, Space: s.Space,
-			HTTP: hc, Concurrency: o.concurrency,
-		}}, nil
+		return fleetInstance{
+			name: s.Name, targetID: backendTargetID("elastic", s.ESURL, s.KibanaURL, s.Space),
+			policyFile: s.PolicyFile, downtimeFile: s.DowntimeFile,
+			backend: &elastic.Client{
+				ESURL: s.ESURL, KibanaURL: s.KibanaURL, APIKey: key, Space: s.Space,
+				HTTP: hc, Concurrency: o.concurrency,
+			},
+		}, nil
 	case "opensearch":
 		if s.OpenSearchURL == "" {
 			return fleetInstance{}, fmt.Errorf("instance %q: opensearch_url is required", s.Name)
@@ -197,10 +217,14 @@ func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
 		if err := validateOpenSearchAuth(s.Username, password, key); err != nil {
 			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
 		}
-		return fleetInstance{name: s.Name, targetID: backendTargetID("opensearch", s.OpenSearchURL), backend: &opensearch.Client{
-			URL: s.OpenSearchURL, Username: s.Username, Password: password, APIKey: key,
-			HTTP: hc, Concurrency: o.concurrency,
-		}}, nil
+		return fleetInstance{
+			name: s.Name, targetID: backendTargetID("opensearch", s.OpenSearchURL),
+			policyFile: s.PolicyFile, downtimeFile: s.DowntimeFile,
+			backend: &opensearch.Client{
+				URL: s.OpenSearchURL, Username: s.Username, Password: password, APIKey: key,
+				HTTP: hc, Concurrency: o.concurrency,
+			},
+		}, nil
 	case "sentinel":
 		client, err := sentinel.NewClient(sentinel.Config{
 			SubscriptionID:   s.Subscription,
@@ -215,7 +239,9 @@ func (o *connOpts) buildInstance(s instanceSpec) (fleetInstance, error) {
 			return fleetInstance{}, fmt.Errorf("instance %q: %w", s.Name, err)
 		}
 		return fleetInstance{
-			name: s.Name, targetID: sentinelTargetID(s.Subscription, s.ResourceGroup, s.Workspace, s.RemoteWorkspaces...), backend: client,
+			name: s.Name, targetID: sentinelTargetID(s.Subscription, s.ResourceGroup, s.Workspace, s.RemoteWorkspaces...),
+			policyFile: s.PolicyFile, downtimeFile: s.DowntimeFile,
+			backend: client,
 		}, nil
 	default:
 		return fleetInstance{}, fmt.Errorf("instance %q: unknown backend %q", s.Name, s.Backend)
@@ -268,7 +294,7 @@ func (o *connOpts) resolveInstances(stderr io.Writer) ([]fleetInstance, error) {
 	if len(cfg.Instances) == 0 {
 		return nil, fmt.Errorf("fleet file lists no instances")
 	}
-	if o.ruleFile != "" {
+	if o.hasCandidateRules() {
 		backends := map[string]bool{}
 		for _, s := range cfg.Instances {
 			name := strings.ToLower(strings.TrimSpace(s.Backend))
@@ -315,6 +341,13 @@ func scanFleet(instances []fleetInstance, o connOpts, run func(fleetInstance, co
 	outcomes := make([]instanceOutcome, len(instances))
 	evalInstance := func(idx int, inst fleetInstance) {
 		io := o
+		if inst.policyFile != "" {
+			io.policyFile = inst.policyFile
+			io.policy = nil
+		}
+		if inst.downtimeFile != "" {
+			io.downtimeFile = inst.downtimeFile
+		}
 		if o.stateFile != "" && len(instances) > 1 {
 			var err error
 			io.stateFile, err = fleetStatePath(o.stateFile, inst.name)

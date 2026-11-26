@@ -20,10 +20,15 @@ func esqlSourcePatterns(query string) ([]string, error) {
 		return nil, err
 	}
 	for _, command := range commands[1:] {
-		name := strings.ToUpper(strings.Fields(command)[0])
+		fields := strings.Fields(command)
+		name := strings.ToUpper(fields[0])
 		switch name {
-		case "WHERE", "EVAL", "KEEP", "DROP", "RENAME", "STATS", "SORT", "LIMIT", "MV_EXPAND", "DISSECT", "GROK", "SAMPLE", "CHANGE_POINT":
-			// These commands transform the input without adding another source.
+		case "WHERE", "EVAL", "KEEP", "DROP", "RENAME", "STATS", "SORT", "LIMIT", "MV_EXPAND", "DISSECT", "GROK", "SAMPLE", "CHANGE_POINT", "INSIST", "TOP":
+			// These commands transform or validate the input without adding another source.
+		case "INLINE":
+			if len(fields) < 2 || !strings.EqualFold(fields[1], "STATS") {
+				return nil, fmt.Errorf("ES|QL %s dependencies are not assessed", name)
+			}
 		default:
 			return nil, fmt.Errorf("ES|QL %s dependencies are not assessed", name)
 		}

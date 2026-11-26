@@ -96,10 +96,16 @@ username/password pair; omit both to connect without authentication.
     "backend": "sentinel",
     "azure_subscription_id": "<subscription-id>",
     "azure_resource_group": "gamma-security",
-    "sentinel_workspace": "gamma-sentinel"
+    "sentinel_workspace": "gamma-sentinel",
+    "policy_file": "/etc/deadair/policies/gamma-sentinel.json",
+    "downtime_file": "/etc/deadair/downtime/gamma.json"
   }
 ]}
 ```
+
+Each instance may optionally set `policy_file` and `downtime_file` to override the process-level
+`--policy` and `--downtime-file` flags for tenant-specific SLAs, accepted exceptions, maintenance
+windows, or Sentinel expected producers.
 
 Sentinel fleet entries use the process's `DefaultAzureCredential`; they do not carry credentials in
 the fleet file. If customers require different Azure identities, run those fleet entries in
@@ -155,6 +161,7 @@ Use a pseudonymized JSON report when exact identifiers are unnecessary:
 ```sh
 deadair scan \
   --fleet /etc/deadair/fleet.json \
+  --fleet-concurrency 4 \
   --state-file /var/lib/deadair/state/fleet-state.json \
   --schema \
   --redact \
@@ -167,6 +174,7 @@ Keep an unredacted internal report only where analysts need exact source and rul
 ```sh
 deadair scan \
   --fleet /etc/deadair/fleet.json \
+  --fleet-concurrency 4 \
   --state-file /var/lib/deadair/state/fleet-state.json \
   --schema \
   --json \
@@ -202,10 +210,11 @@ For each actionable finding, keep enough context for the receiving team to start
 The terminal fleet view is a summary. Keep the internal JSON report for exact patterns and sources;
 use the redacted report for authorized cross-team or client trend reporting.
 
-Open one customer's source evidence without rescanning the fleet:
+Open one customer's source or rule evidence without rescanning the fleet:
 
 ```sh
 deadair inspect --instance acme-prod --source logs-system.auth-default latest-internal.json
+deadair inspect --instance acme-prod --rule "SSH brute force" latest-internal.json
 ```
 
 Use the pseudonym shown in the report when inspecting a redacted instance. A failed instance has no
@@ -216,14 +225,18 @@ saved source assessment; fix its scan error before drawing conclusions about its
 ```sh
 deadair serve \
   --fleet /etc/deadair/fleet.json \
+  --fleet-concurrency 4 \
   --state-file /var/lib/deadair/state/fleet-state.json \
+  --json-out /var/lib/deadair/reports/latest-redacted.json \
   --schema \
   --redact \
   --interval 30m
 ```
 
 Default bind address is `127.0.0.1:9317`. Put it behind authenticated scraping if Prometheus is
-not local to the host.
+not local to the host. `serve` reloads `fleet.json`, `api_key_file`, `password_file`, and `ca_cert`
+files on each scan cycle so rotated secrets take effect without restarting the daemon, and writes
+`--json-out` atomically before committing state.
 
 Prometheus scrapes the cached last scan. Scrape volume does not hit customer SIEM APIs.
 
@@ -289,21 +302,24 @@ and noisy findings have been fixed or suppressed correctly.
 
 ## Schedule fleet scans
 
-Fleet scans are sequential. Cycle time is roughly:
+Fleet scans run one tenant at a time by default (`--fleet-concurrency 1`), or across up to `N`
+independent tenants in parallel with `--fleet-concurrency N` while preserving deterministic report
+ordering:
 
 ```text
-fleet scan time ~= sum(per-tenant scan time) + network/auth overhead
+fleet scan time ~= sum(per-tenant scan time) / fleet_concurrency + network/auth overhead
 ```
 
 Measure your own p95:
 
 ```sh
-time deadair scan --fleet /etc/deadair/fleet.json --json --json-out /tmp/deadair.json
+time deadair scan --fleet /etc/deadair/fleet.json --fleet-concurrency 4 --json --json-out /tmp/deadair.json
 ```
 
 Keep `serve --interval` comfortably above observed fleet scan time. If a fleet grows too large,
-split it by customer segment, region, or backend. Raise `--concurrency` only after checking SIEM
-API behavior in your environment.
+increase `--fleet-concurrency` across independent customer SIEMs or split by customer segment,
+region, or backend. Raise per-instance `--concurrency` only after checking SIEM API behavior in your
+environment (Sentinel caps per-workspace Logs concurrency at 2).
 
 Back up state files if baseline continuity matters. Losing state does not affect the backend, but
 it restarts warmup and schema history.

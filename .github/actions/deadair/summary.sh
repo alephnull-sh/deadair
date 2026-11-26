@@ -50,4 +50,24 @@ jq -r '
    end))[]
 ' "$report" >>"$summary"
 
+jq -r '
+  def mdcell: tostring | gsub("[\\r\\n\\t]+"; " ") | gsub("\\|"; "\\|");
+  (.findings // []) as $f |
+  if ($f | length) == 0 then empty
+  else
+    ([
+      "",
+      "### Findings",
+      "",
+      "| Class | Subject | Reason | Gate |",
+      "|---|---|---|---|"
+    ] +
+    ($f[:15] | map(
+      "| \((.class // "-") | mdcell) | \((.rule_name // .rule_id // .source // "-") | mdcell) | \((if (.dependency // "") != "" then "\(.reason // "-") (\(.dependency))" else (.reason // "-") end) | mdcell) | \(if (.accepted.status // "") == "active" then "accepted" elif .suppressed then "suppressed" elif .gates then "gated" else "info" end) |"
+    )) +
+    (if ($f | length) > 15 then ["", "_…and \(($f | length) - 15) more finding(s) in the JSON artifact._"] else [] end))[]
+  end
+' "$report" >>"$summary"
+
 printf '\nThe full evidence is attached as the workflow artifact.\n' >>"$summary"
+

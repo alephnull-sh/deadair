@@ -27,9 +27,11 @@ if [[ -n ${DEADAIR_ACTION_SCAN_ARGS:-} ]]; then
 		-opensearch-username | -opensearch-username=* | --opensearch-username | --opensearch-username=* | \
 		-opensearch-password-file | -opensearch-password-file=* | --opensearch-password-file | --opensearch-password-file=* | \
 		-fleet | -fleet=* | --fleet | --fleet=* | \
+		-fleet-concurrency | -fleet-concurrency=* | --fleet-concurrency | --fleet-concurrency=* | \
 		-json | -json=* | --json | --json=* | \
 		-json-out | -json-out=* | --json-out | --json-out=* | \
 		-html-out | -html-out=* | --html-out | --html-out=* | \
+		-sarif-out | -sarif-out=* | --sarif-out | --sarif-out=* | \
 		-out | -out=* | --out | --out=* | \
 		-h | --help | \
 			-redact | -redact=* | --redact | --redact=* | \
@@ -50,10 +52,19 @@ if [[ -n ${DEADAIR_ACTION_OPENSEARCH_PASSWORD_FILE:-} ]]; then
 	args+=(--opensearch-password-file "$DEADAIR_ACTION_OPENSEARCH_PASSWORD_FILE")
 fi
 if [[ -n ${DEADAIR_ACTION_CANDIDATE_RULE:-} ]]; then
-	args+=(--rule "$DEADAIR_ACTION_CANDIDATE_RULE")
+	while IFS= read -r rule_path || [[ -n $rule_path ]]; do
+		rule_path="${rule_path#"${rule_path%%[![:space:]]*}"}"
+		rule_path="${rule_path%"${rule_path##*[![:space:]]}"}"
+		if [[ -n $rule_path ]]; then
+			args+=(--rule "$rule_path")
+		fi
+	done <<<"$DEADAIR_ACTION_CANDIDATE_RULE"
 fi
 if [[ -n ${DEADAIR_ACTION_POLICY_FILE:-} ]]; then
 	args+=(--policy "$DEADAIR_ACTION_POLICY_FILE")
+fi
+if [[ -n ${DEADAIR_ACTION_SARIF_OUT:-} ]]; then
+	args+=(--sarif-out "$DEADAIR_ACTION_SARIF_OUT")
 fi
 # Only the explicit value "false" disables redaction. Typos stay on the safe
 # side, and a key file always implies redaction.

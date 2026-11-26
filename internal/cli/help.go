@@ -55,6 +55,7 @@ Output:
   --json                      print JSON instead of the terminal report
   --json-out FILE             write the JSON report to FILE
   --html-out FILE             write a static HTML report to FILE
+  --sarif-out FILE            write a SARIF v2.1.0 report to FILE
   --redact                    replace names with HMAC pseudonyms
   --redact-key-file FILE      HMAC key for stable cross-run pseudonyms
                               (DEADAIR_REDACT_KEY_FILE)
@@ -65,7 +66,7 @@ Scope:
   --max-stale DURATION        source freshness window (default: 30m)
   --downtime-file FILE        expected source downtime windows
   --policy FILE               local freshness, acceptance, and gate policy
-  --rule FILE                 evaluate one backend-native candidate file
+  --rule PATH                 evaluate candidate rule file or directory; repeatable
 
 Fleet:
   --fleet FILE                scan instances listed in a fleet JSON file
@@ -134,18 +135,20 @@ Guide: `+usageGuideURL+`#gate-detection-changes`)
 func inspectUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage: deadair inspect [options] REPORT
 
-Investigate a source or expected producer in a saved JSON report.
-This command does not contact the SIEM. Omit the filters to show all records.
+Investigate a source, expected producer, or rule in a saved JSON report.
+This command does not contact the SIEM. Omit the filters to show source and producer records.
 
 Options:
-  --source NAME    exact source name to investigate
-  --producer ID    expected producer to investigate; cannot combine with --source
-  --instance NAME  select an instance in a fleet report
-  --links          include native SIEM and runbook links
+  --source NAME      exact source name to investigate
+  --producer ID      expected producer to investigate; mutually exclusive with --source/--rule
+  --rule ID_OR_NAME  rule ID or exact rule name to investigate; mutually exclusive with --source/--producer
+  --instance NAME    select an instance in a fleet report
+  --links            include native SIEM and runbook links
 
 Examples:
   deadair inspect --source CommonSecurityLog report.json
   deadair inspect --producer london-edge report.json
+  deadair inspect --rule "PowerShell from legacy endpoints" report.json
 
 Guide: https://github.com/alephnull-sh/deadair/blob/main/docs/investigate.md`)
 }
@@ -167,12 +170,15 @@ Guide: `+usageGuideURL+`#add-history-based-checks`)
 func serveUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage: deadair serve [options]
 
-Run periodic live scans and expose the latest result as Prometheus metrics.
+Run periodic live scans, expose Prometheus metrics, and optionally persist the
+latest report atomically after each scan cycle.
 
-Exporter:
+Exporter and output:
   --bind ADDRESS              listen address (default: 127.0.0.1:9317)
   --interval DURATION         time between scans (default: 5m)
-  --redact                    replace metric-label names with HMAC pseudonyms
+  --json-out FILE             write the latest JSON report to FILE
+  --html-out FILE             write the latest HTML report to FILE (single-instance)
+  --redact                    replace metric-label and report names with HMAC pseudonyms
   --redact-key-file FILE      HMAC key for stable cross-run pseudonyms
 
 Connection and scan:
@@ -187,8 +193,8 @@ Connection and scan:
   --sentinel-remotes FILE     JSON mappings for literal workspace() targets
                               (DEADAIR_SENTINEL_REMOTES)
                               Sentinel authentication uses DefaultAzureCredential
-  --api-key-file FILE         read an API key from FILE
-  --ca-cert FILE              trust the PEM certificate authority in FILE
+  --api-key-file FILE         read an API key from FILE (reloaded each cycle)
+  --ca-cert FILE              trust the PEM certificate authority in FILE (reloaded each cycle)
   --kibana-space NAME         Kibana space containing the rules
   --timeout DURATION          timeout per instance (default: 1m)
   --concurrency N             parallel backend reads (default: 4; Sentinel caps at 2)

@@ -1252,3 +1252,61 @@ func TestCheckFleet(t *testing.T) {
 		}
 	}
 }
+
+func TestScanMultiRuleDirectoryAndSARIF(t *testing.T) {
+	srv := fixtureServer(t)
+	defer srv.Close()
+	t.Setenv("DEADAIR_API_KEY", "testkey")
+
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	healthyRule := filepath.Join(rulesDir, "01-healthy.json")
+	if err := os.WriteFile(healthyRule, []byte(`{"id":"cand-ok","rule_id":"cand-ok","name":"Healthy Endpoint Rule","enabled":true,"severity":"medium","index":["logs-endpoint.events.*"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadRule := filepath.Join(dir, "02-dead.json")
+	if err := os.WriteFile(deadRule, []byte(`{"id":"cand-dead","rule_id":"cand-dead","name":"Missing Index Rule","enabled":true,"severity":"high","index":["logs-missing-*"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	jsonOut := filepath.Join(dir, "report.json")
+	sarifOut := filepath.Join(dir, "report.sarif")
+	var stdout, stderr bytes.Buffer
+	code := cli.Run([]string{
+		"scan",
+		"--es-url", srv.URL,
+		"--kibana-url", srv.URL,
+		"--rule", rulesDir,
+		"--rule", deadRule,
+		"--json-out", jsonOut,
+		"--sarif-out", sarifOut,
+	}, &stdout, &stderr)
+	if code != report.ExitFindings {
+		t.Fatalf("multi-rule candidate scan exit = %d, want %d\nstderr: %s", code, report.ExitFindings, stderr.String())
+	}
+
+	rawJSON, err := os.ReadFile(jsonOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotReport report.Report
+	if err := json.Unmarshal(rawJSON, &gotReport); err != nil {
+		t.Fatal(err)
+	}
+	if gotReport.Summary.EnabledRules != 2 || gotReport.Summary.DeadDetections != 1 {
+		t.Fatalf("candidate summary = %+v, want 2 enabled / 1 dead", gotReport.Summary)
+	}
+
+	rawSARIF, err := os.ReadFile(sarifOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(rawSARIF, []byte(`"deadair/dead-detection/disconnected"`)) ||
+		!bytes.Contains(rawSARIF, []byte(`"Missing Index Rule"`)) ||
+		!bytes.Contains(rawSARIF, []byte(`02-dead.json`)) {
+		t.Fatalf("unexpected SARIF content:\n%s", string(rawSARIF))
+	}
+}

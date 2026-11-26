@@ -180,3 +180,51 @@ func TestScanFleetConcurrencyPreservesDeterministicOrderAndIsolatesFailures(t *t
 		t.Fatalf("commits order = %+v", commits)
 	}
 }
+
+func TestFleetPerInstancePolicyAndDowntime(t *testing.T) {
+	dir := t.TempDir()
+	policyA := filepath.Join(dir, "policy-a.json")
+	if err := os.WriteFile(policyA, []byte(`{"version":1,"gate_classes":["dead-detection"],"sources":[{"pattern":"logs-*","max_stale":"2h","owner":"SOC A"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	downtimeB := filepath.Join(dir, "downtime-b.json")
+	if err := os.WriteFile(downtimeB, []byte(`{"windows":[{"name":"maint","sources":["logs-*"],"days":["mon"],"start":"01:00","end":"03:00","timezone":"Europe/London"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fleetPath := filepath.Join(dir, "fleet.json")
+	fleetJSON, err := json.Marshal(fleetConfig{
+		Instances: []instanceSpec{
+			{Name: "tenant-a", Backend: "elastic", ESURL: "http://es-a.invalid", KibanaURL: "http://kb-a.invalid", PolicyFile: policyA},
+			{Name: "tenant-b", Backend: "elastic", ESURL: "http://es-b.invalid", KibanaURL: "http://kb-b.invalid", DowntimeFile: downtimeB},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fleetPath, fleetJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	globalPolicy := filepath.Join(dir, "global-policy.json")
+	if err := os.WriteFile(globalPolicy, []byte(`{"version":1,"gate_classes":["dead-detection"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := connOpts{fleetFile: fleetPath, policyFile: globalPolicy, downtimeFile: "global-downtime.json"}
+	insts, err := opts.resolveInstances(io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotOpts := make(map[string]connOpts)
+	scanFleet(insts, opts, func(inst fleetInstance, io connOpts) (scanResult, error) {
+		gotOpts[inst.name] = io
+		return scanResult{report: &report.Report{Backend: "elastic"}}, nil
+	})
+
+	if gotOpts["tenant-a"].policyFile != policyA || gotOpts["tenant-a"].downtimeFile != "global-downtime.json" {
+		t.Fatalf("tenant-a effective opts = policy:%q downtime:%q", gotOpts["tenant-a"].policyFile, gotOpts["tenant-a"].downtimeFile)
+	}
+	if gotOpts["tenant-b"].policyFile != globalPolicy || gotOpts["tenant-b"].downtimeFile != downtimeB {
+		t.Fatalf("tenant-b effective opts = policy:%q downtime:%q", gotOpts["tenant-b"].policyFile, gotOpts["tenant-b"].downtimeFile)
+	}
+}

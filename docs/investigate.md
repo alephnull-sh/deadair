@@ -9,12 +9,17 @@ deadair inspect --source logs-system.auth-default report.json
 ```
 
 Run `deadair inspect report.json` without a selector to browse all saved sources and expected feeds.
-Use `--source` or `--producer` to focus on one.
+Use `--source`, `--producer`, or `--rule` to focus on one:
+
+```sh
+deadair inspect --rule "PowerShell from legacy endpoints" report.json
+```
 
 The source view lists its enabled consumers in severity order, the freshness observation, and a
-first check based on the evidence. The HTML report has the same view. A source that has stopped
-reporting points you toward the sender and collector; a missing field points you toward the mapping
-and ingestion transform.
+first check based on the evidence. The rule view shows the rule's verdict, native selector
+resolutions, required-field and dependency evidence, provenance, and lag margins. The HTML report
+has the same source view. A source that has stopped reporting points you toward the sender and
+collector; a missing field points you toward the mapping and ingestion transform.
 
 Add `--links` to include native SIEM and runbook URLs in the terminal. They're always clickable in
 the HTML report when available. `inspect` reads the saved scan; it doesn't refresh the observations.
@@ -56,8 +61,8 @@ Use the values recorded in your table, and choose a threshold that matches norma
 All configured fields must match. You can define up to 20 feeds; each distinct table, selector and
 clock uses one bounded query over a local Analytics table. The maximum threshold is 24 hours.
 
-Use a workspace-specific policy for these expectations. A fleet applies its policy to every
-instance, so keep workspaces with different expected feeds in separate scans.
+Use a workspace-specific policy for these expectations. In a fleet file, set `"policy_file"` on the
+Sentinel instance so its producer expectations do not apply to unrelated workspaces.
 
 ```sh
 deadair scan --policy policy.json --state-file state.json --json-out report.json
@@ -104,9 +109,9 @@ Add `producer:<id>` to a downtime file to suppress just that feed's alert:
 }]}
 ```
 
-Pass it with `--downtime-file downtime.json`. Using the table name instead suppresses every
-configured producer on that table. The stale observation remains visible during maintenance; only
-the alert is suppressed. Maintenance isn't recovery.
+Pass it with `--downtime-file downtime.json` (or `"downtime_file"` on a fleet instance). Using the
+table name instead suppresses every configured producer on that table. The stale observation remains
+visible during maintenance; only the alert is suppressed. Maintenance isn't recovery.
 
 ## Track a summary pipeline
 
@@ -138,18 +143,18 @@ or scan scope requires a new comparison baseline.
 
 For ongoing checks, run `serve` with the same policy and downtime file. The exporter includes
 producer and summary-pipeline assessment, failure, and suppression metrics. The
-[Prometheus alert examples](../contrib/prometheus-alerts.yml) check scan availability and suppression
-before alerting. Route missing evidence to the scanner's credential owner; route a quiet firewall
-feed to the team that owns its delivery path.
+[Prometheus alert examples](../contrib/prometheus-alerts.yml) check scan availability, gated counts,
+and maintenance suppression before alerting. Route missing evidence to the scanner's credential
+owner; route a quiet firewall feed to the team that owns its delivery path.
 
 ## Add an owner and runbook to a source
 
-Source policies accept the same optional contact fields:
+Source policies accept optional contact fields (`max_stale` may be omitted when you want to keep the
+default freshness window):
 
 ```json
 {"version": 1, "gate_classes": ["dead-detection", "impaired-detection", "source-degraded", "volume-low", "schema-drift"], "sources": [{
   "pattern": "logs-system.auth-*",
-  "max_stale": "30m",
   "owner": "Linux platform",
   "runbook": "https://wiki.example.net/runbooks/linux-auth-logs"
 }]}

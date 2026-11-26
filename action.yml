@@ -49,10 +49,13 @@ inputs:
     description: Path to a JSON file mapping literal workspace() targets for cross-workspace rules
     required: false
   candidate-rule:
-    description: Elastic rule JSON/NDJSON, OpenSearch detector JSON, or Sentinel Scheduled/NRT JSON, YAML, or ARM template to assess without installing
+    description: Candidate rule file(s) or directory(s) to assess without installing (newline-separated for multiple paths)
     required: false
   policy-file:
     description: Path to a deadair policy file that controls which findings gate the scan
+    required: false
+  sarif-out:
+    description: Optional path to write a SARIF v2.1.0 report for GitHub Code Scanning
     required: false
   scan-args:
     description: Extra space-separated assessment, TLS, and namespace flags; use dedicated inputs for backend, endpoint, credential, Sentinel topology, output, redaction, policy, and candidate options
@@ -167,6 +170,7 @@ runs:
         DEADAIR_ACTION_OPENSEARCH_PASSWORD_FILE: ${{ inputs.opensearch-password-file }}
         DEADAIR_ACTION_CANDIDATE_RULE: ${{ inputs.candidate-rule }}
         DEADAIR_ACTION_POLICY_FILE: ${{ inputs.policy-file }}
+        DEADAIR_ACTION_SARIF_OUT: ${{ inputs.sarif-out }}
         DEADAIR_ACTION_SCAN_ARGS: ${{ inputs.scan-args }}
         DEADAIR_ACTION_REDACT_REPORT: ${{ inputs.redact-report }}
         DEADAIR_ACTION_REDACT_KEY_FILE: ${{ inputs.redact-key-file }}

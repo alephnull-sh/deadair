@@ -116,6 +116,8 @@ for reserved in \
 	'-sentinel-workspace-id' '-sentinel-workspace-id=00000000-0000-0000-0000-000000000000' \
 	'--sentinel-remotes' '--sentinel-remotes=sentinel-remotes.json' \
 	'-sentinel-remotes' '-sentinel-remotes=sentinel-remotes.json' \
+	'--sarif-out=out.sarif' '-sarif-out=out.sarif' \
+	'--fleet-concurrency=2' '-fleet-concurrency=2' \
 	'-h' '--help'; do
 	set +e
 	RUNNER_TEMP="$runner_tmp" \
@@ -264,3 +266,37 @@ DEADAIR_ACTION_REPORT_CREATED=true \
 	DEADAIR_ACTION_EXIT_CODE=1 \
 	DEADAIR_ACTION_FAIL_ON_FINDINGS=false \
 	bash "$script_dir/gate.sh"
+
+multi_scan_output="$tmp_dir/multi-scan-output"
+multi_args_output="$tmp_dir/multi-scan-args"
+: >"$multi_scan_output"
+RUNNER_TEMP="$runner_tmp" \
+	GITHUB_OUTPUT="$multi_scan_output" \
+	DEADAIR_ACTION_CANDIDATE_RULE=$'rules/windows/\n  rules/linux/ssh.yml  \n' \
+	DEADAIR_ACTION_SARIF_OUT="$tmp_dir/deadair.sarif" \
+	DEADAIR_ACTION_TEST_ARGS="$multi_args_output" \
+	bash "$script_dir/scan.sh"
+if [[ $(grep -Fxc -- '--rule' "$multi_args_output") -ne 2 ]]; then
+	printf 'expected 2 --rule arguments for multiline candidate-rule\n' >&2
+	exit 1
+fi
+grep -Fxq 'rules/windows/' "$multi_args_output"
+grep -Fxq 'rules/linux/ssh.yml' "$multi_args_output"
+grep -Fxq -- '--sarif-out' "$multi_args_output"
+if [[ $(tail -n 2 "$multi_args_output" | head -n 1) != --json-out ]]; then
+	printf 'Action-owned --json-out must stay last when sarif-out is set\n' >&2
+	exit 1
+fi
+
+findings_report="$tmp_dir/findings-report.json"
+printf '%s\n' '{"summary":{"enabled_rules":2,"sources":1,"dead_detections":1,"impaired_detections":1,"gated_findings":1,"degraded_sources":0,"unused_sources":0},"findings":[{"class":"dead-detection","rule_name":"Rule|Pipe","reason":"disconnected","gates":true},{"class":"impaired-detection","rule_name":"Lag Rule","reason":"missing-fields","dependency":"process.command_line","gates":false,"accepted":{"status":"active","reason":"ticket"}}]}' >"$findings_report"
+findings_summary="$tmp_dir/findings-summary"
+: >"$findings_summary"
+GITHUB_STEP_SUMMARY="$findings_summary" \
+	DEADAIR_ACTION_REPORT_PATH="$findings_report" \
+	DEADAIR_ACTION_EXIT_CODE=1 \
+	bash "$script_dir/summary.sh"
+grep -Fq '### Findings' "$findings_summary"
+grep -Fq '| dead-detection | Rule\|Pipe | disconnected | gated |' "$findings_summary"
+grep -Fq '| impaired-detection | Lag Rule | missing-fields (process.command_line) | accepted |' "$findings_summary"
+

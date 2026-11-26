@@ -215,3 +215,15 @@ The CLI targets Azure public cloud endpoints.
 
 See the [Sentinel usage guide](../usage.md#microsoft-sentinel) for report behavior and
 [validation status](../validation.md#microsoft-sentinel) for the live and fixture-tested paths.
+
+## Microsoft Defender portal transition
+
+Microsoft retires the Microsoft Sentinel experience in the Azure portal on March 31, 2027 in favor
+of the unified Microsoft Defender portal (`security.microsoft.com`). Because deadair reads
+workspace-backed Scheduled and NRT analytics rules through Azure Resource Manager
+(`Microsoft.SecurityInsights/alertRules`) and queries tables through the Log Analytics API, its
+authentication, RBAC roles, and coverage continue unchanged for Sentinel workspaces onboarded to the
+Defender portal. Defender XDR custom detection rules created solely through Microsoft Graph
+(`/security/rules/detectionRules`) are distinct from Sentinel ARM `alertRules` and are not included
+in the workspace ARM rule inventory.
+

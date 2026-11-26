@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -97,5 +98,111 @@ func TestServeShutdownWaitsForScan(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("shutdown did not finish")
+	}
+}
+
+func TestServePersistsReportsAndReloadsRotatedSecretFile(t *testing.T) {
+	t.Setenv("DEADAIR_BACKEND", "elastic")
+	t.Setenv("DEADAIR_REDACT_KEY_FILE", "")
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "api.key")
+	if err := os.WriteFile(keyPath, []byte("key-v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var currentExpectedKey atomic.Value
+	currentExpectedKey.Store("key-v1")
+	var completedScans atomic.Int32
+	secondTickDone := make(chan struct{})
+	var closeOnce sync.Once
+
+	now := time.Now().UTC()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wantAuth := "ApiKey " + currentExpectedKey.Load().(string)
+		if r.Header.Get("Authorization") != wantAuth {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/":
+			fmt.Fprint(w, `{"version":{"number":"9.5.6"}}`)
+		case "/api/detection_engine/rules/_find":
+			fmt.Fprint(w, `{"page":1,"perPage":100,"total":1,"data":[{"id":"r1","rule_id":"r1","name":"Live Rule","enabled":true,"severity":"high","index":["logs-app-*"]}]}`)
+		case "/_data_stream/_stats":
+			fmt.Fprintf(w, `{"data_streams":[{"data_stream":"logs-app-default","store_size_bytes":1024,"maximum_timestamp":%d}]}`, now.UnixMilli())
+		case "/_cat/indices":
+			fmt.Fprint(w, `[{"index":".ds-logs-app-default-2026.11.25-000001","docs.count":"10","store.size":"1024"}]`)
+		case "/_resolve/index/logs-app-*":
+			n := completedScans.Add(1)
+			if n == 1 {
+				// Rotate the API key file on disk before the next serve tick!
+				if err := os.WriteFile(keyPath, []byte("key-v2\n"), 0o600); err == nil {
+					currentExpectedKey.Store("key-v2")
+				}
+			}
+			if n >= 2 {
+				closeOnce.Do(func() { close(secondTickDone) })
+			}
+			fmt.Fprint(w, `{"data_streams":[{"name":"logs-app-default"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer backend.Close()
+
+	// Find an available loopback port cleanly.
+	probeListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindAddr := probeListener.Addr().String()
+	probeListener.Close()
+
+	jsonPath := filepath.Join(dir, "latest.json")
+	htmlPath := filepath.Join(dir, "latest.html")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- runServeWithContext(ctx, []string{
+			"--bind", bindAddr,
+			"--interval", "30ms",
+			"--es-url", backend.URL,
+			"--kibana-url", backend.URL,
+			"--api-key-file", keyPath,
+			"--json-out", jsonPath,
+			"--html-out", htmlPath,
+		}, &stderr)
+	}()
+
+	select {
+	case <-secondTickDone:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatalf("second tick with rotated secret did not succeed; stderr:\n%s", stderr.String())
+	}
+	// Give the second tick a moment to finish writing latest.json / latest.html before cancelling.
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("serve exit = %d; stderr:\n%s", code, stderr.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serve did not exit after cancel")
+	}
+
+	if strings.Contains(stderr.String(), "scan failed") {
+		t.Fatalf("unexpected scan failure during credential rotation:\n%s", stderr.String())
+	}
+	if _, err := os.Stat(jsonPath); err != nil {
+		t.Fatalf("expected persisted JSON report: %v", err)
+	}
+	if _, err := os.Stat(htmlPath); err != nil {
+		t.Fatalf("expected persisted HTML report: %v", err)
 	}
 }

@@ -209,3 +209,82 @@ func TestNativeLinksDropCredentialsAndEscapeIdentities(t *testing.T) {
 		t.Fatal("candidate linked to an installed rule")
 	}
 }
+
+func TestInspectRuleViewAndMutualExclusion(t *testing.T) {
+	r := report.Report{
+		SchemaVersion: report.ReportSchemaVersion,
+		Backend:       "sentinel",
+		ImpairedDetections: []report.ImpairedDetection{{
+			ID: "obj-1", RuleID: "rule-ps-legacy", Name: "PowerShell from legacy endpoints",
+			Severity: "high", Reasons: []string{report.ReasonMissingFields, report.ReasonLagBlindWindow},
+			MissingFields: []string{"CommandLine"}, LagSources: []string{"SecurityEvent"},
+			P95LagSeconds: 420, MaxLagSeconds: 540, LookbackSeconds: 300,
+		}},
+		InputResolutions: []backend.InputResolution{{
+			RuleID: "rule-ps-legacy", Selector: "SecurityEvent", ResolutionMethod: "kql-table-catalog",
+			Status: backend.ResolutionResolved, ResolvedSources: []string{"SecurityEvent"},
+		}},
+		RequiredFieldEvidence: []report.RequiredFieldAssessment{{
+			RuleID: "rule-ps-legacy", RuleName: "PowerShell from legacy endpoints",
+			Sources: []report.RequiredFieldSourceEvidence{{Source: "SecurityEvent", Status: backend.EvidenceAssessed, Missing: []string{"CommandLine"}}},
+		}},
+		DependencyEvidence: []report.DependencyEvidence{{
+			RuleID: "rule-ps-legacy", Dependency: backend.DependencyRef{Name: "VIPUsers", Kind: "sentinel_watchlist"},
+			Status: backend.ResolutionResolved, Detail: "watchlist exists",
+		}},
+		RuleProvenance: []report.RuleProvenance{{
+			RuleID: "rule-ps-legacy", Provenance: backend.ProvenanceRef{Kind: "sentinel_content_package", Name: "Windows Security Events"},
+			Status: backend.EvidenceAssessed,
+		}},
+		SourceImpacts: []report.SourceImpact{{
+			Source: "SecurityEvent", Status: "ok",
+			Detections: []report.SourceConsumer{{
+				RuleID: "rule-ps-legacy", Name: "PowerShell from legacy endpoints",
+				Severity: "high", Status: "impaired", URL: "https://portal.azure.com/#rule-ps-legacy",
+			}},
+		}},
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "report.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, query := range []string{"rule-ps-legacy", "PowerShell from legacy endpoints"} {
+		var out, errs bytes.Buffer
+		if code := Run([]string{"inspect", "--rule", query, "--links", path}, &out, &errs); code != 0 {
+			t.Fatalf("inspect --rule %q exit=%d stderr=%s", query, code, errs.String())
+		}
+		text := out.String()
+		for _, want := range []string{
+			"PowerShell from legacy endpoints — reduced visibility",
+			"Rule ID: rule-ps-legacy · Severity: high",
+			"Missing fields: CommandLine",
+			"Lag sources: SecurityEvent",
+			"Resolution SecurityEvent (kql-table-catalog): resolved -> SecurityEvent",
+			"Required fields on SecurityEvent: assessed (missing: CommandLine)",
+			"Dependency VIPUsers (sentinel_watchlist): resolved",
+			"Provenance (sentinel_content_package): Windows Security Events",
+			"Rule: https://portal.azure.com/#rule-ps-legacy",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("inspect --rule %q missing %q in:\n%s", query, want, text)
+			}
+		}
+	}
+
+	// Mutually exclusive filter combinations must exit 2.
+	for _, args := range [][]string{
+		{"inspect", "--rule", "rule-ps-legacy", "--source", "SecurityEvent", path},
+		{"inspect", "--rule", "rule-ps-legacy", "--producer", "edge-fw", path},
+		{"inspect", "--rule", "nonexistent-rule", path},
+	} {
+		var out, errs bytes.Buffer
+		if code := Run(args, &out, &errs); code != 2 {
+			t.Fatalf("args %v exit=%d, want 2", args, code)
+		}
+	}
+}
